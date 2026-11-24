@@ -333,9 +333,8 @@ async function main() {
     const cookie = response.headers
       .getSetCookie()
       .find((value) => value.startsWith("__Host-relay_session="));
-    assert.ok(
-      cookie && cookie.includes("Secure") && cookie.includes("HttpOnly"),
-    );
+    assert.ok(cookie);
+    assert.ok(cookie.includes("Secure") && cookie.includes("HttpOnly"));
     return { ...browserHeaders, cookie: cookie.split(";", 1)[0] };
   };
   const adminApp = await panel(pool, source, fixtureTransfer);
@@ -379,10 +378,9 @@ async function main() {
       [fixture.uuid, sourceId, owner, egg, sourceAllocation],
     );
     await app.listen({ port: 13201, host: "127.0.0.1" });
-    if (standalone) {
+    if (standalone)
       receiver = await startInstance("destination", target, 13202);
-      sourceApp = await startInstance("source", source, 13203);
-    }
+    if (!interrupted) sourceApp = await startInstance("source", source, 13203);
     const from = new WingsClient(source),
       to = new WingsClient(target);
     for (const client of [from, to])
@@ -567,29 +565,37 @@ async function main() {
       const recoveredPool = stagingPool();
       try {
         await adminApp.close();
-        const recoveredApp = await panel(
-          recoveredPool,
-          source,
-          fixtureTransfer,
-        );
+        if (sourceApp) {
+          await sourceApp.close();
+          sourceApp = await startInstance("source", source, 13203);
+        }
+        const recoveredApp = sourceApp
+          ? undefined
+          : await panel(recoveredPool, source, fixtureTransfer);
         try {
-          const recoveryHeaders = await login(recoveredApp, password);
-          const status = await recoveredApp.inject({
+          const recoveryHeaders = sourceApp
+            ? await networkLogin(sourceApp)
+            : recoveredApp
+              ? await login(recoveredApp, password)
+              : undefined;
+          const recoveryApi = sourceApp ?? recoveredApp;
+          assert.ok(recoveryHeaders && recoveryApi);
+          const status = await recoveryApi.inject({
             url,
             headers: recoveryHeaders,
           });
           assert.equal(status.statusCode, 200);
-          assert.equal(status.json().phase, "reserved");
-          const response = await recoveredApp.inject({
+          assert.equal(status.json<{ phase: string }>().phase, "reserved");
+          const response = await recoveryApi.inject({
             method: "POST",
             url: `${url}/reconcile`,
             headers: recoveryHeaders,
             payload: { confirm: true },
           });
           assert.equal(response.statusCode, 200);
-          assert.equal(response.json().phase, "uncertain");
+          assert.equal(response.json<{ phase: string }>().phase, "uncertain");
         } finally {
-          await recoveredApp.close();
+          await recoveredApp?.close();
         }
         const recovered = transferLedger(recoveredPool);
         assert.equal(
