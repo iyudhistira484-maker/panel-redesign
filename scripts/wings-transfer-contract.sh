@@ -89,6 +89,18 @@ ENTRYPOINT ["/bin/sh", "-c", "exec /bin/sh -c \"$STARTUP\""]
 DOCKERFILE
 docker save relay-wings-contract-http:ci | sudo -n docker -H "$inner" load >/dev/null
 if [[ "${RELAY_TRANSFER_SCENARIO:-}" == mumble-* ]]; then
+  # Model an existing Mumble server. The unchanged upstream installer intentionally
+  # preserves an existing INI, so transfer verification does not depend on APK DNS.
+  export RELAY_MUMBLE_TRANSFER_UUID=$(cat /proc/sys/kernel/random/uuid)
+  seed="$work/source-data/volumes/$RELAY_MUMBLE_TRANSFER_UUID"
+  mkdir -p "$seed"
+  cat > "$seed/murmur.ini" <<'INI'
+database=/home/container/murmur.sqlite
+logfile=/home/container/murmur.log
+port=25610
+host=0.0.0.0
+users=37
+INI
   image=ghcr.io/parkervcp/yolks:voice_mumble
   docker pull "$image" >/dev/null
   docker save "$image" | sudo -n docker -H "$inner" load >/dev/null

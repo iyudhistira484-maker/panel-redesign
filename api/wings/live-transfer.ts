@@ -151,11 +151,20 @@ async function main() {
   const document = Buffer.from(mumble ? mumbleEgg : reviewedHttpEggs[1]);
   const profile = transferProfile(document);
   assert.ok(profile);
+  const workloadId = mumble
+    ? process.env.RELAY_MUMBLE_TRANSFER_UUID
+    : randomUUID();
+  assert.ok(workloadId);
   const selected = profile.workload(
     (result) => {
       installed = result.successful;
     },
-    { uuid: randomUUID(), name: "HTTP transfer", eggId: egg, port: 25610 },
+    {
+      uuid: workloadId,
+      name: mumble ? "Mumble transfer" : "HTTP transfer",
+      eggId: egg,
+      port: 25610,
+    },
     "beta",
     mumble ? "37" : null,
   );
@@ -428,6 +437,18 @@ async function main() {
     );
     assert.equal(installed, true);
     assert.equal(await from.state(fixture.uuid), "offline");
+    if (mumble) {
+      await from.power(fixture.uuid, "start");
+      await eventually(
+        "existing Mumble running",
+        async () => (await from.state(fixture.uuid)) === "running",
+      );
+      await from.power(fixture.uuid, "stop");
+      await eventually(
+        "existing Mumble offline",
+        async () => (await from.state(fixture.uuid)) === "offline",
+      );
+    }
     const original = await from.readFixtureFile(fixture.uuid, profile.path);
     assert.ok(original.includes(profile.marker));
     const callbackPath = `/api/remote/servers/${fixture.uuid}/transfer/success`;
