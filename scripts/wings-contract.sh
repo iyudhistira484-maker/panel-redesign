@@ -50,9 +50,10 @@ docker run --detach --name "$name" --network host \
 if ! wait "$harness_pid"; then
   state=$(docker inspect --format '{{.State.Status}} (exit {{.State.ExitCode}})' "$name")
   echo "::error::Wings bootstrap did not complete; container $state"
-  # Only retain known diagnostic signatures. Do not upload the raw daemon log.
-  for signature in 'permission denied' 'iptables' 'address already in use' 'connection refused' 'network' 'mount' 'no such file' 'validation' 'configuration' '403' '401' 'failed to initialize'; do
-    if docker logs "$name" 2>&1 | grep -qi "$signature"; then echo "::warning::Daemon log contains diagnostic signature: $signature"; fi
-  done
+  # Only emit a short fatal diagnostic from this credential-isolated fixture.
+  fatal=$(docker logs "$name" 2>&1 | sed -E "s/${RELAY_WINGS_TEST_TOKEN}/[redacted]/g; s/\x1b\[[0-9;]*m//g" | grep -iE 'fatal|error|panic|failed|invalid|configuration' | tail -3 | cut -c1-280 || true)
+  while IFS= read -r line; do
+    [[ -z "$line" ]] || printf '::warning::%s\n' "$line"
+  done <<< "$fatal"
   exit 1
 fi
