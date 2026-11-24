@@ -1,0 +1,25 @@
+name: relay-staging
+services:
+  mysql:
+    image: mysql:8.4.8
+    environment:
+      MYSQL_ROOT_PASSWORD: ${RELAY_MYSQL_ROOT_PASSWORD:?Set a disposable staging root password}
+      MYSQL_DATABASE: relay_staging
+      MYSQL_USER: relay
+      MYSQL_PASSWORD: ${RELAY_MYSQL_PASSWORD:?Set a disposable staging password}
+    ports:
+      - '127.0.0.1:3307:3306'
+    volumes:
+      - staging-db:/var/lib/mysql
+    healthcheck:
+      test: ['CMD', 'mysqladmin', 'ping', '-h', '127.0.0.1']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  mailpit:
+    image: axllent/mailpit:v1.27.11
+    ports:
+      - '127.0.0.1:1025:1025'
+      - '127.0.0.1:8025:8025'
+volumes:
+  staging-db:

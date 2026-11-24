@@ -1,0 +1,53 @@
+{
+  "name": "panel-redesign",
+  "version": "1.0.0",
+  "description": "Relay panel foundation",
+  "scripts": {
+    "test": "playwright test",
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "lint": "biome lint src tests api",
+    "format": "biome format --write src tests api",
+    "budget": "node scripts/budget.mjs",
+    "api": "tsx api/server.ts",
+    "db": "tsx api/cli.ts",
+    "test:identity": "tsx --test api/*.test.ts",
+    "provision": "tsx api/provision.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iyudhistira484-maker/panel-redesign.git"
+  },
+  "keywords": [],
+  "author": "",
+  "bugs": {
+    "url": "https://github.com/iyudhistira484-maker/panel-redesign/issues"
+  },
+  "homepage": "https://github.com/iyudhistira484-maker/panel-redesign#readme",
+  "dependencies": {
+    "@fastify/cookie": "11.0.2",
+    "@fastify/helmet": "13.2.0",
+    "@fastify/rate-limit": "10.3.0",
+    "@node-rs/argon2": "2.0.2",
+    "bcryptjs": "3.0.2",
+    "fastify": "5.12.8",
+    "geist": "1.4.2",
+    "lucide-react": "0.468.0",
+    "mysql2": "3.24.6",
+    "nodemailer": "10.6.1",
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.2.4",
+    "@playwright/test": "1.55.1",
+    "@types/node": "22.15.30",
+    "@types/nodemailer": "7.0.4",
+    "@types/react": "19.1.9",
+    "@types/react-dom": "19.1.7",
+    "tsx": "4.20.6",
+    "typescript": "5.8.3",
+    "vite": "6.4.6"
+  }
+}

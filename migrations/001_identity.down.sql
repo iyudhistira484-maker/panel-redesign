@@ -1,0 +1,9 @@
+DROP TABLE IF EXISTS auth_throttles;
+DROP TABLE IF EXISTS events;
+DROP TABLE IF EXISTS audit_log;
+DROP TABLE IF EXISTS api_keys;
+DROP TABLE IF EXISTS totp_enrollments;
+DROP TABLE IF EXISTS recovery_codes;
+DROP TABLE IF EXISTS password_resets;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS users;

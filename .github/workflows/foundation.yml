@@ -1,0 +1,52 @@
+name: Foundation
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npm run lint
+      - run: npm run build
+      - run: npm run budget
+      - run: npx playwright install --with-deps chromium
+      - run: npm test
+  identity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      mysql:
+        image: mysql:8.4.8
+        env:
+          MYSQL_ROOT_PASSWORD: disposable-root-ci
+          MYSQL_USER: relay
+          MYSQL_PASSWORD: disposable-ci
+          MYSQL_DATABASE: relay_test
+        ports:
+          - 3306/tcp
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
+    env:
+      RELAY_ENV: staging
+      RELAY_RUN_MYSQL_TESTS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:identity
+        env:
+          RELAY_STAGING_DATABASE_URL: mysql://relay:disposable-ci@127.0.0.1:${{ job.services.mysql.ports[3306] }}/relay_test

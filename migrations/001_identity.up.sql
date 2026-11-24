@@ -1,0 +1,45 @@
+CREATE TABLE users (
+  id CHAR(36) PRIMARY KEY, email VARCHAR(254) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL UNIQUE,
+  display_name VARCHAR(120) NOT NULL, password_hash VARCHAR(255) NOT NULL,
+  locale ENUM('id','en') NOT NULL DEFAULT 'id', is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+  totp_secret VARBINARY(512), totp_step BIGINT, auth_version INT UNSIGNED NOT NULL DEFAULT 0,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+) ENGINE=InnoDB;
+CREATE TABLE sessions (
+  digest BINARY(32) PRIMARY KEY, user_id CHAR(36) NOT NULL,
+  authenticated BOOLEAN NOT NULL, expires_at DATETIME(3) NOT NULL,
+  INDEX (expires_at), FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+CREATE TABLE password_resets (
+  digest BINARY(32) PRIMARY KEY, user_id CHAR(36) NOT NULL,
+  expires_at DATETIME(3) NOT NULL, INDEX (expires_at),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+CREATE TABLE recovery_codes (
+  digest BINARY(32) PRIMARY KEY, user_id CHAR(36) NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+CREATE TABLE totp_enrollments (
+  user_id CHAR(36) PRIMARY KEY, secret VARBINARY(512) NOT NULL,
+  expires_at DATETIME(3) NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+CREATE TABLE api_keys (
+  id CHAR(36) PRIMARY KEY, user_id CHAR(36) NOT NULL, digest BINARY(32) NOT NULL UNIQUE,
+  label VARCHAR(80) NOT NULL, expires_at DATETIME(3) NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+CREATE TABLE audit_log (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, actor_id CHAR(36),
+  event VARCHAR(80) NOT NULL, subject_id CHAR(36), created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  INDEX (actor_id, id)
+) ENGINE=InnoDB;
+CREATE TABLE events (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, type VARCHAR(80) NOT NULL, server_id CHAR(36),
+  severity ENUM('info','warning','error') NOT NULL, detail VARCHAR(160) NOT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), INDEX (created_at, id)
+) ENGINE=InnoDB;
+CREATE TABLE auth_throttles (
+  digest BINARY(32) PRIMARY KEY, attempts INT UNSIGNED NOT NULL, expires_at DATETIME(3) NOT NULL,
+  INDEX (expires_at)
+) ENGINE=InnoDB;
