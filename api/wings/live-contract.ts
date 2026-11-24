@@ -73,9 +73,11 @@ async function main() {
       (cookie) => cookie.name === "__Host-relay_session",
     );
     assert.ok(session);
+    let testClientAddress = "127.0.0.1";
     const admin = (method: "GET" | "POST", path: string, payload?: object) =>
       app.inject({
         method,
+        remoteAddress: testClientAddress,
         url: `/api/v1/admin/${path}`,
         headers: { ...headers, cookie: `${session.name}=${session.value}` },
         payload,
@@ -417,6 +419,8 @@ async function main() {
         202,
       );
     }
+    // Exercise the separate upstream case as a second test client. Keep application limits intact.
+    testClientAddress = "127.0.0.2";
     const mumbleId = await add("eggs", { nestId, document: mumbleEgg });
     assert.equal(
       (await admin("GET", `eggs/${mumbleId}/document`)).body,
