@@ -174,3 +174,11 @@ Tidak ada pengiriman, percobaan ulang, pelepasan alokasi, pemindahan katalog, at
 Kontrak dijalankan melalui matriks `wings-transfer`. Layanan belum dipasang ke endpoint untuk memulai transfer: resolusi node dan alokasi serta otorisasi admin untuk dispatch aplikasi masih perlu dihubungkan dan diuji. Validasi checksum hanya mencakup satu file fixture, bukan pemeriksaan semua file workload umum.
 
 [CI 45375703704](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45375703704) lulus tujuh job, termasuk dispatch, pemulihan proses terpisah, dan tiga skenario gagal. Lint dan build lokal lulus.
+
+### Endpoint dispatch fixture di harness staging
+
+`POST /api/v1/admin/servers/{id}/transfer` menerima `{"confirm":true,"nodeId":"<uuid>","allocationId":"<uuid>"}` hanya bila instans katalog diberikan konfigurasi fixture eksplisit. Harness sekali pakai mengaktifkannya untuk tepat satu UUID, node sumber, node tujuan, dan alokasi tujuan. Reservasi serta audit `catalog.transfer_reserved` dilakukan dalam satu transaksi setelah cek ulang role admin. Pengiriman dilakukan setelah commit dan mengembalikan `202` setelah Wings menerima permintaan, bukan setelah transfer berhasil. Gagal sebelum klaim dapat membatalkan reservasi; hasil ambigu setelah klaim tidak melepasnya. Tidak ada penghapusan sumber otomatis.
+
+Matriks `wings-transfer` memakai route ini untuk memulai keempat skenario dengan MySQL dan Wings asli. Harness menyuntikkan identitas admin fixture; ini bukan uji sesi/cookie/CSRF end-to-end untuk route dispatch. `createApp()` tidak mengaktifkan route dispatch; endpoint ini belum tersedia di deployment panel biasa. Finalisasi masih dijalankan oleh proses pemulihan harness, bukan worker aplikasi.
+
+[CI 45376735070](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45376735070) lulus tujuh job. Keempat skenario memverifikasi 401 tanpa autentikasi, 404 untuk node di luar fixture, 202 untuk dispatch valid, 409 untuk pengulangan, dan satu entri audit reservasi. Lint dan build lokal lulus.
