@@ -38,3 +38,7 @@ Bukti ini masih loopback dan tidak menguji alokasi publik. Dua sasaran lain (eng
 - **Egg upstream baru lewat data persetujuan.** Forgejo memakai dokumen upstream byte-persis dan satu entri `api/eggs/upstream/approved.json` berisi SHA-256, input, dan resource limits. Gitea dan Forgejo berjalan melalui loader, compiler, serta tes lifecycle yang sama; tidak ada adapter Forgejo. Job memverifikasi executable ELF, installer asli, `running`, stop, dan delete. Egg baru masih memerlukan peninjauan serta persetujuan eksplisit.
 
 Tiga sasaran yang dibatasi untuk review staging (alokasi tambahan, egg berbasis approval, dan dua transfer pada satu pair) telah terbukti. Ini bukan klaim kompatibilitas seluruh katalog produksi atau semua format egg; [gate pengganti Panel](replacement-gate.md) tetap mendokumentasikan batasnya. Tidak ada cutover atau implementasi Tahap 4.
+
+## Status transisi
+
+Pengguna menyetujui pembukaan Tahap 4 setelah tiga sasaran staging lulus. Lihat [Tahap 4](../stage-4/README.md). Gate penggantian produksi tetap terbuka; tidak ada cutover produksi.
