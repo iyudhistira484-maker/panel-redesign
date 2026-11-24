@@ -21,7 +21,7 @@ export async function registerRemote(app: FastifyInstance, rawNode: WingsNode) {
           type: "object",
           additionalProperties: false,
           properties: {
-            page: { type: "string", pattern: "^[1-9][0-9]{0,5}$" },
+            page: { type: "string", pattern: "^(0|[1-9][0-9]{0,5})$" },
             per_page: { type: "string", pattern: "^[1-9][0-9]{0,2}$" },
           },
         },
@@ -30,7 +30,7 @@ export async function registerRemote(app: FastifyInstance, rawNode: WingsNode) {
     async (req) => ({
       data: [],
       meta: {
-        current_page: Number(req.query.page ?? 1),
+        current_page: Math.max(1, Number(req.query.page ?? 1)),
         from: 0,
         last_page: 1,
         per_page: Number(req.query.per_page ?? 50),

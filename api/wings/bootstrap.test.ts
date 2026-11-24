@@ -35,7 +35,7 @@ test("bootstrap callbacks require node credentials and leave browser CSRF intact
       401,
     );
     const res = await app.inject({
-      url: `${url}?page=1&per_page=50`,
+      url: `${url}?page=0&per_page=50`,
       headers: { authorization: auth },
     });
     assert.equal(res.statusCode, 200);
