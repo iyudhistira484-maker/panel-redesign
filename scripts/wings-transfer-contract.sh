@@ -106,6 +106,13 @@ run_wings() {
 run_wings source "$src" /var/run/docker.sock
 run_wings target "$dst" "$work/engine/docker.sock"
 if ! wait "$pid"; then
+  if [[ "${RELAY_TRANSFER_SCENARIO:-}" == mumble-* ]]; then
+    # Export only fixed diagnostic labels; Wings installer logs also contain environment values.
+    install_log=$(docker exec "$src" /bin/sh -c 'cat /var/log/pterodactyl/install/*.log' 2>/dev/null || true)
+    for marker in 'DNS' 'temporary error' 'no such package' 'Permission denied' 'No such file' 'SSL' 'Downloading the config file' 'Config file already exists' 'murmur-'; do
+      if grep -qiF "$marker" <<< "$install_log"; then printf '::warning::Mumble installer marker: %s\n' "$marker"; fi
+    done
+  fi
   for name in "$src" "$dst"; do
     docker inspect --format '{{.Name}}: {{.State.Status}} (exit {{.State.ExitCode}})' "$name"
     diagnostics=$(docker logs "$name" 2>&1 | sed -E "s/${RELAY_TRANSFER_SOURCE_TOKEN}|${RELAY_TRANSFER_TARGET_TOKEN}/[redacted]/g; s/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/[jwt-redacted]/g; s/\x1b\[[0-9;]*m//g" | grep -Ei 'fatal|error|failed' | tail -3 | cut -c1-280 || true)
