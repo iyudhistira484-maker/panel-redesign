@@ -318,6 +318,24 @@ async function main() {
         ),
         false,
       );
+      await pool.execute(
+        "UPDATE server_grants SET permissions=JSON_ARRAY('control.stop') WHERE server_id=? AND user_id=?",
+        [uuid, collaborator],
+      );
+      await assert.rejects(
+        applyLegacyFixture(pool, manifest, credentials),
+        /grants conflict/,
+      );
+      const [changed] = await rows<{ matches: number }>(
+        pool,
+        "SELECT JSON_CONTAINS(permissions, JSON_QUOTE('control.stop')) AS matches FROM server_grants WHERE server_id=? AND user_id=?",
+        [uuid, collaborator],
+      );
+      assert.equal(changed.matches, 1);
+      await pool.execute(
+        "UPDATE server_grants SET permissions=JSON_ARRAY('activity.read','control.start') WHERE server_id=? AND user_id=?",
+        [uuid, collaborator],
+      );
       await assert.rejects(
         applyLegacyFixture(pool, manifest, {
           ...credentials,
