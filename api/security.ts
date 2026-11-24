@@ -38,7 +38,11 @@ export function keyFrom(value: string | undefined, name: string) {
   if (key.length !== 32) throw new Error(`${name} must encode 32 bytes`);
   return key;
 }
-export function cryptoContext(key: Buffer, pepper: Buffer) {
+export function cryptoContext(
+  key: Buffer,
+  pepper: Buffer,
+  domain: "totp" | "node-token" = "totp",
+) {
   if (key.length !== 32 || pepper.length !== 32 || key.equals(pepper))
     throw new Error("Distinct 32-byte keys required");
   return {
@@ -47,7 +51,7 @@ export function cryptoContext(key: Buffer, pepper: Buffer) {
     seal: (secret: Buffer, owner: string) => {
       const nonce = randomBytes(12);
       const cipher = createCipheriv("aes-256-gcm", key, nonce);
-      cipher.setAAD(Buffer.from(`totp:v1:${owner}`));
+      cipher.setAAD(Buffer.from(`${domain}:v1:${owner}`));
       const body = Buffer.concat([cipher.update(secret), cipher.final()]);
       return Buffer.concat([
         Buffer.from([1]),
@@ -60,7 +64,7 @@ export function cryptoContext(key: Buffer, pepper: Buffer) {
       if (src[0] !== 1 || src.length < 30)
         throw new Error("Invalid encrypted record");
       const cipher = createDecipheriv("aes-256-gcm", key, src.subarray(1, 13));
-      cipher.setAAD(Buffer.from(`totp:v1:${owner}`));
+      cipher.setAAD(Buffer.from(`${domain}:v1:${owner}`));
       cipher.setAuthTag(src.subarray(13, 29));
       return Buffer.concat([cipher.update(src.subarray(29)), cipher.final()]);
     },

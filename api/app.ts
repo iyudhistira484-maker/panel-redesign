@@ -1,3 +1,4 @@
+import { registerCatalog } from "./catalog/routes";
 import { registerRemote } from "./wings/remote";
 import type { WingsNode } from "./wings/client";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -28,6 +29,8 @@ export type Options = {
   pepper: Buffer;
   deliverReset: (message: ResetMessage) => Promise<void>;
   wingsTestNode?: WingsNode;
+  catalogNodeKey?: Buffer;
+  allowedCatalogNodeOrigins?: readonly string[];
 };
 type User = {
   id: string;
@@ -87,6 +90,8 @@ export async function createApp({
   pepper,
   deliverReset,
   wingsTestNode,
+  catalogNodeKey,
+  allowedCatalogNodeOrigins,
 }: Options) {
   if (new URL(origin).origin !== origin || !origin.startsWith("https://"))
     throw new Error("Set an exact HTTPS panel origin");
@@ -771,5 +776,19 @@ export async function createApp({
       async (instance) => registerRemote(instance, wingsTestNode),
       { prefix: "/api/remote" },
     );
+  if (catalogNodeKey?.equals(key))
+    throw new Error("Use a distinct node encryption key");
+  await app.register(
+    (instance) =>
+      registerCatalog(instance, {
+        pool,
+        pepper,
+        nodeKey: catalogNodeKey,
+        allowedNodeOrigins: allowedCatalogNodeOrigins,
+        authenticate: (req) =>
+          actor(req.cookies[sessionCookie], req.headers.authorization),
+      }),
+    { prefix: "/api/v1/admin" },
+  );
   return app;
 }

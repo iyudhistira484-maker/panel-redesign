@@ -28,6 +28,12 @@ async function main() {
       : undefined;
   const app = await createApp({
     wingsTestNode,
+    catalogNodeKey: process.env.RELAY_NODE_KEY
+      ? keyFrom(process.env.RELAY_NODE_KEY, "RELAY_NODE_KEY")
+      : undefined,
+    allowedCatalogNodeOrigins: process.env.RELAY_CATALOG_NODE_ORIGIN
+      ? [process.env.RELAY_CATALOG_NODE_ORIGIN]
+      : [],
     pool,
     origin,
     key,

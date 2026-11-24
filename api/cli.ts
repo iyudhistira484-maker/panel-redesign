@@ -17,7 +17,11 @@ async function main() {
     else if (command === "prune") {
       await prune(pool);
       await recordEvent(pool, "system.retention");
-    } else if (command === "create-user") {
+    } else if (
+      command === "create-user" ||
+      (command === "create-admin" &&
+        process.env.RELAY_CONFIRM_ADMIN === "create-staging-admin")
+    ) {
       const email = process.argv[3]?.toLowerCase();
       if (!email || email.length > 254 || !/^[^@\s]+@[^@\s]+$/.test(email))
         throw new Error("Invalid staging email");
@@ -35,8 +39,14 @@ async function main() {
       if ([...value].length < 12 || [...value].length > 128)
         throw new Error("Password length must be 12–128");
       await pool.execute(
-        "INSERT INTO users (id,email,display_name,password_hash) VALUES (?,?,?,?)",
-        [randomUUID(), email, email.slice(0, 120), await passwordHash(value)],
+        "INSERT INTO users (id,email,display_name,password_hash,is_admin) VALUES (?,?,?,?,?)",
+        [
+          randomUUID(),
+          email,
+          email.slice(0, 120),
+          await passwordHash(value),
+          command === "create-admin",
+        ],
       );
     } else
       throw new Error("Unknown CLI command or missing rollback confirmation");

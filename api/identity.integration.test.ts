@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
+import { createServer } from "node:http";
 import { test } from "node:test";
 import bcrypt from "bcryptjs";
 import { createApp, type ResetMessage } from "./app";
@@ -20,10 +21,38 @@ test(
     const pool = stagingPool();
     const origin = "https://relay.example.test";
     const deliveries: ResetMessage[] = [];
+    const token = randomBytes(32).toString("hex");
+    const daemon = createServer((req, res) => {
+      if (
+        req.url !== "/api/system" ||
+        req.headers.authorization !== `Bearer ${token}`
+      ) {
+        res.writeHead(401).end();
+        return;
+      }
+      res
+        .writeHead(200, { "content-type": "application/json" })
+        .end(
+          JSON.stringify({
+            version: "v1.13.5",
+            architecture: "amd64",
+            cpu_count: 2,
+            os: "linux",
+          }),
+        );
+    });
+    await new Promise<void>((resolve) =>
+      daemon.listen(0, "127.0.0.1", resolve),
+    );
+    const addr = daemon.address();
+    assert.ok(addr && typeof addr !== "string");
+    const daemonOrigin = `http://127.0.0.1:${addr.port}`;
     const app = await createApp({
       pool,
       origin,
       key: randomBytes(32),
+      catalogNodeKey: randomBytes(32),
+      allowedCatalogNodeOrigins: [daemonOrigin, "http://127.0.0.1:18081"],
       pepper: randomBytes(32),
       deliverReset: async (message) => {
         deliveries.push(message);
@@ -92,6 +121,130 @@ test(
       assert.notEqual(first, a);
       ok(await request("GET", "account", undefined, first), 401);
       const b = session(ok(await login("bob"), 200));
+      const admin = randomUUID();
+      await pool.execute(
+        "INSERT INTO users (id,email,display_name,password_hash,is_admin) VALUES (?,?,?,?,1)",
+        [admin, "admin@example.test", "Admin", old],
+      );
+      const operator = session(ok(await login("admin"), 200));
+      const getAdmin = (path: string, cookie?: string) =>
+        request("GET", `admin/${path}`, undefined, cookie);
+      const postAdmin = (path: string, body: object, cookie = operator) =>
+        request("POST", `admin/${path}`, body, cookie);
+      const createdId = (result: Result) =>
+        ok(result, 201).json<{ id: string }>().id;
+      ok(await getAdmin("nodes"), 401);
+      ok(await getAdmin("nodes", a), 403);
+      ok(await postAdmin("nests", { name: "Not allowed" }, b), 403);
+      const nodeBody = {
+        name: "Fixture",
+        origin: daemonOrigin,
+        tokenId: "fixture-test",
+        token,
+      };
+      ok(
+        await postAdmin("nodes", { ...nodeBody, origin: "http://127.0.0.1:1" }),
+        422,
+      );
+      const nodeId = createdId(await postAdmin("nodes", nodeBody));
+      const anotherNode = createdId(
+        await postAdmin("nodes", {
+          ...nodeBody,
+          origin: "http://127.0.0.1:18081",
+          tokenId: "other-fixture",
+        }),
+      );
+      ok(await postAdmin("nodes", nodeBody), 409);
+      const nodes = ok(await getAdmin("nodes", operator), 200).json();
+      assert.equal(nodes.length, 2);
+      assert.equal(nodes[0].token, undefined);
+      assert.equal(nodes[0].token_id, undefined);
+      assert.equal(nodes[0].token_cipher, undefined);
+      const encrypted = (
+        await rows<{ token_cipher: Buffer }>(
+          pool,
+          "SELECT token_cipher FROM nodes WHERE id=?",
+          [nodeId],
+        )
+      )[0].token_cipher;
+      assert.ok(!encrypted.includes(Buffer.from(token)));
+      assert.equal(
+        ok(await getAdmin(`nodes/${nodeId}/health`, operator), 200).json()
+          .version,
+        "1.13.5",
+      );
+      const nestId = createdId(await postAdmin("nests", { name: "Fixtures" }));
+      const eggText = `${JSON.stringify({ meta: { version: "PTDL_v1" }, name: "Tiny shell", image: "alpine:3.22.2", config: {}, scripts: { installation: {} }, variables: [] }, null, 2)}\n`;
+      const eggId = createdId(
+        await postAdmin("eggs", { nestId, document: eggText }),
+      );
+      const attachment = ok(
+        await getAdmin(`eggs/${eggId}/document`, operator),
+        200,
+      );
+      assert.equal(attachment.body, eggText);
+      assert.match(
+        String(attachment.headers["content-disposition"]),
+        /^attachment/,
+      );
+      ok(await postAdmin("eggs", { nestId, document: "invalid" }), 422);
+      ok(
+        await postAdmin("allocations", {
+          nodeId,
+          ip: "192.0.2.10",
+          port: 25610,
+        }),
+        422,
+      );
+      const allocation = { nodeId, ip: "127.0.0.1", port: 25610 };
+      const allocationId = createdId(
+        await postAdmin("allocations", allocation),
+      );
+      ok(await postAdmin("allocations", allocation), 409);
+      const draft = {
+        name: "Draft",
+        nodeId,
+        ownerId: alice,
+        eggId,
+        allocationId,
+      };
+      ok(await postAdmin("servers", { ...draft, nodeId: anotherNode }), 409);
+      const serverId = createdId(await postAdmin("servers", draft));
+      ok(await postAdmin("servers", draft), 409);
+      await migrate(pool, "up");
+      assert.deepEqual(ok(await getAdmin("servers", operator), 200).json(), [
+        { ...draft, id: serverId, status: "draft" },
+      ]);
+      assert.ok(
+        (
+          await rows<{ event: string }>(
+            pool,
+            "SELECT event FROM audit_log WHERE subject_id=?",
+            [serverId],
+          )
+        ).some((entry) => entry.event === "catalog.server_draft_created"),
+      );
+      const operatorKey = `rly_${randomBytes(32).toString("base64url")}`;
+      const operatorSuffix = ok(
+        await request(
+          "POST",
+          "account/keys",
+          { label: "readonly", key: operatorKey },
+          operator,
+        ),
+        201,
+      ).json<{ suffix: string }>().suffix;
+      ok(
+        await request(
+          "GET",
+          "admin/servers",
+          undefined,
+          undefined,
+          `Bearer ${operatorKey}.${operatorSuffix}`,
+        ),
+        403,
+      );
+
       assert.match(
         (
           await rows<{ password_hash: string }>(
@@ -243,6 +396,9 @@ test(
     } finally {
       await app.close();
       await pool.end();
+      await new Promise<void>((resolve, reject) =>
+        daemon.close((error) => (error ? reject(error) : resolve())),
+      );
     }
   },
 );

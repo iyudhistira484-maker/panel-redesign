@@ -75,3 +75,7 @@ export function canServer(
     )
   );
 }
+
+export function canManageCatalog(actor: Actor | null): actor is Actor {
+  return actor?.channel === "session" && actor.admin;
+}

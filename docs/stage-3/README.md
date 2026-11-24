@@ -25,3 +25,26 @@ Uji daemon pertama menangkap perbedaan pagination: Wings mengirim `page=0` saat 
 Jalankan `npm run test:wings` dan `npm run test:eggs` untuk uji lokal. Uji lifecycle nyata hanya di runner Docker sekali pakai. Modul produksi/staging reguler masih memasang callback **node kosong saja**; fixture lifecycle tidak dipakai oleh `npm run api`.
 
 **Hasil lifecycle:** [GitHub Actions 45351010858](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45351010858) lulus. Daemon asli menerima create, meminta konfigurasi dan skrip, melaporkan instalasi berhasil, mencapai `running` lalu `offline`, dan menolak pembacaan UUID setelah delete. Job identitas MySQL dan verifikasi frontend/codec juga lulus. Tahap 3 masih terbuka: penyimpanan node/server/alokasi/egg/nest, UI dan API admin yang berizin, reinstall, transfer, websocket, serta callback SFTP/backup/aktivitas belum terverifikasi.
+
+## Katalog admin persisten (staging)
+
+Migrasi `002_catalog` menambahkan node, nest, egg, alokasi, dan server draft. Satu alokasi hanya dapat dipakai satu server, dan foreign key gabungan mencegah pemilihan alokasi dari node lain. Draft **tidak dikirim ke Wings**. API remote untuk Wings reguler masih mengembalikan inventaris kosong jika mode uji diaktifkan; jangan arahkan node lama atau node dengan data nyata ke sana.
+
+- `api/catalog/routes.ts`, `api/app.ts`, `api/policy.ts`: rute admin hanya menerima sesi admin penuh, bukan API key. Penulisan dan audit dilakukan dalam satu transaksi. Daftar dibatasi 100 entri per jenis; belum ada pagination, edit, delete atau UI admin.
+- `api/security.ts`, `.env.staging.example`, `api/server.ts`: token node dienkripsi dengan AES-256-GCM, kunci berbeda dari TOTP, dan AAD terikat UUID node. Token maupun verifier tidak dikembalikan melalui API. Asal koneksi wajib loopback dan cocok persis dengan `RELAY_CATALOG_NODE_ORIGIN` yang diset operator. Kunci node disimpan terpisah dari backup; jangan menggantinya tanpa migrasi re-enkripsi.
+- `migrations/002_catalog.{up,down}.sql`, `api/migrate.ts`: migrasi kedua dengan ledger dan lock; `down` yang sudah ada membongkar seluruh skema staging dalam urutan terbalik. Jangan jalankan `down` pada staging berisi data penting tanpa backup dan persetujuan.
+- `api/cli.ts`: provisioning admin staging eksplisit. `api/identity.integration.test.ts`: uji persistensi, proteksi sesi admin, larangan token API, audit, pemeriksaan health dengan HTTP fixture, serta isolasi alokasi.
+
+Untuk mencoba, ikuti [setup Tahap 2](../stage-2/README.md), jalankan `npm run db -- up`, lalu buat akun admin staging dengan `RELAY_CONFIRM_ADMIN=create-staging-admin npm run db -- create-admin operator@example.test` dan masukkan kata sandi melalui stdin. Login melalui API, lalu akses `/api/v1/admin` menggunakan sesi dan header mutasi dari panduan Tahap 2.
+
+| Rute | Operasi |
+|---|---|
+| `/nodes` | Daftar; buat `{name,origin,tokenId,token}` setelah mengisi `RELAY_NODE_KEY` dan origin uji persis. |
+| `/nodes/{id}/health` | GET kesehatan langsung pada node yang masuk daftar izin. |
+| `/nests` | Daftar; buat `{name}`. |
+| `/eggs` | Daftar; impor `{nestId,document}` (`document` adalah teks JSON PTDL). |
+| `/eggs/{id}/document` | GET unduh dokumen versi asli. |
+| `/allocations` | Daftar; buat `{nodeId,ip,port}` dengan IP `127.0.0.1`. |
+| `/servers` | Daftar; simpan draft `{name,nodeId,ownerId,eggId,allocationId}`. |
+
+`npm run test:identity` menjalankan tes non-DB lokal. Untuk skenario MySQL aktifkan `RELAY_RUN_MYSQL_TESTS=1` dan gunakan **hanya** basis data sekali pakai `relay_test` atau job `identity` di CI. Uji health katalog dengan HTTP fixture tidak membuktikan bahwa katalog telah terhubung ke lifecycle Wings nyata.
