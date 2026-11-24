@@ -60,6 +60,16 @@ export async function migrate(pool: Pool, direction: "up" | "down") {
               "Catalog tables already exist outside the migration ledger",
             );
         }
+        if (direction === "up" && version === 3) {
+          const existing = await rows(
+            connection,
+            "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='wings_provisions'",
+          );
+          if (existing.length)
+            throw new Error(
+              "Provision table exists outside the migration ledger",
+            );
+        }
         const statements = (
           await readFile(
             new URL(`../migrations/${file}.${direction}.sql`, import.meta.url),

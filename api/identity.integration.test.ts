@@ -1,3 +1,4 @@
+import { disposableEgg } from "./wings/provision";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
@@ -22,7 +23,18 @@ test(
     const origin = "https://relay.example.test";
     const deliveries: ResetMessage[] = [];
     const token = randomBytes(32).toString("hex");
+    let creates = 0;
     const daemon = createServer((req, res) => {
+      if (
+        req.url === "/api/servers" &&
+        req.method === "POST" &&
+        req.headers.authorization === `Bearer ${token}`
+      ) {
+        creates++;
+        req.resume();
+        res.writeHead(502).end();
+        return;
+      }
       if (
         req.url !== "/api/system" ||
         req.headers.authorization !== `Bearer ${token}`
@@ -50,6 +62,8 @@ test(
       origin,
       key: randomBytes(32),
       catalogNodeKey: randomBytes(32),
+      enableDisposableProvisioning: true,
+      wingsTestNode: { origin: daemonOrigin, tokenId: "fixture-test", token },
       allowedCatalogNodeOrigins: [daemonOrigin, "http://127.0.0.1:18081"],
       pepper: randomBytes(32),
       deliverReset: async (message) => {
@@ -222,6 +236,56 @@ test(
           )
         ).some((entry) => entry.event === "catalog.server_draft_created"),
       );
+      ok(
+        await postAdmin(`servers/${serverId}/provision`, { confirm: true }),
+        422,
+      );
+      assert.equal(creates, 0);
+      const approvedEggId = createdId(
+        await postAdmin("eggs", { nestId, document: disposableEgg }),
+      );
+      const spareAllocationId = createdId(
+        await postAdmin("allocations", { ...allocation, port: 25611 }),
+      );
+      const approvedId = createdId(
+        await postAdmin("servers", {
+          ...draft,
+          eggId: approvedEggId,
+          allocationId: spareAllocationId,
+        }),
+      );
+      const action = `servers/${approvedId}/provision`;
+      ok(await postAdmin(action, { confirm: true }, a), 403);
+      assert.equal(
+        ok(await postAdmin(action, { confirm: true }), 202).json().phase,
+        "uncertain",
+      );
+      ok(await postAdmin(action, { confirm: true }), 409);
+      assert.equal(creates, 1);
+      const callback = `/api/remote/servers/${approvedId}/install`;
+      ok(
+        await app.inject({
+          method: "POST",
+          url: callback,
+          payload: { successful: false, reinstall: false },
+        }),
+        401,
+      );
+      ok(
+        await app.inject({
+          method: "POST",
+          url: callback,
+          headers: { authorization: `Bearer fixture-test.${token}` },
+          payload: { successful: false, reinstall: false },
+        }),
+        204,
+      );
+      assert.equal(
+        ok(await getAdmin(action, operator), 200).json().phase,
+        "install_failed",
+      );
+      ok(await postAdmin(action, { confirm: true }), 409);
+      assert.equal(creates, 1);
       const operatorKey = `rly_${randomBytes(32).toString("base64url")}`;
       const operatorSuffix = ok(
         await request(
