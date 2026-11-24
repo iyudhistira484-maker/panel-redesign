@@ -48,6 +48,11 @@ docker run --detach --name "$name" --network host \
   -v "$work/config:/etc/pterodactyl" \
   debian:12-slim /usr/local/bin/wings --config /etc/pterodactyl/config.yml >/dev/null
 if ! wait "$harness_pid"; then
-  docker inspect --format 'Wings container state: {{.State.Status}} (exit {{.State.ExitCode}})' "$name"
+  state=$(docker inspect --format '{{.State.Status}} (exit {{.State.ExitCode}})' "$name")
+  echo "::error::Wings bootstrap did not complete; container $state"
+  # Only retain known diagnostic signatures. Do not upload the raw daemon log.
+  for signature in 'permission denied' 'iptables' 'address already in use' 'connection refused' 'network' 'mount' 'no such file' 'validation' 'configuration' '403' '401' 'failed to initialize'; do
+    if docker logs "$name" 2>&1 | grep -qi "$signature"; then echo "::warning::Daemon log contains diagnostic signature: $signature"; fi
+  done
   exit 1
 fi

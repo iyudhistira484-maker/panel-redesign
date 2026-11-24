@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import Fastify from "fastify";
 import { registerRemote } from "./remote";
-import { WingsClient, type WingsNode } from "./client";
+import { WingsClient, WingsUnavailable, type WingsNode } from "./client";
 
 async function main() {
   if (process.env.RELAY_DISPOSABLE_WINGS_CI !== "1")
@@ -23,12 +23,14 @@ async function main() {
   await app.listen({ host: "127.0.0.1", port: 13200 });
   try {
     const client = new WingsClient(node);
+    let lastHealth = "not_attempted";
     for (let attempt = 0; attempt < 35; attempt++) {
       let health: Awaited<ReturnType<WingsClient["health"]>> | undefined;
       try {
         health = await client.health();
-      } catch {
-        /* daemon may still be booting */
+      } catch (error) {
+        lastHealth =
+          error instanceof WingsUnavailable ? error.reason : "unexpected";
       }
       if (
         health &&
@@ -48,7 +50,7 @@ async function main() {
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
     throw new Error(
-      `Daemon contract timed out; successful callback paths: ${[...successes].join(", ") || "none"}`,
+      `::error::Daemon contract timed out (health: ${lastHealth}); successful callback paths: ${[...successes].join(", ") || "none"}`,
     );
   } finally {
     await app.close();
