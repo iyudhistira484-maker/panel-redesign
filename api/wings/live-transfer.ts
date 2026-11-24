@@ -73,8 +73,13 @@ async function main() {
   });
   await app.register(
     (instance) =>
-      registerRemote(instance, source, fixture, undefined, (id, ok) => {
-        if (id !== fixture.uuid || ok || !transferId) return false;
+      registerRemote(instance, source, fixture, undefined, async (id, ok) => {
+        if (
+          id !== fixture.uuid ||
+          ok ||
+          !(await ledger.placement(id, targetId))
+        )
+          return false;
         failure = true;
         return true;
       }),
@@ -94,7 +99,8 @@ async function main() {
           list: async () => ({ data: [], total: 0 }),
         },
         async (id, ok) => {
-          if (id !== fixture.uuid || !transferId) return false;
+          if (id !== fixture.uuid || !(await ledger.placement(id, targetId)))
+            return false;
           if (ok && !(await ledger.reportDestination(id, targetId)))
             return false;
           completion ??= ok;

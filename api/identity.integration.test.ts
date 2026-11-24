@@ -534,6 +534,14 @@ test(
         await ledger.settle(move, { kind: "not_dispatched" }),
         false,
       );
+      assert.equal(
+        await ledger.settle(move, {
+          kind: "verified_destination",
+          node: anotherNode,
+          server: serverId,
+        }),
+        false,
+      );
       assert.equal(await ledger.reportDestination(serverId, nodeId), false);
       assert.equal(await ledger.reportDestination(serverId, anotherNode), true);
 
