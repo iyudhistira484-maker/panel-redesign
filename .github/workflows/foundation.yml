@@ -90,3 +90,17 @@ jobs:
       - run: bash scripts/wings-contract.sh
         env:
           RELAY_STAGING_DATABASE_URL: mysql://relay:disposable-ci@127.0.0.1:${{ job.services.mysql.ports[3306] }}/relay_test
+  wings-transfer:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      RELAY_DISPOSABLE_WINGS_CI: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: bash scripts/wings-transfer-contract.sh

@@ -122,6 +122,35 @@ export class WingsClient {
         throw new WingsUnavailable("payload");
     }
   }
+  async transferTo(id: string, target: WingsNode, capability: string) {
+    const destination = validateNode(target);
+    if (
+      destination.origin === this.#node.origin ||
+      !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(capability) ||
+      capability.length > 2048
+    )
+      throw new Error("Invalid fixture destination");
+    const result = await this.#send(
+      `${this.#server(id)}/transfer`,
+      202,
+      "POST",
+      {
+        url: `${destination.origin}/api/transfers`,
+        token: `Bearer ${capability}`,
+        server: { uuid: id, start_on_completion: false },
+      },
+    );
+    await result.body?.cancel();
+  }
+  async readFixtureFile(id: string, name: "relay-start.sh") {
+    if (name !== "relay-start.sh") throw new Error("Unsupported fixture file");
+    const result = await this.#send(
+      `${this.#server(id)}/files/contents?file=relay-start.sh`,
+      200,
+    );
+    const data = await this.#read(result, 8192);
+    return data.toString("utf8");
+  }
   async reinstall(id: string) {
     const result = await this.#send(
       `${this.#server(id)}/reinstall`,
@@ -138,6 +167,18 @@ export class WingsClient {
     response: Response,
     limit: number,
   ): Promise<Record<string, unknown>> {
+    try {
+      const raw: unknown = JSON.parse(
+        (await this.#read(response, limit)).toString("utf8"),
+      );
+      if (!raw || typeof raw !== "object" || Array.isArray(raw))
+        throw new Error("Invalid payload");
+      return raw as Record<string, unknown>;
+    } catch {
+      throw new WingsUnavailable("payload");
+    }
+  }
+  async #read(response: Response, limit: number): Promise<Buffer> {
     const reader = response.body?.getReader();
     if (!reader) throw new WingsUnavailable("payload");
     const chunks: Uint8Array[] = [];
@@ -150,10 +191,7 @@ export class WingsClient {
         if (bytes > limit) throw new Error("response too large");
         chunks.push(result.value);
       }
-      const raw: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-      if (typeof raw !== "object" || raw === null)
-        throw new Error("invalid object");
-      return raw as Record<string, unknown>;
+      return Buffer.concat(chunks);
     } catch {
       throw new WingsUnavailable("payload");
     } finally {

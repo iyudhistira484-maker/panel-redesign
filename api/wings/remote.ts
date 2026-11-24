@@ -37,6 +37,7 @@ export async function registerRemote(
   rawNode: WingsNode,
   fixture?: ContractWorkload,
   provider?: WorkloadProvider,
+  onTransfer?: (id: string, successful: boolean) => boolean,
 ) {
   if (fixture && !UUID_V4.test(fixture.uuid))
     throw new Error("Invalid test fixture UUID");
@@ -80,6 +81,20 @@ export async function registerRemote(
     },
   );
   app.post("/servers/reset", async (_req, reply) => reply.code(204).send());
+  if (onTransfer)
+    app.post<{ Params: { uuid: string; result: string } }>(
+      "/servers/:uuid/transfer/:result",
+      async (req, reply) => {
+        const { uuid, result } = req.params;
+        if (
+          !UUID_V4.test(uuid) ||
+          (result !== "success" && result !== "failure") ||
+          !onTransfer(uuid, result === "success")
+        )
+          return reply.code(404).send({ error: "transfer_not_found" });
+        return reply.code(204).send();
+      },
+    );
   if (!fixture && !provider) return;
   const lookup = async (id: string) =>
     UUID_V4.test(id)
