@@ -30,7 +30,9 @@ export async function applyLegacyFixture(
     throw new Error("Disposable staging fixture only");
   const report = legacyPreflight(manifest);
   if (
-    Object.values(report.counts).some((count) => count !== 1) ||
+    Object.entries(report.counts).some(
+      ([table, count]) => count !== (table === "subusers" ? 0 : 1),
+    ) ||
     report.servers.length !== 1
   )
     throw new Error("Only one legacy fixture is supported");

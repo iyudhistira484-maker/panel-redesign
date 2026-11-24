@@ -5,6 +5,12 @@ import { legacyPreflight } from "./import/legacy-preflight";
 
 const fixture = () => ({
   users: [{ id: 1, uuid: randomUUID() }],
+  subusers: [] as {
+    id: number;
+    user_id: number;
+    server_id: number;
+    permissions: string[];
+  }[],
   nodes: [{ id: 2, uuid: randomUUID() }],
   nests: [{ id: 3, uuid: randomUUID() }],
   eggs: [{ id: 4, uuid: randomUUID(), nest_id: 3 }],
@@ -58,4 +64,35 @@ test("legacy preflight rejects duplicate identities, cross-linked allocations, a
   const extras = fixture();
   Object.assign(extras.nodes[0], { token: "not-permitted" });
   assert.throws(() => legacyPreflight(extras), /Invalid legacy row/);
+});
+
+test("permission preflight preserves server scope and denies unknown or duplicate grants", () => {
+  const manifest = fixture();
+  const delegate = randomUUID();
+  manifest.users.push({ id: 7, uuid: delegate });
+  const grant = {
+    id: 1,
+    user_id: 7,
+    server_id: 6,
+    permissions: ["file.read", "control.start"],
+  };
+  manifest.subusers.push(grant);
+  assert.deepEqual(legacyPreflight(manifest).grants, [
+    {
+      userId: delegate,
+      serverId: manifest.servers[0].uuid,
+      permissions: grant.permissions,
+    },
+  ]);
+  manifest.subusers.push({ ...grant, id: 2 });
+  assert.throws(
+    () => legacyPreflight(manifest),
+    /Duplicate legacy grant scope/,
+  );
+  manifest.subusers.pop();
+  grant.permissions.push("*");
+  assert.throws(
+    () => legacyPreflight(manifest),
+    /Unsupported legacy permission grant/,
+  );
 });

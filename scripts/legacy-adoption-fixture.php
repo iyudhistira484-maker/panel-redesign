@@ -23,6 +23,10 @@ if (($argv[1] ?? '') === 'manifest') {
             'nodes' => DB::table('nodes')->orderBy('id')->get(['id', 'uuid']),
             'nests' => DB::table('nests')->orderBy('id')->get(['id', 'uuid']),
             'eggs' => DB::table('eggs')->orderBy('id')->get(['id', 'uuid', 'nest_id']),
+            'subusers' => DB::table('subusers')->orderBy('id')->get(['id', 'user_id', 'server_id', 'permissions'])->map(function ($row) {
+                $row->permissions = json_decode($row->permissions ?? 'null', true, 8, JSON_THROW_ON_ERROR);
+                return $row;
+            }),
             'allocations' => DB::table('allocations')->orderBy('id')->get(['id', 'node_id', 'server_id', 'port']),
         ];
     });

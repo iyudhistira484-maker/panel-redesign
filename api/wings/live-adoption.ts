@@ -179,6 +179,7 @@ async function main() {
         nests: 1,
         eggs: 1,
         allocations: 1,
+        subusers: 0,
       });
       assert.deepEqual(report.servers, [
         { uuid, ownerId: owner, nodeId, eggId: egg, nestId: nest, port: 25610 },

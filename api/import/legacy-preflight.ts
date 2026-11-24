@@ -1,3 +1,4 @@
+import { serverPermissions } from "../policy";
 import { UUID_V4 } from "../wings/client";
 
 const tables = [
@@ -7,6 +8,7 @@ const tables = [
   "nests",
   "eggs",
   "allocations",
+  "subusers",
 ] as const;
 type Table = (typeof tables)[number];
 type Row = Record<string, unknown>;
@@ -31,6 +33,7 @@ const columns: Record<Table, string[]> = {
   nests: ["id", "uuid"],
   eggs: ["id", "uuid", "nest_id"],
   allocations: ["id", "node_id", "server_id", "port"],
+  subusers: ["id", "user_id", "server_id", "permissions"],
 };
 
 /** Read-only qualification of the allowlisted manifest schema, not a SQL dump parser. */
@@ -53,7 +56,7 @@ export function legacyPreflight(input: unknown) {
         byId.has(item.id)
       )
         throw new Error(`Invalid legacy row: ${table}`);
-      if (table !== "allocations") {
+      if (table !== "allocations" && table !== "subusers") {
         if (
           typeof item.uuid !== "string" ||
           !UUID_V4.test(item.uuid) ||
@@ -114,10 +117,38 @@ export function legacyPreflight(input: unknown) {
       port: allocation.port,
     });
   }
+  const permissions = new Set<string>(serverPermissions);
+  const pairs = new Set<string>();
+  const grants = [];
+  for (const grant of map.get("subusers")?.values() ?? []) {
+    const user = get("users", grant.user_id),
+      server = get("servers", grant.server_id);
+    if (!user || !server || server.owner_id === grant.user_id)
+      throw new Error("Invalid legacy grant scope");
+    const pair = `${grant.server_id}:${grant.user_id}`;
+    if (pairs.has(pair)) throw new Error("Duplicate legacy grant scope");
+    pairs.add(pair);
+    if (
+      !Array.isArray(grant.permissions) ||
+      grant.permissions.length > permissions.size ||
+      grant.permissions.some(
+        (permission) =>
+          typeof permission !== "string" || !permissions.has(permission),
+      ) ||
+      new Set(grant.permissions).size !== grant.permissions.length
+    )
+      throw new Error("Unsupported legacy permission grant");
+    grants.push({
+      userId: user.uuid,
+      serverId: server.uuid,
+      permissions: [...grant.permissions],
+    });
+  }
   return {
     counts: Object.fromEntries(
       tables.map((table) => [table, map.get(table)?.size ?? 0]),
     ),
     servers,
+    grants,
   };
 }
