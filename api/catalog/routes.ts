@@ -1,4 +1,9 @@
-import { lockFreeAllocation, quarantineServerTransfer } from "./transfer";
+import {
+  lockFreeAllocation,
+  quarantineServerTransfer,
+  reserveTransfer,
+  transferLedger,
+} from "./transfer";
 import { ProvisionError, type createProvisioner } from "../wings/provision";
 import { randomUUID } from "node:crypto";
 import { isIP } from "node:net";
@@ -17,6 +22,13 @@ type Options = {
   provisioner?: ReturnType<typeof createProvisioner>;
   allowedNodeOrigins?: readonly string[];
   pepper: Buffer;
+  fixtureTransfer?: {
+    server: string;
+    source: string;
+    target: string;
+    allocation: string;
+    dispatch: (id: string) => Promise<boolean>;
+  };
 };
 const id = {
   type: "string",
@@ -53,6 +65,7 @@ export async function registerCatalog(
     pool,
     authenticate,
     provisioner,
+    fixtureTransfer,
     nodeKey,
     allowedNodeOrigins = [],
     pepper,
@@ -354,6 +367,62 @@ export async function registerCatalog(
       return { phase: "uncertain" };
     },
   );
+  if (fixtureTransfer) {
+    const ledger = transferLedger(pool);
+    app.post<{
+      Params: { id: string };
+      Body: { confirm: true; nodeId: string; allocationId: string };
+    }>(
+      "/servers/:id/transfer",
+      {
+        schema: {
+          ...byId,
+          body: schema({
+            confirm: { type: "boolean", const: true },
+            nodeId: id,
+            allocationId: id,
+          }),
+        },
+        config: { rateLimit: { max: 5, timeWindow: "1 minute" } },
+      },
+      async (req, reply) => {
+        const { nodeId, allocationId } = req.body;
+        if (
+          req.params.id !== fixtureTransfer.server ||
+          nodeId !== fixtureTransfer.target ||
+          allocationId !== fixtureTransfer.allocation
+        )
+          throw new CatalogError(404, "transfer_fixture_not_found");
+        let transferId: string | undefined;
+        await write(
+          req,
+          "catalog.transfer_reserved",
+          async (db) => {
+            transferId = await reserveTransfer(
+              db,
+              req.params.id,
+              nodeId,
+              allocationId,
+              fixtureTransfer.source,
+            );
+            if (!transferId)
+              throw new CatalogError(409, "transfer_not_reservable");
+          },
+          req.params.id,
+        );
+        if (!transferId) throw new Error("Missing reserved transfer");
+        try {
+          if (await fixtureTransfer.dispatch(transferId))
+            return reply.code(202).send({ id: transferId, phase: "claimed" });
+        } catch (error) {
+          await ledger.settle(transferId, { kind: "not_dispatched" });
+          throw error;
+        }
+        await ledger.settle(transferId, { kind: "not_dispatched" });
+        throw new CatalogError(409, "transfer_not_dispatchable");
+      },
+    );
+  }
   if (provisioner) {
     const confirmation = {
       ...byId,

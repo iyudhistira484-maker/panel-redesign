@@ -1,3 +1,4 @@
+import { registerCatalog } from "../catalog/routes";
 import { fixtureTransferService } from "./transfer-service";
 import { createServer, request, type ClientRequest } from "node:http";
 import { execFile } from "node:child_process";
@@ -6,7 +7,7 @@ import assert from "node:assert/strict";
 import { rows, stagingPool } from "../db";
 import { migrate } from "../migrate";
 import { transferLedger } from "../catalog/transfer";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import { WingsClient, type WingsNode } from "./client";
 import { lifecycleFixture } from "./lifecycle-fixture";
@@ -199,10 +200,39 @@ async function main() {
       ),
     { prefix: "/target/api/remote" },
   );
+  const adminProof = randomBytes(32).toString("hex");
+  const uploadNode = interrupted
+    ? { ...target, origin: "http://127.0.0.1:18182" }
+    : target;
+  const transfer = fixtureTransferService(
+    pool,
+    { id: sourceId, node: source },
+    { id: targetId, node: uploadNode },
+    issuer,
+  );
+  await app.register(
+    (instance) =>
+      registerCatalog(instance, {
+        pool,
+        pepper: randomBytes(32),
+        authenticate: async (req) =>
+          req.headers.authorization === `Bearer ${adminProof}`
+            ? { id: owner, admin: true, channel: "session" }
+            : null,
+        fixtureTransfer: {
+          server: fixture.uuid,
+          source: sourceId,
+          target: targetId,
+          allocation: targetAllocation,
+          dispatch: transfer.dispatch,
+        },
+      }),
+    { prefix: "/api/v1/admin" },
+  );
   try {
     await migrate(pool, "up");
     await pool.execute(
-      "INSERT INTO users (id,email,display_name,password_hash) VALUES (?,'transfer@example.test','Fixture','disabled')",
+      "INSERT INTO users (id,email,display_name,password_hash,is_admin) VALUES (?,'transfer@example.test','Fixture','disabled',1)",
       [owner],
     );
     await pool.execute("INSERT INTO nests (id,name) VALUES (?,'Fixture')", [
@@ -263,8 +293,6 @@ async function main() {
       "INSERT INTO wings_provisions (server_id,phase) VALUES (?,'installed')",
       [fixture.uuid],
     );
-    transferId = await ledger.reserve(fixture.uuid, targetId, targetAllocation);
-    assert.ok(transferId);
     const sourceToken = signTransferCapability(source, issuer, fixture.uuid);
     const rejected = await fetch(`${target.origin}/api/transfers`, {
       method: "POST",
@@ -274,22 +302,54 @@ async function main() {
     assert.ok(!rejected.ok);
     await rejected.body?.cancel();
     assert.equal(completion, undefined);
-    const uploadNode = interrupted
-      ? { ...target, origin: "http://127.0.0.1:18182" }
-      : target;
     if (interrupted)
       await new Promise<void>((resolve, reject) => {
         sink.once("error", reject);
         sink.listen(18182, "127.0.0.1", resolve);
       });
-    const transfer = fixtureTransferService(
-      pool,
-      { id: sourceId, node: source },
-      { id: targetId, node: uploadNode },
-      issuer,
+    const url = `/api/v1/admin/servers/${fixture.uuid}/transfer`;
+    const headers = { authorization: `Bearer ${adminProof}` };
+    const payload = {
+      confirm: true,
+      nodeId: targetId,
+      allocationId: targetAllocation,
+    };
+    assert.equal(
+      (await app.inject({ method: "POST", url, payload })).statusCode,
+      401,
     );
-    assert.equal(await transfer.dispatch(transferId), true);
-    assert.equal(await transfer.dispatch(transferId), false);
+    assert.equal(
+      (
+        await app.inject({
+          method: "POST",
+          url,
+          headers,
+          payload: { ...payload, nodeId: sourceId },
+        })
+      ).statusCode,
+      404,
+    );
+    const response = await app.inject({
+      method: "POST",
+      url,
+      headers,
+      payload,
+    });
+    assert.equal(response.statusCode, 202);
+    transferId = response.json<{ id: string; phase: string }>().id;
+    assert.ok(transferId);
+    assert.equal(
+      (await app.inject({ method: "POST", url, headers, payload })).statusCode,
+      409,
+    );
+    assert.deepEqual(
+      await rows(
+        pool,
+        "SELECT actor_id FROM audit_log WHERE event='catalog.transfer_reserved' AND subject_id=?",
+        [fixture.uuid],
+      ),
+      [{ actor_id: owner }],
+    );
     if (interrupted) {
       await eventually(
         "first upload chunk",

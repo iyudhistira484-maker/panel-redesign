@@ -61,45 +61,48 @@ type Transfer = {
   destination_reported_at: string | null;
   phase: "reserved" | "uncertain" | "completed" | "cancelled";
 };
+export async function reserveTransfer(
+  db: PoolConnection,
+  server: string,
+  node: string,
+  allocation: string,
+  expectedSource?: string,
+) {
+  const [current] = await rows<{
+    node_id: string;
+    allocation_id: string;
+    phase: string;
+  }>(
+    db,
+    "SELECT s.node_id,s.allocation_id,p.phase FROM servers s JOIN wings_provisions p ON p.server_id=s.id WHERE s.id=? FOR UPDATE",
+    [server],
+  );
+  if (
+    !current ||
+    current.phase !== "installed" ||
+    current.node_id === node ||
+    (expectedSource !== undefined && current.node_id !== expectedSource) ||
+    !(await lockFreeAllocation(db, node, allocation))
+  )
+    return undefined;
+  const id = randomUUID();
+  await db.execute(
+    "INSERT INTO wings_transfers (id,server_id,source_node_id,source_allocation_id,target_node_id,target_allocation_id,phase) VALUES (?,?,?,?,?,?,'reserved')",
+    [id, server, current.node_id, current.allocation_id, node, allocation],
+  );
+  await db.execute(
+    "UPDATE wings_provisions SET phase='transferring' WHERE server_id=?",
+    [server],
+  );
+  return id;
+}
 /** Internal persistence only. No dispatch, public route, or caller-controlled proof. */
 export function transferLedger(pool: Pool) {
   return {
     async reserve(server: string, node: string, allocation: string) {
-      return transaction(pool, async (db) => {
-        const [current] = await rows<{
-          node_id: string;
-          allocation_id: string;
-          phase: string;
-        }>(
-          db,
-          "SELECT s.node_id,s.allocation_id,p.phase FROM servers s JOIN wings_provisions p ON p.server_id=s.id WHERE s.id=? FOR UPDATE",
-          [server],
-        );
-        if (
-          !current ||
-          current.phase !== "installed" ||
-          current.node_id === node ||
-          !(await lockFreeAllocation(db, node, allocation))
-        )
-          return undefined;
-        const id = randomUUID();
-        await db.execute(
-          "INSERT INTO wings_transfers (id,server_id,source_node_id,source_allocation_id,target_node_id,target_allocation_id,phase) VALUES (?,?,?,?,?,?,'reserved')",
-          [
-            id,
-            server,
-            current.node_id,
-            current.allocation_id,
-            node,
-            allocation,
-          ],
-        );
-        await db.execute(
-          "UPDATE wings_provisions SET phase='transferring' WHERE server_id=?",
-          [server],
-        );
-        return id;
-      });
+      return transaction(pool, (db) =>
+        reserveTransfer(db, server, node, allocation),
+      );
     },
     async claim(id: string, digest: string) {
       if (!/^[a-f0-9]{64}$/.test(digest)) return false;
