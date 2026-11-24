@@ -11,7 +11,7 @@ if (DB::connection()->getDatabaseName() !== 'panel_adoption_fixture' || getenv('
 }
 $uuid = getenv('RELAY_ADOPTION_SERVER_UUID');
 if (($argv[1] ?? '') === 'status') {
-    $server = DB::table('servers')->where('uuid', $uuid)->first(['status', 'installed_at']);
+    $server = DB::table('servers')->where('uuid', ($argv[2] ?? '') === 'second' ? getenv('RELAY_ADOPTION_SECOND_UUID') : $uuid)->first(['status', 'installed_at']);
     echo json_encode($server, JSON_THROW_ON_ERROR);
     exit;
 }
@@ -76,4 +76,18 @@ SCRIPT,
         'allocation_id' => $allocation, 'nest_id' => $nest, 'egg_id' => $egg, 'startup' => $startup, 'image' => $image,
     ]);
     DB::table('allocations')->where('id', $allocation)->update(['server_id' => $server]);
+    $copy = (array) DB::table('eggs')->where('id', $egg)->first();
+    unset($copy['id']);
+    $copy['uuid'] = getenv('RELAY_ADOPTION_SECOND_EGG_UUID');
+    $copy['name'] = 'Second adoption fixture';
+    $otherEgg = DB::table('eggs')->insertGetId($copy);
+    $otherAllocation = DB::table('allocations')->insertGetId(['node_id' => $node, 'ip' => '127.0.0.1', 'port' => 25611]);
+    $other = (array) DB::table('servers')->where('id', $server)->first();
+    unset($other['id']);
+    $other['uuid'] = getenv('RELAY_ADOPTION_SECOND_UUID');
+    $other['uuidShort'] = substr($other['uuid'], 0, 8);
+    $other['egg_id'] = $otherEgg;
+    $other['allocation_id'] = $otherAllocation;
+    $otherServer = DB::table('servers')->insertGetId($other);
+    DB::table('allocations')->where('id', $otherAllocation)->update(['server_id' => $otherServer]);
 });

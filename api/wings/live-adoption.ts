@@ -58,6 +58,10 @@ async function main() {
     nest = legacyId("NEST");
   const nodeId = "3ab63670-f83b-4a2c-adeb-5b2852859319",
     allocation = randomUUID();
+  const second = actual ? legacyId("SECOND") : undefined;
+  const secondEgg = actual ? legacyId("SECOND_EGG") : undefined;
+  const secondAllocation = randomUUID();
+  const workloadIds = second ? [uuid, second] : [uuid];
   const name = "Existing staging workload";
   let installed = 0,
     ready = false,
@@ -100,7 +104,7 @@ async function main() {
     deliverReset: async () => {},
   });
   const docker = promisify(execFile);
-  const legacyStatus = async () =>
+  const legacyStatus = async (which = "first") =>
     JSON.parse(
       (
         await docker(
@@ -111,16 +115,17 @@ async function main() {
             "php",
             "/tmp/relay-fixture.php",
             "status",
+            which,
           ],
           { timeout: 5000 },
         )
       ).stdout,
     ) as { status: string | null; installed_at: string | null };
-  const inspect = async () =>
+  const inspect = async (id = uuid) =>
     (
       await docker(
         "docker",
-        ["inspect", "--format", "{{.Id}} {{.State.StartedAt}}", "--", uuid],
+        ["inspect", "--format", "{{.Id}} {{.State.StartedAt}}", "--", id],
         { timeout: 5000 },
       )
     ).stdout.trim();
@@ -130,14 +135,15 @@ async function main() {
       ["restart", "--time", "10", "relay-wings-contract"],
       { timeout: 20000 },
     );
-    await until(
-      "running workload rediscovery",
-      async () => (await client.state(uuid)) === "running",
+    await until("running workload rediscovery", async () =>
+      (await Promise.all(workloadIds.map((id) => client.state(id)))).every(
+        (state) => state === "running",
+      ),
     );
   };
-  const checksum = async () =>
+  const checksum = async (id = uuid) =>
     createHash("sha256")
-      .update(await client.readFixtureFile(uuid, "relay-start.sh"))
+      .update(await client.readFixtureFile(id, "relay-start.sh"))
       .digest("hex");
   try {
     await migrate(pool, "up");
@@ -146,17 +152,18 @@ async function main() {
     await until("source Wings health", async () =>
       Boolean(await client.health()),
     );
-    if (actual) await client.reinstall(uuid);
-    else await client.create(uuid);
-    await until("legacy fixture installation", async () =>
-      actual
-        ? Boolean(
-            (await legacyStatus()).installed_at &&
-              (await legacyStatus()).status === null,
-          )
-        : ready,
-    );
-    const legacyBefore = actual ? await legacyStatus() : undefined;
+    for (const [index, id] of workloadIds.entries()) {
+      if (actual) await client.reinstall(id);
+      else await client.create(id);
+      await until("legacy fixture installation", async () => {
+        if (!actual) return ready;
+        const status = await legacyStatus(index === 0 ? "first" : "second");
+        return Boolean(status.installed_at && status.status === null);
+      });
+    }
+    const legacyBefore = actual
+      ? await Promise.all([legacyStatus(), legacyStatus("second")])
+      : undefined;
     let manifest: unknown;
     if (actual) {
       const { stdout } = await docker(
@@ -173,39 +180,60 @@ async function main() {
       manifest = JSON.parse(stdout);
       const report = legacyPreflight(manifest);
       assert.deepEqual(report.counts, {
-        servers: 1,
+        servers: 2,
         users: 1,
         nodes: 1,
         nests: 1,
-        eggs: 1,
-        allocations: 1,
+        eggs: 2,
+        allocations: 2,
         subusers: 0,
       });
       assert.deepEqual(report.servers, [
         { uuid, ownerId: owner, nodeId, eggId: egg, nestId: nest, port: 25610 },
+        {
+          uuid: second,
+          ownerId: owner,
+          nodeId,
+          eggId: secondEgg,
+          nestId: nest,
+          port: 25611,
+        },
       ]);
     }
-    await client.power(uuid, "start");
-    await until(
-      "source running",
-      async () => (await client.state(uuid)) === "running",
+    for (const id of workloadIds) await client.power(id, "start");
+    await until("source running", async () =>
+      (await Promise.all(workloadIds.map((id) => client.state(id)))).every(
+        (state) => state === "running",
+      ),
     );
-    const before = await inspect(),
-      hash = await checksum();
+    const before = await Promise.all(workloadIds.map(inspect)),
+      hash = await Promise.all(workloadIds.map(checksum));
     if (actual) {
-      const credentials = { node, key, pepper, allocationId: allocation };
-      const conflictingNode = randomUUID();
-      await pool.execute(
-        "INSERT INTO nodes (id,name,origin,token_id,token_cipher) VALUES (?,'Conflict fixture',?,'conflict-fixture',?)",
-        [conflictingNode, node.origin, Buffer.from("unused")],
+      assert.ok(second);
+      const credentials = {
+        node,
+        key,
+        pepper,
+        allocations: new Map([
+          [uuid, allocation],
+          [second, secondAllocation],
+        ]),
+      };
+      await assert.rejects(
+        applyLegacyFixture(pool, manifest, {
+          ...credentials,
+          allocations: new Map([
+            [uuid, allocation],
+            [second, allocation],
+          ]),
+        }),
+        { code: "ER_DUP_ENTRY" },
       );
-      await assert.rejects(applyLegacyFixture(pool, manifest, credentials), {
-        code: "ER_DUP_ENTRY",
-      });
       for (const table of [
         "users",
         "nests",
         "eggs",
+        "nodes",
         "allocations",
         "servers",
         "wings_provisions",
@@ -214,7 +242,6 @@ async function main() {
           await rows(pool, `SELECT COUNT(*) AS total FROM ${table}`),
           [{ total: 0 }],
         );
-      await pool.execute("DELETE FROM nodes WHERE id=?", [conflictingNode]);
       assert.equal(
         (await applyLegacyFixture(pool, manifest, credentials)).applied,
         true,
@@ -226,7 +253,10 @@ async function main() {
       await assert.rejects(
         applyLegacyFixture(pool, manifest, {
           ...credentials,
-          allocationId: randomUUID(),
+          allocations: new Map([
+            [uuid, allocation],
+            [second, randomUUID()],
+          ]),
         }),
         /conflicts with import/,
       );
@@ -241,7 +271,18 @@ async function main() {
       ])
         assert.deepEqual(
           await rows(pool, `SELECT COUNT(*) AS total FROM ${table}`),
-          [{ total: 1 }],
+          [
+            {
+              total: [
+                "eggs",
+                "allocations",
+                "servers",
+                "wings_provisions",
+              ].includes(table)
+                ? 2
+                : 1,
+            },
+          ],
         );
     } else {
       await pool.execute(
@@ -294,8 +335,8 @@ async function main() {
     const calls = legacyCalls;
     await restart();
     assert.equal(legacyCalls, calls);
-    assert.equal(await inspect(), before);
-    assert.equal(await checksum(), hash);
+    assert.deepEqual(await Promise.all(workloadIds.map(inspect)), before);
+    assert.deepEqual(await Promise.all(workloadIds.map(checksum)), hash);
     assert.deepEqual(
       await rows(pool, "SELECT phase FROM wings_provisions WHERE server_id=?", [
         uuid,
@@ -310,17 +351,23 @@ async function main() {
     );
     await copyFile(`${config}.backup`, config);
     await restart();
-    if (actual) assert.deepEqual(await legacyStatus(), legacyBefore);
+    if (actual)
+      assert.deepEqual(
+        await Promise.all([legacyStatus(), legacyStatus("second")]),
+        legacyBefore,
+      );
     else assert.ok(legacyCalls > calls);
-    assert.equal(await inspect(), before);
-    assert.equal(await checksum(), hash);
+    assert.deepEqual(await Promise.all(workloadIds.map(inspect)), before);
+    assert.deepEqual(await Promise.all(workloadIds.map(checksum)), hash);
     if (!actual) assert.equal(installed, 1);
-    await client.power(uuid, "stop");
-    await until(
-      "fixture stop",
-      async () => (await client.state(uuid)) === "offline",
-    );
-    await client.remove(uuid);
+    for (const id of workloadIds) {
+      await client.power(id, "stop");
+      await until(
+        "fixture stop",
+        async () => (await client.state(id)) === "offline",
+      );
+      await client.remove(id);
+    }
     console.log(
       "Remote cutover and rollback preserved existing UUID, file and running container",
     );

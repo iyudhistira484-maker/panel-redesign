@@ -76,7 +76,7 @@ ENTRYPOINT ["/bin/sh", "-c", "exec /bin/sh -c \"$STARTUP\""]
 DOCKERFILE
 fi
 if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then
-  for key in SERVER EGG OWNER NEST; do
+  for key in SERVER EGG OWNER NEST SECOND SECOND_EGG; do
     export "RELAY_ADOPTION_${key}_UUID=$(cat /proc/sys/kernel/random/uuid)"
   done
   db_password=$(openssl rand -hex 24)
@@ -98,7 +98,7 @@ if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then
     -e CACHE_DRIVER=file -e SESSION_DRIVER=file -e QUEUE_CONNECTION=sync \
     -e PTERODACTYL_SEND_INSTALL_NOTIFICATION=false -e PTERODACTYL_SEND_REINSTALL_NOTIFICATION=false -e RELAY_LEGACY_FIXTURE=1 \
     -e RELAY_WINGS_TEST_TOKEN -e RELAY_WINGS_TEST_TOKEN_ID \
-    -e RELAY_ADOPTION_SERVER_UUID -e RELAY_ADOPTION_EGG_UUID -e RELAY_ADOPTION_OWNER_UUID -e RELAY_ADOPTION_NEST_UUID \
+    -e RELAY_ADOPTION_SERVER_UUID -e RELAY_ADOPTION_EGG_UUID -e RELAY_ADOPTION_OWNER_UUID -e RELAY_ADOPTION_NEST_UUID -e RELAY_ADOPTION_SECOND_UUID -e RELAY_ADOPTION_SECOND_EGG_UUID \
     ghcr.io/pterodactyl/panel:v1.15.2 -ec 'cd /app; printf "[client]\nskip-ssl\n" > /root/.my.cnf; php artisan migrate --force; php /tmp/relay-fixture.php; exec php -S 127.0.0.1:13202 -t public' >/dev/null
   for i in {1..45}; do
     if curl -s -o /dev/null http://127.0.0.1:13202/api/remote/servers; then break; fi
