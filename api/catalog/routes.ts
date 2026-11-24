@@ -1,3 +1,4 @@
+import { ProvisionError, type createProvisioner } from "../wings/provision";
 import { randomUUID } from "node:crypto";
 import { isIP } from "node:net";
 import type { FastifyInstance, FastifyRequest } from "fastify";
@@ -12,6 +13,7 @@ type Options = {
   pool: Pool;
   authenticate: (req: FastifyRequest) => Promise<Actor | null>;
   nodeKey?: Buffer;
+  provisioner?: ReturnType<typeof createProvisioner>;
   allowedNodeOrigins?: readonly string[];
   pepper: Buffer;
 };
@@ -46,7 +48,14 @@ class CatalogError extends Error {
 
 export async function registerCatalog(
   app: FastifyInstance,
-  { pool, authenticate, nodeKey, allowedNodeOrigins = [], pepper }: Options,
+  {
+    pool,
+    authenticate,
+    provisioner,
+    nodeKey,
+    allowedNodeOrigins = [],
+    pepper,
+  }: Options,
 ) {
   const crypt = nodeKey
     ? cryptoContext(nodeKey, pepper, "node-token")
@@ -86,7 +95,7 @@ export async function registerCatalog(
     return { id: uuid };
   }
   app.setErrorHandler((err, _req, reply) => {
-    if (err instanceof CatalogError)
+    if (err instanceof CatalogError || err instanceof ProvisionError)
       return reply.code(err.status).send({ error: err.code });
     if (err instanceof EggFormatError)
       return reply.code(422).send({ error: "invalid_egg", field: err.field });
@@ -302,4 +311,37 @@ export async function registerCatalog(
       return reply.code(201).send({ ...result, status: "draft" });
     },
   );
+  if (provisioner) {
+    app.post<{ Params: { id: string }; Body: { confirm: boolean } }>(
+      "/servers/:id/provision",
+      {
+        schema: {
+          ...byId,
+          body: schema({ confirm: { type: "boolean", const: true } }),
+        },
+        config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+      },
+      async (req, reply) => {
+        const principal = principals.get(req);
+        if (!principal) throw new CatalogError(403, "forbidden");
+        const phase = await provisioner.provision(req.params.id, principal);
+        return reply.code(202).send({ phase });
+      },
+    );
+    app.get<{ Params: { id: string } }>(
+      "/servers/:id/provision",
+      { schema: byId },
+      async (req) => {
+        const res = (
+          await rows<{ phase: string }>(
+            pool,
+            "SELECT COALESCE(p.phase,'draft') AS phase FROM servers s LEFT JOIN wings_provisions p ON s.id=p.server_id WHERE s.id=?",
+            [req.params.id],
+          )
+        )[0];
+        if (!res) throw new CatalogError(404, "server_not_found");
+        return res;
+      },
+    );
+  }
 }

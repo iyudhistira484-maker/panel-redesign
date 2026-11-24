@@ -28,6 +28,8 @@ async function main() {
       : undefined;
   const app = await createApp({
     wingsTestNode,
+    enableDisposableProvisioning:
+      process.env.RELAY_ENABLE_DISPOSABLE_PROVISIONING === "1",
     catalogNodeKey: process.env.RELAY_NODE_KEY
       ? keyFrom(process.env.RELAY_NODE_KEY, "RELAY_NODE_KEY")
       : undefined,

@@ -30,16 +30,14 @@ test(
         res.writeHead(401).end();
         return;
       }
-      res
-        .writeHead(200, { "content-type": "application/json" })
-        .end(
-          JSON.stringify({
-            version: "v1.13.5",
-            architecture: "amd64",
-            cpu_count: 2,
-            os: "linux",
-          }),
-        );
+      res.writeHead(200, { "content-type": "application/json" }).end(
+        JSON.stringify({
+          version: "v1.13.5",
+          architecture: "amd64",
+          cpu_count: 2,
+          os: "linux",
+        }),
+      );
     });
     await new Promise<void>((resolve) =>
       daemon.listen(0, "127.0.0.1", resolve),

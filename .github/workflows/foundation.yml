@@ -61,7 +61,23 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 6
+    services:
+      mysql:
+        image: mysql:8.4.8
+        env:
+          MYSQL_ROOT_PASSWORD: disposable-root-ci
+          MYSQL_USER: relay
+          MYSQL_PASSWORD: disposable-ci
+          MYSQL_DATABASE: relay_test
+        ports:
+          - 3306/tcp
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
     env:
+      RELAY_ENV: staging
       RELAY_DISPOSABLE_WINGS_CI: '1'
     steps:
       - uses: actions/checkout@v4
@@ -72,3 +88,5 @@ jobs:
       - run: npm ci
       - run: npm run test:wings
       - run: bash scripts/wings-contract.sh
+        env:
+          RELAY_STAGING_DATABASE_URL: mysql://relay:disposable-ci@127.0.0.1:${{ job.services.mysql.ports[3306] }}/relay_test

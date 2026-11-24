@@ -147,7 +147,9 @@ test("disposable lifecycle callbacks accept only the registered UUID and strict 
     ajv: { customOptions: { coerceTypes: false, removeAdditional: false } },
   });
   const results: unknown[] = [];
-  const fixture = lifecycleFixture((result) => results.push(result));
+  const fixture = lifecycleFixture((result) => {
+    results.push(result);
+  });
   await app.register((instance) => registerRemote(instance, node, fixture), {
     prefix: "/api/remote",
   });

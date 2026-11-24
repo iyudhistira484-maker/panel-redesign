@@ -12,13 +12,31 @@ export type ContractWorkload = {
     process_configuration: Record<string, unknown>;
   };
   install: { container_image: string; entrypoint: string; script: string };
-  installed: (result: { successful: boolean; reinstall: boolean }) => void;
+  installed: (result: {
+    successful: boolean;
+    reinstall: boolean;
+  }) => void | Promise<void>;
+};
+export type WorkloadProvider = {
+  lookup: (id: string) => Promise<ContractWorkload | undefined>;
+  list: (
+    page: number,
+    perPage: number,
+  ) => Promise<{
+    data: {
+      uuid: string;
+      settings: Record<string, unknown>;
+      process_configuration: Record<string, unknown>;
+    }[];
+    total: number;
+  }>;
 };
 /** Optional fixture is only supplied by the disposable Docker harness, never by the app. */
 export async function registerRemote(
   app: FastifyInstance,
   rawNode: WingsNode,
   fixture?: ContractWorkload,
+  provider?: WorkloadProvider,
 ) {
   if (fixture && !UUID_V4.test(fixture.uuid))
     throw new Error("Invalid test fixture UUID");
@@ -42,33 +60,53 @@ export async function registerRemote(
         },
       },
     },
-    async (req) => ({
-      data: [],
-      meta: {
-        current_page: Math.max(1, Number(req.query.page ?? 1)),
-        from: 0,
-        last_page: 1,
-        per_page: Number(req.query.per_page ?? 50),
-        to: 0,
-        total: 0,
-      },
-    }),
+    async (req) => {
+      const page = Math.max(1, Number(req.query.page ?? 1));
+      const perPage = Math.min(100, Number(req.query.per_page ?? 50));
+      const { data, total } = provider
+        ? await provider.list(page, perPage)
+        : { data: [], total: 0 };
+      return {
+        data,
+        meta: {
+          current_page: page,
+          from: data.length ? (page - 1) * perPage + 1 : 0,
+          last_page: Math.max(1, Math.ceil(total / perPage)),
+          per_page: perPage,
+          to: data.length ? (page - 1) * perPage + data.length : 0,
+          total,
+        },
+      };
+    },
   );
   app.post("/servers/reset", async (_req, reply) => reply.code(204).send());
-  if (!fixture) return;
-  // The daemon starts empty. Register the sole fixture for the explicit create request,
-  // not for discovery: otherwise Wings would pre-register it at boot.
-  app.get<{ Params: { uuid: string } }>("/servers/:uuid", async (req, reply) =>
-    req.params.uuid === fixture.uuid
-      ? fixture.configuration
-      : reply.code(404).send({ error: "server_not_found" }),
+  if (!fixture && !provider) return;
+  const lookup = async (id: string) =>
+    UUID_V4.test(id)
+      ? provider
+        ? provider.lookup(id)
+        : fixture?.uuid === id
+          ? fixture
+          : undefined
+      : undefined;
+  app.get<{ Params: { uuid: string } }>(
+    "/servers/:uuid",
+    async (req, reply) => {
+      const workload = await lookup(req.params.uuid);
+      return (
+        workload?.configuration ??
+        reply.code(404).send({ error: "server_not_found" })
+      );
+    },
   );
   app.get<{ Params: { uuid: string } }>(
     "/servers/:uuid/install",
-    async (req, reply) =>
-      req.params.uuid === fixture.uuid
-        ? fixture.install
-        : reply.code(404).send({ error: "server_not_found" }),
+    async (req, reply) => {
+      const workload = await lookup(req.params.uuid);
+      return (
+        workload?.install ?? reply.code(404).send({ error: "server_not_found" })
+      );
+    },
   );
   app.post<{
     Params: { uuid: string };
@@ -89,9 +127,9 @@ export async function registerRemote(
       },
     },
     async (req, reply) => {
-      if (req.params.uuid !== fixture.uuid)
-        return reply.code(404).send({ error: "server_not_found" });
-      fixture.installed(req.body);
+      const workload = await lookup(req.params.uuid);
+      if (!workload) return reply.code(404).send({ error: "server_not_found" });
+      await workload.installed(req.body);
       return reply.code(204).send();
     },
   );

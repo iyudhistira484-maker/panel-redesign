@@ -1,3 +1,4 @@
+import { createProvisioner } from "./wings/provision";
 import { registerCatalog } from "./catalog/routes";
 import { registerRemote } from "./wings/remote";
 import type { WingsNode } from "./wings/client";
@@ -29,6 +30,7 @@ export type Options = {
   pepper: Buffer;
   deliverReset: (message: ResetMessage) => Promise<void>;
   wingsTestNode?: WingsNode;
+  enableDisposableProvisioning?: boolean;
   catalogNodeKey?: Buffer;
   allowedCatalogNodeOrigins?: readonly string[];
 };
@@ -90,11 +92,25 @@ export async function createApp({
   pepper,
   deliverReset,
   wingsTestNode,
+  enableDisposableProvisioning,
   catalogNodeKey,
   allowedCatalogNodeOrigins,
 }: Options) {
   if (new URL(origin).origin !== origin || !origin.startsWith("https://"))
     throw new Error("Set an exact HTTPS panel origin");
+  if (
+    enableDisposableProvisioning &&
+    (!wingsTestNode ||
+      !catalogNodeKey ||
+      !allowedCatalogNodeOrigins?.includes(wingsTestNode.origin))
+  )
+    throw new Error(
+      "Provisioning requires explicit disposable node, key and exact allowlist",
+    );
+  const provisioner =
+    enableDisposableProvisioning && wingsTestNode && catalogNodeKey
+      ? createProvisioner(pool, wingsTestNode, catalogNodeKey, pepper)
+      : undefined;
   const crypt = cryptoContext(key, pepper);
   const dummyHash = await passwordHash(token());
   const app = Fastify({
@@ -121,7 +137,9 @@ export async function createApp({
     if (
       !(
         wingsTestNode &&
-        req.routeOptions.url === "/api/remote/servers/reset" &&
+        (req.routeOptions.url === "/api/remote/servers/reset" ||
+          (provisioner &&
+            req.routeOptions.url === "/api/remote/servers/:uuid/install")) &&
         req.method === "POST"
       ) &&
       !["GET", "HEAD", "OPTIONS"].includes(req.method) &&
@@ -773,7 +791,13 @@ export async function createApp({
   });
   if (wingsTestNode)
     await app.register(
-      async (instance) => registerRemote(instance, wingsTestNode),
+      async (instance) =>
+        registerRemote(
+          instance,
+          wingsTestNode,
+          undefined,
+          provisioner?.provider,
+        ),
       { prefix: "/api/remote" },
     );
   if (catalogNodeKey?.equals(key))
@@ -783,6 +807,7 @@ export async function createApp({
       registerCatalog(instance, {
         pool,
         pepper,
+        provisioner,
         nodeKey: catalogNodeKey,
         allowedNodeOrigins: allowedCatalogNodeOrigins,
         authenticate: (req) =>

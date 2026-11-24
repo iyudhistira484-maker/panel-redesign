@@ -1,99 +1,185 @@
-import { lifecycleFixture } from "./lifecycle-fixture";
 import assert from "node:assert/strict";
-import Fastify from "fastify";
-import { registerRemote } from "./remote";
-import { WingsClient, WingsUnavailable, type WingsNode } from "./client";
+import { randomBytes, randomUUID } from "node:crypto";
+import { createApp } from "../app";
+import { stagingPool } from "../db";
+import { migrate } from "../migrate";
+import { passwordHash } from "../security";
+import { WingsClient, type WingsNode } from "./client";
+import { disposableEgg } from "./provision";
 
 async function until(
   label: string,
   condition: () => boolean | Promise<boolean>,
 ) {
-  for (let attempt = 0; attempt < 45; attempt++) {
+  for (let attempt = 0; attempt < 40; attempt++) {
     if (await condition()) return;
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await new Promise((resolve) => setTimeout(resolve, 750));
   }
-  throw new Error(`::error::Wings did not reach ${label}`);
+  throw new Error(`::error::Contract did not reach ${label}`);
 }
 async function main() {
-  if (process.env.RELAY_DISPOSABLE_WINGS_CI !== "1")
+  if (
+    process.env.RELAY_DISPOSABLE_WINGS_CI !== "1" ||
+    process.env.RUNNER_ENVIRONMENT !== "github-hosted" ||
+    !process.env.RELAY_STAGING_DATABASE_URL?.endsWith("/relay_test")
+  )
     throw new Error("Disposable CI only");
   const node: WingsNode = {
     origin: "http://127.0.0.1:18080",
     tokenId: process.env.RELAY_WINGS_TEST_TOKEN_ID ?? "",
     token: process.env.RELAY_WINGS_TEST_TOKEN ?? "",
   };
-  let installResult: { successful: boolean; reinstall: boolean } | undefined;
-  const fixture = lifecycleFixture((result) => {
-    installResult = result;
+  const pool = stagingPool();
+  const origin = "https://relay.example.test";
+  const app = await createApp({
+    pool,
+    origin,
+    key: randomBytes(32),
+    pepper: randomBytes(32),
+    catalogNodeKey: randomBytes(32),
+    allowedCatalogNodeOrigins: [node.origin],
+    wingsTestNode: node,
+    enableDisposableProvisioning: true,
+    deliverReset: async () => {},
   });
-  const app = Fastify({
-    logger: false,
-    ajv: { customOptions: { coerceTypes: false, removeAdditional: false } },
-  });
-  const successes = new Set<string>();
-  app.addHook("onResponse", async (request, reply) => {
-    if (reply.statusCode < 300 && request.routeOptions.url)
-      successes.add(request.routeOptions.url);
-  });
-  await app.register((instance) => registerRemote(instance, node, fixture), {
-    prefix: "/api/remote",
-  });
-  await app.listen({ host: "127.0.0.1", port: 13200 });
   try {
+    await migrate(pool, "up");
+    const id = randomUUID(),
+      password = randomBytes(24).toString("hex");
+    await pool.execute(
+      "INSERT INTO users (id,email,display_name,password_hash,is_admin) VALUES (?,?,?,?,1)",
+      [
+        id,
+        "contract@example.test",
+        "Contract operator",
+        await passwordHash(password),
+      ],
+    );
+    await app.listen({ host: "127.0.0.1", port: 13200 });
+    const headers = { origin, "x-relay-request": "1" };
+    const logged = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      headers,
+      payload: { email: "contract@example.test", password },
+    });
+    assert.equal(logged.statusCode, 200, "admin fixture login");
+    const session = logged.cookies.find(
+      (cookie) => cookie.name === "__Host-relay_session",
+    );
+    assert.ok(session);
+    const admin = (method: "GET" | "POST", path: string, payload?: object) =>
+      app.inject({
+        method,
+        url: `/api/v1/admin/${path}`,
+        headers: { ...headers, cookie: `${session.name}=${session.value}` },
+        payload,
+      });
+    const add = async (path: string, payload: object) => {
+      const result = await admin("POST", path, payload);
+      assert.equal(result.statusCode, 201, `catalog ${path}: ${result.body}`);
+      return result.json<{ id: string }>().id;
+    };
+    const nodeId = await add("nodes", { ...node, name: "Disposable Wings" });
+    const nestId = await add("nests", { name: "Disposable fixture" });
+    const eggId = await add("eggs", { nestId, document: disposableEgg });
+    const allocationId = await add("allocations", {
+      nodeId,
+      ip: "127.0.0.1",
+      port: 25610,
+    });
+    const uuid = await add("servers", {
+      name: "Catalog contract workload",
+      nodeId,
+      eggId,
+      allocationId,
+      ownerId: id,
+    });
     const client = new WingsClient(node);
-    let lastHealth = "not_attempted";
-    for (let attempt = 0; attempt < 35; attempt++) {
-      let health: Awaited<ReturnType<WingsClient["health"]>> | undefined;
+    await until("Wings health", async () => {
       try {
-        health = await client.health();
-      } catch (error) {
-        lastHealth =
-          error instanceof WingsUnavailable ? error.reason : "unexpected";
+        await client.health();
+        return true;
+      } catch {
+        return false;
       }
-      if (
-        health &&
-        successes.has("/api/remote/servers") &&
-        successes.has("/api/remote/servers/reset")
-      ) {
-        const anonymous = await fetch(`${node.origin}/api/system`, {
-          signal: AbortSignal.timeout(3000),
-        });
-        assert.equal(anonymous.status, 401);
-        await anonymous.body?.cancel();
-        console.log(
-          `Wings ${health.version}: authenticated system info, bootstrap list and reset verified`,
-        );
-        await client.create(fixture.uuid);
-        await until("installation callback", () => installResult !== undefined);
-        assert.deepEqual(installResult, { successful: true, reinstall: false });
-        assert.equal(await client.state(fixture.uuid), "offline");
-        await client.power(fixture.uuid, "start");
-        await until(
-          "running state",
-          async () => (await client.state(fixture.uuid)) === "running",
-        );
-        await client.power(fixture.uuid, "stop");
-        await until(
-          "offline state",
-          async () => (await client.state(fixture.uuid)) === "offline",
-        );
-        await client.remove(fixture.uuid);
-        await assert.rejects(client.state(fixture.uuid), { reason: "http" });
-        console.log(
-          "Disposable workload: create, install, start, stop and delete verified",
-        );
-        return;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
-    throw new Error(
-      `::error::Daemon contract timed out (health: ${lastHealth}); successful callback paths: ${[...successes].join(", ") || "none"}`,
+    });
+    const anonymous = await fetch(`${node.origin}/api/system`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    assert.equal(anonymous.status, 401);
+    await anonymous.body?.cancel();
+    const phase = async () => {
+      const result = await admin("GET", `servers/${uuid}/provision`);
+      assert.equal(result.statusCode, 200);
+      return result.json<{ phase: string }>().phase;
+    };
+    assert.equal(await phase(), "draft");
+    const remoteAuth = {
+      authorization: `Bearer ${node.tokenId}.${node.token}`,
+    };
+    const remote = (path: string) =>
+      app.inject({ url: `/api/remote/${path}`, headers: remoteAuth });
+    assert.equal((await remote(`servers/${uuid}`)).statusCode, 404);
+    assert.equal(
+      (await admin("POST", `servers/${uuid}/provision`, { confirm: false }))
+        .statusCode,
+      400,
+    );
+    // Concurrent requests may race, but only one may dispatch a create.
+    const dispatch = await Promise.all([
+      admin("POST", `servers/${uuid}/provision`, { confirm: true }),
+      admin("POST", `servers/${uuid}/provision`, { confirm: true }),
+    ]);
+    assert.deepEqual(
+      dispatch.map((r) => r.statusCode).sort(),
+      [202, 409],
+      dispatch.map((r) => r.body).join(" | "),
+    );
+    await until("persisted installation callback", async () => {
+      const current = await phase();
+      assert.notEqual(current, "install_failed");
+      return current === "installed";
+    });
+    const listed = await remote("servers?page=0&per_page=50");
+    assert.equal(listed.statusCode, 200);
+    assert.deepEqual(
+      listed.json().data.map((server: { uuid: string }) => server.uuid),
+      [uuid],
+    );
+    // A delayed negative callback must not overwrite an installed terminal result.
+    const repeated = await app.inject({
+      method: "POST",
+      url: `/api/remote/servers/${uuid}/install`,
+      headers: remoteAuth,
+      payload: { successful: false, reinstall: false },
+    });
+    assert.equal(repeated.statusCode, 204);
+    assert.equal(await phase(), "installed");
+    assert.equal(await client.state(uuid), "offline");
+    await client.power(uuid, "start");
+    await until(
+      "running state",
+      async () => (await client.state(uuid)) === "running",
+    );
+    await client.power(uuid, "stop");
+    await until(
+      "offline state",
+      async () => (await client.state(uuid)) === "offline",
+    );
+    await client.remove(uuid);
+    await assert.rejects(client.state(uuid), { reason: "http" });
+    console.log(
+      "Catalog and real Wings verified: guarded dispatch, persistent installation, start, stop and disposable cleanup",
     );
   } finally {
     await app.close();
+    await pool.end();
   }
 }
 void main().catch((error) => {
-  console.error(error instanceof Error ? error.message : "Wings test failed");
+  console.error(
+    `::error::${error instanceof Error ? error.message : "Wings integration failed"}`,
+  );
   process.exitCode = 1;
 });

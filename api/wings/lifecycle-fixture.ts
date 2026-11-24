@@ -2,17 +2,22 @@ import { randomUUID } from "node:crypto";
 import type { ContractWorkload } from "./remote";
 export function lifecycleFixture(
   onResult: ContractWorkload["installed"],
+  server: { uuid: string; port: number; name: string; eggId: string } = {
+    uuid: randomUUID(),
+    port: 25610,
+    name: "Relay CI fixture",
+    eggId: randomUUID(),
+  },
 ): ContractWorkload {
-  const uuid = randomUUID();
+  const { uuid, port, name, eggId } = server;
   const ip = "127.0.0.1";
-  const port = 25610;
   return {
     uuid,
     installed: onResult,
     configuration: {
       settings: {
         uuid,
-        meta: { name: "Relay CI fixture", description: "Disposable" },
+        meta: { name, description: "Disposable" },
         suspended: false,
         environment: { SERVER_IP: ip, SERVER_PORT: String(port) },
         invocation: "sh /home/container/relay-start.sh",
@@ -35,7 +40,7 @@ export function lifecycleFixture(
           mappings: { [ip]: [port] },
         },
         mounts: [],
-        egg: { id: randomUUID(), file_denylist: [] },
+        egg: { id: eggId, file_denylist: [] },
       },
       process_configuration: {
         startup: {
