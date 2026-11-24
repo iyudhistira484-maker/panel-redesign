@@ -312,6 +312,49 @@ export async function registerCatalog(
     },
   );
   if (provisioner) {
+    const confirmation = {
+      ...byId,
+      body: schema({ confirm: { type: "boolean", const: true } }),
+    };
+    const limit = { rateLimit: { max: 10, timeWindow: "1 minute" } };
+    const admin = (req: FastifyRequest) => {
+      const actor = principals.get(req);
+      if (!actor) throw new CatalogError(403, "forbidden");
+      return actor;
+    };
+    app.get<{ Params: { id: string } }>(
+      "/servers/:id/runtime",
+      {
+        schema: byId,
+        config: { rateLimit: { max: 90, timeWindow: "1 minute" } },
+      },
+      (req) => provisioner.runtime(req.params.id, admin(req)),
+    );
+    app.post<{ Params: { id: string }; Body: { action: "start" | "stop" } }>(
+      "/servers/:id/power",
+      {
+        config: limit,
+        schema: {
+          ...byId,
+          body: schema({
+            confirm: { type: "boolean", const: true },
+            action: { type: "string", enum: ["start", "stop"] },
+          }),
+        },
+      },
+      async (req, reply) =>
+        reply
+          .code(202)
+          .send(
+            await provisioner.power(req.params.id, req.body.action, admin(req)),
+          ),
+    );
+    app.post<{ Params: { id: string } }>(
+      "/servers/:id/reconcile",
+      { schema: confirmation, config: limit },
+      (req) => provisioner.reconcile(req.params.id, admin(req)),
+    );
+
     app.post<{ Params: { id: string }; Body: { confirm: boolean } }>(
       "/servers/:id/provision",
       {

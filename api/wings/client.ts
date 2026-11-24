@@ -9,7 +9,9 @@ export type WingsHealth = {
   os: string;
 };
 export class WingsUnavailable extends Error {
-  constructor(readonly reason: "transport" | "http" | "payload" | "version") {
+  constructor(
+    readonly reason: "transport" | "http" | "payload" | "version" | "not_found",
+  ) {
     super(`Wings request: ${reason}`);
   }
 }
@@ -43,6 +45,7 @@ export class WingsClient {
     expected: number,
     method = "GET",
     body?: object,
+    allowMissing = false,
   ): Promise<Response> {
     let response: Response;
     try {
@@ -62,7 +65,9 @@ export class WingsClient {
     }
     if (response.status !== expected) {
       await response.body?.cancel().catch(() => {});
-      throw new WingsUnavailable("http");
+      throw new WingsUnavailable(
+        allowMissing && response.status === 404 ? "not_found" : "http",
+      );
     }
     return response;
   }
@@ -91,10 +96,22 @@ export class WingsClient {
     await response.body?.cancel();
   }
   async state(id: string) {
-    const data = await this.#json(
-      await this.#send(this.#server(id), 200),
-      65536,
+    const response = await this.#send(
+      this.#server(id),
+      200,
+      "GET",
+      undefined,
+      true,
     );
+    const data = await this.#json(response, 65536);
+    const configuration = data.configuration;
+    if (
+      !configuration ||
+      typeof configuration !== "object" ||
+      !("uuid" in configuration) ||
+      configuration.uuid !== id
+    )
+      throw new WingsUnavailable("payload");
     switch (data.state) {
       case "starting":
       case "running":

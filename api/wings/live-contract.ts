@@ -156,19 +156,27 @@ async function main() {
     });
     assert.equal(repeated.statusCode, 204);
     assert.equal(await phase(), "installed");
-    assert.equal(await client.state(uuid), "offline");
-    await client.power(uuid, "start");
+    const runtime = async () => {
+      const res = await admin("GET", `servers/${uuid}/runtime`);
+      assert.equal(res.statusCode, 200);
+      return res.json<{ state: string | null; presence: string }>();
+    };
+    const power = (action: "start" | "stop", confirm = true) =>
+      admin("POST", `servers/${uuid}/power`, { action, confirm });
+    assert.equal((await runtime()).state, "offline");
+    assert.equal((await power("start", false)).statusCode, 400);
+    assert.equal((await power("start")).statusCode, 202);
     await until(
-      "running state",
-      async () => (await client.state(uuid)) === "running",
+      "running state via admin API",
+      async () => (await runtime()).state === "running",
     );
-    await client.power(uuid, "stop");
+    assert.equal((await power("stop")).statusCode, 202);
     await until(
-      "offline state",
-      async () => (await client.state(uuid)) === "offline",
+      "offline state via admin API",
+      async () => (await runtime()).state === "offline",
     );
     await client.remove(uuid);
-    await assert.rejects(client.state(uuid), { reason: "http" });
+    assert.equal((await runtime()).presence, "absent");
     console.log(
       "Catalog and real Wings verified: guarded dispatch, persistent installation, start, stop and disposable cleanup",
     );

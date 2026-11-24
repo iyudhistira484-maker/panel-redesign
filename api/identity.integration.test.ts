@@ -262,6 +262,21 @@ test(
       );
       ok(await postAdmin(action, { confirm: true }), 409);
       assert.equal(creates, 1);
+      const reconcile = `servers/${approvedId}/reconcile`;
+      ok(await postAdmin(reconcile, { confirm: true }, a), 403);
+      ok(await postAdmin(reconcile, { confirm: false }), 400);
+      assert.deepEqual(
+        ok(await postAdmin(reconcile, { confirm: true }), 200).json(),
+        { phase: "uncertain", presence: "unreachable", state: null },
+      );
+      ok(
+        await postAdmin(`servers/${approvedId}/power`, {
+          action: "start",
+          confirm: true,
+        }),
+        409,
+      );
+      assert.equal(creates, 1);
       const callback = `/api/remote/servers/${approvedId}/install`;
       ok(
         await app.inject({

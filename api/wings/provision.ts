@@ -3,7 +3,12 @@ import type { Pool } from "mysql2/promise";
 import { rows, transaction, type Executor } from "../db";
 import type { Actor } from "../policy";
 import { cryptoContext } from "../security";
-import { validateNode, WingsClient, type WingsNode } from "./client";
+import {
+  validateNode,
+  WingsClient,
+  WingsUnavailable,
+  type WingsNode,
+} from "./client";
 import { lifecycleFixture } from "./lifecycle-fixture";
 import type { WorkloadProvider } from "./remote";
 
@@ -141,26 +146,96 @@ export function createProvisioner(
       };
     },
   };
+  async function authorized(
+    db: Executor,
+    id: string,
+    actor: Actor,
+    write = false,
+  ) {
+    const role = (
+      await rows<{ is_admin: number }>(
+        db,
+        `SELECT is_admin FROM users WHERE id=?${write ? " FOR UPDATE" : ""}`,
+        [actor.id],
+      )
+    )[0];
+    if (!role?.is_admin || actor.channel !== "session")
+      throw new ProvisionError(403, "forbidden");
+    const server = await load(db, id, write);
+    if (!server) throw new ProvisionError(404, "server_not_found");
+    if (!eligible(server))
+      throw new ProvisionError(422, "disposable_fixture_required");
+    return server;
+  }
+  async function observe(id: string) {
+    try {
+      return { presence: "present" as const, state: await client.state(id) };
+    } catch (error) {
+      return {
+        presence:
+          error instanceof WingsUnavailable && error.reason === "not_found"
+            ? ("absent" as const)
+            : ("unreachable" as const),
+        state: null,
+      };
+    }
+  }
   return {
     provider,
+    async runtime(id: string, actor: Actor) {
+      const server = await authorized(pool, id, actor);
+      if (server.phase !== "installed")
+        throw new ProvisionError(409, "server_not_installed");
+      return observe(id);
+    },
+    async power(id: string, action: "start" | "stop", actor: Actor) {
+      await transaction(pool, async (db) => {
+        const server = await authorized(db, id, actor, true);
+        if (server.phase !== "installed")
+          throw new ProvisionError(409, "server_not_installed");
+        await db.execute(
+          "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,?,?)",
+          [actor.id, `wings.power_${action}_requested`, id],
+        );
+      });
+      try {
+        await client.power(id, action);
+      } catch {
+        await pool.execute(
+          "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,?,?)",
+          [actor.id, `wings.power_${action}_uncertain`, id],
+        );
+        throw new ProvisionError(502, "power_outcome_unknown");
+      }
+      return { accepted: true };
+    },
+    async reconcile(id: string, actor: Actor) {
+      const s = await authorized(pool, id, actor);
+      if (
+        !s.phase ||
+        !(["dispatching", "installing", "uncertain"] as const).some(
+          (phase) => phase === s.phase,
+        )
+      )
+        throw new ProvisionError(409, "reconcile_not_applicable");
+      const observation = await observe(id);
+      // Daemon presence, absence and power state cannot attest to installation completion.
+      // Keep the durable dispatch marker and never retry based on this observation.
+      return transaction(pool, async (db) => {
+        const latest = await authorized(db, id, actor, true);
+        await db.execute(
+          "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,?,?)",
+          [actor.id, `wings.reconcile_${observation.presence}`, id],
+        );
+        return { phase: latest.phase, ...observation };
+      });
+    },
     async provision(id: string, actor: Actor) {
       // Lock the server before writing a durable dispatch marker. Do not hold DB locks during network calls.
       await transaction(pool, async (db) => {
-        const s = await load(db, id, true);
-        if (!s) throw new ProvisionError(404, "server_not_found");
-        const role = (
-          await rows<{ is_admin: number }>(
-            db,
-            "SELECT is_admin FROM users WHERE id=? FOR UPDATE",
-            [actor.id],
-          )
-        )[0];
-        if (!role?.is_admin || actor.channel !== "session")
-          throw new ProvisionError(403, "forbidden");
+        const s = await authorized(db, id, actor, true);
         if (s.phase)
           throw new ProvisionError(409, "provision_already_dispatched");
-        if (!eligible(s))
-          throw new ProvisionError(422, "disposable_fixture_required");
         await db.execute(
           "INSERT INTO wings_provisions (server_id,phase) VALUES (?,'dispatching')",
           [id],
