@@ -302,13 +302,27 @@ async function main() {
         ip: "127.0.0.1",
         port,
       });
-      const serverId = await add("servers", {
+      const draft = {
         name: `Reviewed HTTP ${index + 1}`,
         nodeId,
         eggId,
         allocationId,
         ownerId: id,
-      });
+      };
+      assert.equal(
+        (
+          await admin("POST", "servers", {
+            ...draft,
+            fixtureMode: "unsupported",
+          })
+        ).statusCode,
+        400,
+      );
+      const expected = index === 0 ? "alpha" : "beta";
+      const serverId = await add(
+        "servers",
+        index === 0 ? draft : { ...draft, fixtureMode: expected },
+      );
       const provision = await admin("POST", `servers/${serverId}/provision`, {
         confirm: true,
       });
@@ -353,6 +367,25 @@ async function main() {
           console.log(`::warning::Reviewed HTTP fixture output: ${summary}`);
         throw error;
       }
+      const fetchFixture = async (path: string) =>
+        (
+          await docker(
+            "docker",
+            [
+              "exec",
+              serverId,
+              "wget",
+              "-qO-",
+              `http://127.0.0.1:${port}/${path}`,
+            ],
+            { timeout: 3000 },
+          )
+        ).stdout.trim();
+      assert.equal(await fetchFixture("runtime.txt"), expected);
+      assert.deepEqual(JSON.parse(await fetchFixture("settings.json")), {
+        mode: expected,
+        keep: true,
+      });
       assert.equal(
         (
           await admin("POST", `servers/${serverId}/power`, {

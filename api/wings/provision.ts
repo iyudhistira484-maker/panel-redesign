@@ -1,4 +1,8 @@
-import { reviewedHttpEggs, reviewedWorkload } from "../eggs/reviewed-workload";
+import {
+  reviewedHttpEggs,
+  reviewedWorkload,
+  type FixtureMode,
+} from "../eggs/reviewed-workload";
 import { WingsSocket, SocketError } from "./socket";
 import { timingSafeEqual } from "node:crypto";
 import type { Pool } from "mysql2/promise";
@@ -46,8 +50,9 @@ type ServerRow = {
   cipher: Buffer;
   nodeId: string;
   phase: Phase | null;
+  fixtureMode: FixtureMode | null;
 };
-const select = `SELECT s.id AS uuid,s.name,a.port,s.egg_id AS eggId,e.document,n.origin,n.token_id AS tokenId,n.token_cipher AS cipher,n.id AS nodeId,p.phase
+const select = `SELECT s.id AS uuid,s.name,s.fixture_mode AS fixtureMode,a.port,s.egg_id AS eggId,e.document,n.origin,n.token_id AS tokenId,n.token_cipher AS cipher,n.id AS nodeId,p.phase
  FROM servers s JOIN nodes n ON n.id=s.node_id JOIN allocations a ON a.id=s.allocation_id JOIN eggs e ON e.id=s.egg_id LEFT JOIN wings_provisions p ON p.server_id=s.id`;
 export class ProvisionError extends Error {
   constructor(
@@ -121,7 +126,7 @@ export function createProvisioner(
     ) => installStatus(s, result);
     if (s.document.equals(approvedDocuments[0]))
       return lifecycleFixture(installed, s);
-    const reviewed = reviewedWorkload(s.document, s, installed);
+    const reviewed = reviewedWorkload(s.document, s, installed, s.fixtureMode);
     if (!reviewed) throw new ProvisionError(422, "egg_not_approved");
     return reviewed;
   };

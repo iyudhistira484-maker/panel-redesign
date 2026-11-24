@@ -1,4 +1,9 @@
 import {
+  fixtureModes,
+  reviewedHttpEggs,
+  type FixtureMode,
+} from "../eggs/reviewed-workload";
+import {
   lockFreeAllocation,
   quarantineServerTransfer,
   reserveTransfer,
@@ -302,29 +307,66 @@ export async function registerCatalog(
       ownerId: string;
       eggId: string;
       allocationId: string;
+      fixtureMode?: FixtureMode;
     };
   }>(
     "/servers",
     {
-      schema: put({
-        name: text(100),
-        nodeId: id,
-        ownerId: id,
-        eggId: id,
-        allocationId: id,
-      }),
+      schema: {
+        body: {
+          ...schema({
+            name: text(100),
+            nodeId: id,
+            ownerId: id,
+            eggId: id,
+            allocationId: id,
+          }),
+          properties: {
+            name: text(100),
+            nodeId: id,
+            ownerId: id,
+            eggId: id,
+            allocationId: id,
+            fixtureMode: { type: "string", enum: fixtureModes },
+          },
+        },
+      },
     },
     async (req, reply) => {
-      const { name, nodeId, ownerId, eggId, allocationId } = req.body;
+      const { name, nodeId, ownerId, eggId, allocationId, fixtureMode } =
+        req.body;
       const result = await write(
         req,
         "catalog.server_draft_created",
         async (db, uuid) => {
           if (!(await lockFreeAllocation(db, nodeId, allocationId)))
             throw new CatalogError(409, "allocation_unavailable");
+          if (fixtureMode !== undefined) {
+            const [egg] = await rows<{ document: Buffer }>(
+              db,
+              "SELECT document FROM eggs WHERE id=?",
+              [eggId],
+            );
+            if (
+              !provisioner ||
+              !egg ||
+              !reviewedHttpEggs.some((text) =>
+                egg.document.equals(Buffer.from(text)),
+              )
+            )
+              throw new CatalogError(422, "fixture_mode_not_supported");
+          }
           await db.execute(
-            "INSERT INTO servers (id,name,node_id,owner_id,egg_id,allocation_id) VALUES (?,?,?,?,?,?)",
-            [uuid, name, nodeId, ownerId, eggId, allocationId],
+            "INSERT INTO servers (id,name,node_id,owner_id,egg_id,allocation_id,fixture_mode) VALUES (?,?,?,?,?,?,?)",
+            [
+              uuid,
+              name,
+              nodeId,
+              ownerId,
+              eggId,
+              allocationId,
+              fixtureMode ?? null,
+            ],
           );
         },
       );
