@@ -4,9 +4,11 @@ set -euo pipefail
 [[ "${RELAY_DISPOSABLE_WINGS_CI:-}" == 1 && "${RUNNER_ENVIRONMENT:-}" == github-hosted && "${GITHUB_EVENT_NAME:-}" == push ]]
 work=$(mktemp -d)
 name=relay-wings-contract
+network=relay-wings-contract-net
 harness_pid=''
 cleanup() {
   docker rm -f "$name" >/dev/null 2>&1 || true
+  docker network rm "$network" >/dev/null 2>&1 || true
   if [[ -n "$harness_pid" ]]; then kill "$harness_pid" 2>/dev/null || true; fi
   sudo rm -rf -- "$work"
 }
@@ -43,10 +45,16 @@ system:
   sftp:
     bind_address: 127.0.0.1
     bind_port: 12022
+docker:
+  network:
+    name: $network
+    network_mode: $network
 allowed_mounts: []
 YAML
 chmod 0600 "$work/config/config.yml"
 docker pull debian:12-slim
+# Docker allocates a subnet distinct from the MySQL service network.
+docker network create --internal "$network" >/dev/null
 cat <<'DOCKERFILE' | docker build --tag relay-wings-contract-workload:ci -
 FROM alpine:3.22.2
 ENTRYPOINT ["/bin/sh", "/home/container/relay-start.sh"]

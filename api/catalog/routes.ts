@@ -129,7 +129,7 @@ export async function registerCatalog(
   app.get("/servers", async () =>
     rows(
       pool,
-      "SELECT id,name,node_id AS nodeId,owner_id AS ownerId,egg_id AS eggId,allocation_id AS allocationId,status FROM servers ORDER BY name,id LIMIT 100",
+      "SELECT s.id,s.name,s.node_id AS nodeId,s.owner_id AS ownerId,s.egg_id AS eggId,s.allocation_id AS allocationId,COALESCE(p.phase,s.status) AS status FROM servers s LEFT JOIN wings_provisions p ON p.server_id=s.id ORDER BY s.name,s.id LIMIT 100",
     ),
   );
   app.post<{
