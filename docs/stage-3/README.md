@@ -89,3 +89,13 @@ Pemeriksaan kehadiran daemon tidak bisa memastikan hasil instalasi. Jika callbac
 Berkas: `api/wings/{client,provision,live-contract}.ts`, `api/catalog/routes.ts`, `api/identity.integration.test.ts`, `api/migrate.ts`, `migrations/004_lifecycle.{up,down}.sql`. Tes lokal: `npm run test:wings`. Integrasi API → MySQL → daemon asli dijalankan job `wings-bootstrap`.
 
 **Hasil:** [GitHub Actions 45358544003](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45358544003) lulus. Daemon asli menolak tahap destruktif melalui pemeriksaan Relay ketika fixture masih berjalan; sesudah stop, tes memverifikasi callback reinstall kedua, penghapusan dari Wings, penolakan delete ulang, dan tidak ada UUID terhapus dalam daftar bootstrap. Job MySQL juga lulus untuk penolakan non-admin dan fase `uncertain`.
+
+## Websocket Wings: snapshot statistik dari backend
+
+`GET /api/v1/admin/servers/{id}/stats` tersedia hanya pada mode fixture yang terinstal dan dengan sesi admin. Backend membuka websocket ke origin node loopback yang dipatok, menerbitkan JWT HS256 berumur 30 detik yang terikat server dan pengguna, lalu mengirim `auth` dan `send stats`. Satu respons statistik dipilah menjadi angka CPU, memori, disk, uptime, dan jaringan; socket ditutup sesudahnya. Browser tidak menerima JWT, token node, log, atau alamat socket internal. Izin JWT hanya `websocket.connect`; fasilitas ini tidak mengirim perintah konsol atau power melalui socket.
+
+Koneksi dibatasi empat secara bersamaan per proses, 15 request per menit pada rute, 32 KiB per frame, dan 5 detik keseluruhan. Redirect dan kompresi websocket tidak digunakan. Wings harus menerima origin panel yang tepat; skrip CI mengatur daftar izin tanpa wildcard.
+
+Berkas: `api/wings/socket.ts`, `api/wings/socket.test.ts`, integrasi di `api/wings/provision.ts`, `api/catalog/routes.ts`, `api/app.ts`, tes di `api/wings/live-contract.ts` dan `api/identity.integration.test.ts`, `scripts/wings-contract.sh`, serta lockfile untuk `ws`. Jalankan `npm run test:wings`. Ini belum menjadi stream konsol browser: belum ada replay log, panggilan command, refresh/revoke untuk koneksi berumur panjang, atau integrasi dashboard. Transfer dan adopsi node tetap belum selesai.
+
+**Hasil:** [GitHub Actions 45360974612](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45360974612) lulus ketiga job. Daemon asli menerima JWT dari backend dan mengembalikan snapshot statistik; koneksi dengan origin berbeda ditolak. Integrasi MySQL memverifikasi penolakan non-admin dan fixture yang belum terinstal. Lima tes Wings lokal lulus.
