@@ -51,6 +51,28 @@ export const reviewedHttpEggs = [
     docker_images: { "BusyBox HTTP": image },
     ...shared,
   }),
+  JSON.stringify({
+    meta: { version: "PTDL_v2" },
+    name: "Reviewed HTTP properties",
+    docker_images: { "BusyBox HTTP": image },
+    ...shared,
+    config: {
+      ...shared.config,
+      files: JSON.stringify({
+        "site/server.properties": {
+          parser: "properties",
+          find: { mode: "{{server.build.env.RELAY_SITE_MODE}}" },
+        },
+      }),
+    },
+    scripts: {
+      installation: {
+        ...shared.scripts.installation,
+        script:
+          "#!/bin/sh\nset -eu\ninstall -d /mnt/server/site\ncat > /mnt/server/site/index.html <<'EOF'\nRELAY_REVIEWED_EGG_PROPERTIES\nEOF\nprintf '%s\\n' mode=seed keep=true > /mnt/server/site/server.properties\n",
+      },
+    },
+  }),
 ] as const;
 
 export function reviewedWorkload(
@@ -68,7 +90,12 @@ export function reviewedWorkload(
   const egg = JSON.parse(decoded.source) as typeof shared;
   const value = mode ?? egg.variables[0].default_value;
   if (!fixtureModes.some((allowed) => allowed === value)) return undefined;
-  const file = JSON.parse(egg.config.files)["site/settings.json"];
+  const [path, file] = Object.entries(
+    JSON.parse(egg.config.files) as Record<
+      string,
+      { parser: string; find: { mode: string } }
+    >,
+  )[0];
   const replacement = file.find.mode.replace(
     "{{server.build.env.RELAY_SITE_MODE}}",
     value,
@@ -102,7 +129,7 @@ export function reviewedWorkload(
         stop: { type: "signal", value: egg.config.stop.slice(1) },
         configs: [
           {
-            file: "site/settings.json",
+            file: path,
             parser: file.parser,
             replace: [{ match: "mode", replace_with: replacement }],
           },

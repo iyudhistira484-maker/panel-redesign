@@ -30,7 +30,7 @@ test("approved v1/v2 HTTP egg bytes map to identical safe workload settings", ()
     );
     assert.equal(
       reviewedWorkload(
-        Buffer.from(text.replace("RELAY_REVIEWED_EGG_HTTP", "UNREVIEWED")),
+        Buffer.from(text.replace("RELAY_HTTP_START", "UNREVIEWED")),
         undefined,
         () => {},
       ),

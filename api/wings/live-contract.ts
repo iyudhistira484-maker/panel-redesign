@@ -349,7 +349,12 @@ async function main() {
               ["exec", serverId, "wget", "-qO-", `http://127.0.0.1:${port}/`],
               { timeout: 2000 },
             );
-            return stdout.trim() === "RELAY_REVIEWED_EGG_HTTP";
+            return (
+              stdout.trim() ===
+              (index === 2
+                ? "RELAY_REVIEWED_EGG_PROPERTIES"
+                : "RELAY_REVIEWED_EGG_HTTP")
+            );
           } catch {
             return false;
           }
@@ -382,10 +387,16 @@ async function main() {
           )
         ).stdout.trim();
       assert.equal(await fetchFixture("runtime.txt"), expected);
-      assert.deepEqual(JSON.parse(await fetchFixture("settings.json")), {
-        mode: expected,
-        keep: true,
-      });
+      if (index === 2) {
+        const raw = await fetchFixture("server.properties");
+        assert.match(raw, new RegExp(`^mode\\s*=\\s*${expected}$`, "m"));
+        assert.match(raw, /^keep\s*=\s*true$/m);
+      } else {
+        assert.deepEqual(JSON.parse(await fetchFixture("settings.json")), {
+          mode: expected,
+          keep: true,
+        });
+      }
       assert.equal(
         (
           await admin("POST", `servers/${serverId}/power`, {

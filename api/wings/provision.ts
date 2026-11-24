@@ -157,8 +157,7 @@ export function createProvisioner(
         !timingSafeEqual(decrypted, expected)
       )
         return { data: [], total: 0 };
-      const scoped =
-        "s.node_id=? AND p.phase IN ('installed','transferring') AND e.document IN (?,?,?)";
+      const scoped = `s.node_id=? AND p.phase IN ('installed','transferring') AND e.document IN (${approvedDocuments.map(() => "?").join(",")})`;
       const args = [registered.id, ...approvedDocuments];
       const total = (
         await rows<{ total: number }>(
