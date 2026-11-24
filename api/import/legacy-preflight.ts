@@ -16,7 +16,7 @@ const integer = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 const record = (value: unknown): value is Row =>
   !!value && typeof value === "object" && !Array.isArray(value);
-const columns: Record<Table, string[]> = {
+export const legacyColumns: Record<Table, string[]> = {
   servers: [
     "id",
     "uuid",
@@ -50,8 +50,8 @@ export function legacyPreflight(input: unknown) {
     for (const item of values) {
       if (
         !record(item) ||
-        Object.keys(item).length !== columns[table].length ||
-        !columns[table].every((key) => Object.hasOwn(item, key)) ||
+        Object.keys(item).length !== legacyColumns[table].length ||
+        !legacyColumns[table].every((key) => Object.hasOwn(item, key)) ||
         !integer(item.id) ||
         byId.has(item.id)
       )

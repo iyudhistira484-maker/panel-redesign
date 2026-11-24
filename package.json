@@ -16,7 +16,8 @@
     "provision": "tsx api/provision.ts",
     "wings:health": "tsx api/wings/health.ts",
     "test:wings": "tsx --test api/wings/*.test.ts",
-    "test:eggs": "tsx --test api/eggs/*.test.ts"
+    "test:eggs": "tsx --test api/eggs/*.test.ts",
+    "legacy:preflight": "tsx api/import/legacy-snapshot-cli.ts"
   },
   "repository": {
     "type": "git",

@@ -89,6 +89,8 @@ if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then
     export "RELAY_ADOPTION_${key}_UUID=$(cat /proc/sys/kernel/random/uuid)"
   done
   db_password=$(openssl rand -hex 24)
+  export RELAY_LEGACY_SNAPSHOT_URL="mysql://relay_snapshot:$db_password@127.0.0.1:13306/panel_snapshot_ci"
+  export RELAY_LEGACY_SNAPSHOT_CI_PASSWORD="$db_password"
   app_key="base64:$(openssl rand -base64 32)"
   printf '::add-mask::%s\n' "$db_password" "$app_key"
   docker run -d --name relay-adoption-db -p 127.0.0.1:13306:3306 \

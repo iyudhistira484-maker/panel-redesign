@@ -1,5 +1,5 @@
 import { applyLegacyFixture } from "../import/legacy-fixture-apply";
-import { legacyPreflight } from "../import/legacy-preflight";
+import { readLegacySnapshot } from "../import/legacy-snapshot";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -190,19 +190,15 @@ async function main() {
       : undefined;
     let manifest: unknown;
     if (actual) {
-      const { stdout } = await docker(
-        "docker",
-        [
-          "exec",
-          "relay-adoption-panel",
-          "php",
-          "/tmp/relay-fixture.php",
-          "manifest",
-        ],
-        { timeout: 5000, maxBuffer: 65536 },
+      // Copy the real Panel database after both installs settle. Keep the dump in the pipe.
+      await docker("bash", ["scripts/legacy-snapshot-ci.sh"], {
+        timeout: 30000,
+      });
+      const snapshot = await readLegacySnapshot(
+        process.env.RELAY_LEGACY_SNAPSHOT_URL ?? "",
       );
-      manifest = JSON.parse(stdout);
-      const report = legacyPreflight(manifest);
+      manifest = snapshot.manifest;
+      const { report } = snapshot;
       assert.deepEqual(report.counts, {
         servers: 2,
         users: 1,
