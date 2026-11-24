@@ -297,6 +297,14 @@ Ini membuktikan jalur baca snapshot nyata, bukan migrasi umum. Apply masih terba
 
 Snapshot CI memuat satu pemilik, satu kolaborator yang memiliki `activity.read` dan `control.start` hanya di server pertama, dan satu akun tanpa akses. Importer fixture menulis ketiga identitas non-admin dengan kredensial dinonaktifkan, serta satu grant, dalam transaksi yang sama dengan adopsi katalog. Tidak ada password, 2FA, atau token Panel yang dipindahkan. Dry-run tetap hanya membaca snapshot. Relay menolak replay jika identitas atau grant yang tersimpan telah berubah, alih-alih menimpanya.
 
-Pengujian memuat grant dari MySQL dan meneruskannya ke kebijakan Relay untuk mengecek izin yang diizinkan dan penolakan tindakan lain, server lain, atau pengguna lain. Ini belum membuktikan otorisasi melalui endpoint pengguna atau proses aktivasi akun. Keduanya tetap diperlukan sebelum menyebut migrasi akun dan subuser siap secara umum.
+Pengujian memuat grant dari MySQL dan meneruskannya ke kebijakan Relay untuk mengecek izin yang diizinkan dan penolakan tindakan lain, server lain, atau pengguna lain. Bagian berikut menunjukkan pengujian aktivasi dan satu endpoint pengguna; migrasi umum tetap di luar cakupan latihan.
 
 Bukti: [CI 45406521401](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45406521401), sembilan job lulus.
+
+### Aktivasi akun dan otorisasi lewat API pengguna
+
+Latihan adopsi juga menjalankan akun pemilik, kolaborator, dan pengguna tanpa akses lewat handler Fastify asli: login ditolak sebelum aktivasi, token reset dikirim ke transport in-memory CI, token hanya dapat dipakai sekali, lalu login berhasil dan menghasilkan cookie Secure/HttpOnly. Ini tidak menguji pengiriman SMTP produksi.
+
+`GET /api/v1/servers/:id/activity` mengharuskan sesi pengguna. Pemilik, admin aktif, atau subuser dengan grant `activity.read` dapat membaca aktivitas server tersebut. CI menguji 200 dengan isi yang tepat, 401 tanpa sesi, dan 404 untuk pengguna tanpa akses, server lain, dan grant yang baru dicabut meski sesi masih aktif. Pengecekan grant dan pengambilan aktivitas memakai satu kueri SQL. Izin `control.start` masih baru diuji di kebijakan, bukan endpoint power pengguna; ini bukan klaim paritas semua izin.
+
+Bukti: [CI 45409988349](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45409988349), sembilan job lulus.
