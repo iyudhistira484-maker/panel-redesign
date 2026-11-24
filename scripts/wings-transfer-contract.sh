@@ -24,11 +24,13 @@ printf '::add-mask::%s\n' "$RELAY_TRANSFER_SOURCE_TOKEN" "$RELAY_TRANSFER_TARGET
 mkdir "$work/engine" "$work/source-data" "$work/target-data" "$work/source-config" "$work/target-config"
 write_config() {
   local side=$1 token=$2 port=$3 sftp=$4 uuid=$5
+  local remote="http://127.0.0.1:13201/$side"
+  if [[ "$side" == target && "${RELAY_TRANSFER_SCENARIO:-reported}" == reported ]]; then remote=http://127.0.0.1:13202; fi
   cat > "$work/$side-config/config.yml" <<YAML
 uuid: $uuid
 token_id: relaytransfer$side
 token: $token
-remote: http://127.0.0.1:13201/$side
+remote: $remote
 api:
   host: 127.0.0.1
   port: $port

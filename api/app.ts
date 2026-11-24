@@ -1,3 +1,7 @@
+import {
+  createFixtureReceiver,
+  type FixtureReceiver,
+} from "./wings/transfer-receiver";
 import { createProvisioner } from "./wings/provision";
 import { registerCatalog, type FixtureTransfer } from "./catalog/routes";
 import { registerRemote } from "./wings/remote";
@@ -34,6 +38,7 @@ export type Options = {
   catalogNodeKey?: Buffer;
   allowedCatalogNodeOrigins?: readonly string[];
   fixtureTransfer?: FixtureTransfer;
+  fixtureReceiver?: FixtureReceiver;
 };
 type User = {
   id: string;
@@ -97,8 +102,9 @@ export async function createApp({
   catalogNodeKey,
   allowedCatalogNodeOrigins,
   fixtureTransfer,
+  fixtureReceiver,
 }: Options) {
-  if (fixtureTransfer && !enableDisposableProvisioning)
+  if ((fixtureTransfer || fixtureReceiver) && !enableDisposableProvisioning)
     throw new Error(
       "Fixture transfer requires explicit disposable provisioning",
     );
@@ -116,6 +122,17 @@ export async function createApp({
   const provisioner =
     enableDisposableProvisioning && wingsTestNode && catalogNodeKey
       ? createProvisioner(pool, wingsTestNode, catalogNodeKey, pepper, origin)
+      : undefined;
+  const receiver =
+    fixtureReceiver && provisioner && wingsTestNode && catalogNodeKey
+      ? createFixtureReceiver(
+          pool,
+          wingsTestNode,
+          catalogNodeKey,
+          pepper,
+          fixtureReceiver,
+          provisioner.provider,
+        )
       : undefined;
   const crypt = cryptoContext(key, pepper);
   const dummyHash = await passwordHash(token());
@@ -145,7 +162,10 @@ export async function createApp({
         wingsTestNode &&
         (req.routeOptions.url === "/api/remote/servers/reset" ||
           (provisioner &&
-            req.routeOptions.url === "/api/remote/servers/:uuid/install")) &&
+            req.routeOptions.url === "/api/remote/servers/:uuid/install") ||
+          (receiver &&
+            req.routeOptions.url ===
+              "/api/remote/servers/:uuid/transfer/:result")) &&
         req.method === "POST"
       ) &&
       !["GET", "HEAD", "OPTIONS"].includes(req.method) &&
@@ -802,7 +822,8 @@ export async function createApp({
           instance,
           wingsTestNode,
           undefined,
-          provisioner?.provider,
+          receiver?.provider ?? provisioner?.provider,
+          receiver?.onTransfer,
         ),
       { prefix: "/api/remote" },
     );

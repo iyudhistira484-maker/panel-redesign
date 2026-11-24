@@ -1,7 +1,8 @@
 import { createApp } from "../app";
 import type { FixtureTransfer } from "../catalog/routes";
 import type { Pool } from "mysql2/promise";
-import { passwordHash } from "../security";
+import { disposableEgg } from "./provision";
+import { cryptoContext, passwordHash } from "../security";
 import { fixtureTransferService } from "./transfer-service";
 import { createServer, request, type ClientRequest } from "node:http";
 import { execFile } from "node:child_process";
@@ -328,6 +329,27 @@ async function main() {
     dispatch: transfer.dispatch,
     finalize: transfer.finalize,
   };
+  const receiverKey = randomBytes(32),
+    receiverPepper = randomBytes(32);
+  const receiver =
+    !interrupted && !dropReport
+      ? await createApp({
+          pool,
+          origin: panelOrigin,
+          key: randomBytes(32),
+          pepper: receiverPepper,
+          catalogNodeKey: receiverKey,
+          enableDisposableProvisioning: true,
+          wingsTestNode: target,
+          allowedCatalogNodeOrigins: [target.origin],
+          fixtureReceiver: {
+            server: fixture.uuid,
+            target: targetId,
+            allocation: targetAllocation,
+          },
+          deliverReset: async () => {},
+        })
+      : undefined;
   const adminApp = await panel(pool, source, fixtureTransfer);
   try {
     await migrate(pool, "up");
@@ -339,8 +361,8 @@ async function main() {
       nest,
     ]);
     await pool.execute(
-      "INSERT INTO eggs (id,nest_id,name,version,document) VALUES (?,?,'Fixture','PTDL_v2','{}')",
-      [egg, nest],
+      "INSERT INTO eggs (id,nest_id,name,version,document) VALUES (?,?,'Fixture','PTDL_v2',?)",
+      [egg, nest, Buffer.from(disposableEgg)],
     );
     for (const [id, n, a, port] of [
       [sourceId, source, sourceAllocation, 25610],
@@ -353,7 +375,10 @@ async function main() {
           n.tokenId,
           n.origin,
           n.tokenId,
-          Buffer.from("unused fixture placeholder"),
+          cryptoContext(receiverKey, receiverPepper, "node-token").seal(
+            Buffer.from(n.token),
+            id,
+          ),
         ],
       );
       await pool.execute(
@@ -366,6 +391,7 @@ async function main() {
       [fixture.uuid, sourceId, owner, egg, sourceAllocation],
     );
     await app.listen({ port: 13201, host: "127.0.0.1" });
+    if (receiver) await receiver.listen({ port: 13202, host: "127.0.0.1" });
     const from = new WingsClient(source),
       to = new WingsClient(target);
     for (const client of [from, to])
@@ -383,12 +409,27 @@ async function main() {
     assert.equal(await from.state(fixture.uuid), "offline");
     const original = await from.readFixtureFile(fixture.uuid, "relay-start.sh");
     assert.ok(original.includes("RELAY_CONTRACT_READY"));
-    const forged = await app.inject({
+    const callbackPath = `/api/remote/servers/${fixture.uuid}/transfer/success`;
+    const forged = await (receiver ?? app).inject({
       method: "POST",
-      url: `/target/api/remote/servers/${fixture.uuid}/transfer/success`,
+      url: receiver ? callbackPath : `/target${callbackPath}`,
       headers: { authorization: `Bearer ${source.tokenId}.${source.token}` },
     });
     assert.equal(forged.statusCode, 401);
+    const destinationAuth = {
+      authorization: `Bearer ${target.tokenId}.${target.token}`,
+    };
+    if (receiver)
+      assert.equal(
+        (
+          await receiver.inject({
+            method: "POST",
+            url: callbackPath,
+            headers: destinationAuth,
+          })
+        ).statusCode,
+        404,
+      );
     await pool.execute(
       "INSERT INTO wings_provisions (server_id,phase) VALUES (?,'installed')",
       [fixture.uuid],
@@ -491,6 +532,21 @@ async function main() {
       } else {
         assert.equal(completion, undefined);
       }
+    } else if (receiver) {
+      await eventually("application destination callback", async () =>
+        Boolean(await ledger.reported(transferId ?? "")),
+      );
+      assert.equal(
+        (
+          await receiver.inject({
+            method: "POST",
+            url: callbackPath,
+            headers: destinationAuth,
+          })
+        ).statusCode,
+        404,
+      );
+      completion = true;
     } else {
       await eventually(
         "destination callback",
@@ -610,6 +666,7 @@ async function main() {
       return;
     }
     assert.equal(completion, true);
+    await receiver?.close();
     await adminApp.close();
     await app.close();
     await promisify(execFile)(
@@ -632,6 +689,7 @@ async function main() {
       "Wings-to-Wings transfer verified on independent Docker engines; archive matched and source preserved before cleanup",
     );
   } finally {
+    await receiver?.close();
     await adminApp.close();
     await app.close();
     upstream?.destroy();
