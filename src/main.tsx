@@ -1,3 +1,4 @@
+import { AuthFlow } from "./auth-flow";
 import { useEffect, useId, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -416,7 +417,7 @@ function App() {
         </div>
         <div className="auth-art decorated">
           <DotGrid />
-          <Geometry seed={2} sequence />
+          <AuthFlow t={t} />
         </div>
       </section>
     ) : page === "errorView" ? (

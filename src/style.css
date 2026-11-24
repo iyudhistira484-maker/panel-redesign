@@ -94,7 +94,7 @@ small,
   color: var(--muted);
 }
 .mono {
-  font-family: var(--mono);
+  font-family: "Geist Mono", monospace;
   font-variant-numeric: tabular-nums;
 }
 .sr-only,
@@ -1015,51 +1015,75 @@ dialog h2 {
   font: 12px var(--mono);
 }
 
-/* One entrance sequence on the sign-in schematic, not a live status signal. */
-.auth-sequence {
-  display: none;
+/* Decorative infrastructure workflow; no live state or interaction. */
+.auth-flow {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  align-content: center;
+  padding: clamp(16px, 3vw, 48px);
+  pointer-events: none;
+}
+.auth-flow-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  padding: 0 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.auth-flow-heading span:last-child {
+  font-family: "Geist Mono", monospace;
+}
+.auth-flow svg {
+  display: block;
+  width: 100%;
+  color: var(--muted);
+}
+.auth-flow text {
+  fill: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+.auth-link {
+  stroke: var(--muted);
+  opacity: 0.36;
+}
+.auth-step {
+  fill: #12151a;
+  stroke: var(--border);
+}
+.auth-junction {
+  fill: var(--muted);
+}
+.auth-signal {
+  visibility: hidden;
 }
 @media (prefers-reduced-motion: no-preference) {
-  .auth-sequence {
-    display: inline;
-    color: var(--muted);
-  }
-  .auth-sequence path {
+  .auth-signal {
+    visibility: visible;
+    stroke: var(--text);
     stroke-dasharray: 1;
-    animation: auth-trace 180ms ease-out both;
+    animation: auth-flow-pass 180ms ease-out both;
   }
-  .auth-sequence path:nth-child(2) {
+  .auth-signal:nth-of-type(5) {
     animation-delay: 180ms;
   }
-  .auth-sequence path:nth-child(3) {
+  .auth-signal:nth-of-type(6) {
     animation-delay: 360ms;
   }
-  .auth-sequence rect {
-    animation: auth-checkpoint 180ms ease-out 140ms both;
-  }
-  .auth-sequence rect:last-child {
-    animation-delay: 320ms;
-  }
 }
-@keyframes auth-trace {
+@keyframes auth-flow-pass {
   0% {
     stroke-dashoffset: 1;
     opacity: 0;
   }
   55% {
-    opacity: 0.7;
+    opacity: 0.75;
   }
   100% {
     stroke-dashoffset: 0;
     opacity: 0;
-  }
-}
-@keyframes auth-checkpoint {
-  0%,
-  100% {
-    opacity: 0;
-  }
-  50% {
-    opacity: 0.85;
   }
 }
