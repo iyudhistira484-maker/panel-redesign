@@ -109,6 +109,7 @@ export function legacyPreflight(input: unknown) {
       });
   }
   const servers = [];
+  const primaryAllocations: { serverId: string; ip: string }[] = [];
   for (const server of map.get("servers")?.values() ?? []) {
     const owner = get("users", server.owner_id),
       node = get("nodes", server.node_id),
@@ -130,6 +131,10 @@ export function legacyPreflight(input: unknown) {
       !server.installed_at
     )
       throw new Error("Legacy server is not installed and normal");
+    primaryAllocations.push({
+      serverId: String(server.uuid),
+      ip: String(allocation.ip),
+    });
     servers.push({
       uuid: server.uuid,
       ownerId: owner.uuid,
@@ -174,6 +179,7 @@ export function legacyPreflight(input: unknown) {
       tables.map((table) => [table, map.get(table)?.size ?? 0]),
     ),
     servers,
+    primaryAllocations,
     secondaryAllocations,
     grants,
   };

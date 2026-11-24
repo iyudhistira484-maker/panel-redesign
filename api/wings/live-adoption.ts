@@ -339,6 +339,23 @@ async function main() {
       await assert.rejects(
         applyLegacyFixture(pool, manifest, {
           ...credentials,
+          secondaryAllocations: new Map([
+            [secondaryAllocations[0].legacyId, allocation],
+          ]),
+        }),
+        { code: "ER_DUP_ENTRY" },
+      );
+      assert.deepEqual(
+        await rows(pool, "SELECT COUNT(*) AS total FROM servers"),
+        [{ total: 0 }],
+      );
+      assert.deepEqual(
+        await rows(pool, "SELECT COUNT(*) AS total FROM allocations"),
+        [{ total: 0 }],
+      );
+      await assert.rejects(
+        applyLegacyFixture(pool, manifest, {
+          ...credentials,
           allocations: new Map([
             [uuid, allocation],
             [second, allocation],
@@ -535,6 +552,16 @@ async function main() {
           headers: auth(own),
         });
         assert.equal(list.statusCode, 200);
+        const settings = list.json().data[0].settings.allocations;
+        assert.deepEqual(settings.default, {
+          ip: "127.0.0.1",
+          port: own === node ? 25610 : 25611,
+        });
+        assert.deepEqual(
+          settings.mappings["127.0.0.2"],
+          own === node ? [25616] : undefined,
+        );
+
         assert.deepEqual(
           list.json().data.map((item: { uuid: string }) => item.uuid),
           [server],

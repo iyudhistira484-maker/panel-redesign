@@ -33,6 +33,8 @@ export async function applyLegacyFixture(
     throw new Error("Disposable staging fixture only");
   const report = legacyPreflight(manifest);
   const { key, pepper, allocations } = credentials;
+  if (report.primaryAllocations.some((row) => row.ip !== "127.0.0.1"))
+    throw new Error("Unsupported staging primary IP");
 
   const batch = report.servers
     .map(({ uuid, ownerId, nodeId, eggId, nestId, port }) => {
