@@ -1033,14 +1033,6 @@ dialog h2 {
   color: var(--muted);
   font-size: 12px;
 }
-.auth-flow-tools {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.auth-flow-tools > span {
-  font-family: "Geist Mono", monospace;
-}
 .auth-flow > svg {
   display: block;
   width: 100%;
@@ -1071,44 +1063,32 @@ dialog h2 {
   display: none;
 }
 @media (prefers-reduced-motion: no-preference) {
-  .auth-flow-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 8px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--surface);
-    color: var(--text);
-    pointer-events: auto;
-    cursor: pointer;
-  }
-  .auth-flow[data-paused="false"] .auth-signal {
+  .auth-flow .auth-signal {
     display: inline;
     stroke: var(--text);
     stroke-linecap: round;
     stroke-dasharray: 0.18 1;
     animation: auth-flow-pass 4.4s linear infinite both;
   }
-  .auth-flow[data-paused="false"] .auth-signal:nth-of-type(4) {
+  .auth-flow .auth-signal:nth-of-type(4) {
     animation-delay: 240ms;
   }
-  .auth-flow[data-paused="false"] .auth-signal:nth-of-type(5) {
+  .auth-flow .auth-signal:nth-of-type(5) {
     animation-delay: 680ms;
   }
-  .auth-flow[data-paused="false"] .auth-signal:nth-of-type(6) {
+  .auth-flow .auth-signal:nth-of-type(6) {
     animation-delay: 1120ms;
   }
-  .auth-flow[data-paused="false"] .auth-icon-tile {
+  .auth-flow .auth-icon-tile {
     animation: auth-node-active 4.4s ease-in-out infinite both;
   }
-  .auth-flow[data-paused="false"] .auth-stage[data-stage="1"] .auth-icon-tile {
+  .auth-flow .auth-stage[data-stage="1"] .auth-icon-tile {
     animation-delay: 440ms;
   }
-  .auth-flow[data-paused="false"] .auth-stage[data-stage="2"] .auth-icon-tile {
+  .auth-flow .auth-stage[data-stage="2"] .auth-icon-tile {
     animation-delay: 880ms;
   }
-  .auth-flow[data-paused="false"] .auth-stage[data-stage="3"] .auth-icon-tile {
+  .auth-flow .auth-stage[data-stage="3"] .auth-icon-tile {
     animation-delay: 1320ms;
   }
 }

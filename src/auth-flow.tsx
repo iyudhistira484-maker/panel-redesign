@@ -3,11 +3,8 @@ import {
   ClipboardList,
   CornerDownRight,
   Server,
-  Pause,
-  Play,
   ShieldCheck,
 } from "lucide-react";
-import { useState } from "react";
 import type { Key } from "./i18n";
 
 const paths = [
@@ -24,24 +21,9 @@ const steps = [
 ] as const;
 
 export function AuthFlow({ t }: { t: (key: Key) => string }) {
-  const [paused, setPaused] = useState(false);
-  const MotionIcon = paused ? Play : Pause;
   return (
-    <div className="auth-flow" data-paused={paused}>
-      <div className="auth-flow-heading">
-        <span>{t("flowTitle")}</span>
-        <div className="auth-flow-tools">
-          <span>{t("flowDemo")}</span>
-          <button
-            type="button"
-            className="auth-flow-toggle"
-            onClick={() => setPaused(!paused)}
-          >
-            <MotionIcon size={14} aria-hidden="true" />
-            {t(paused ? "flowPlay" : "flowPause")}
-          </button>
-        </div>
-      </div>
+    <div className="auth-flow">
+      <div className="auth-flow-heading">{t("flowTitle")}</div>
       <svg aria-hidden="true" viewBox="0 46 650 196" fill="none">
         {paths.map((d) => (
           <path className="auth-link" d={d} key={d} />
