@@ -25,7 +25,7 @@ mkdir "$work/engine" "$work/source-data" "$work/target-data" "$work/source-confi
 write_config() {
   local side=$1 token=$2 port=$3 sftp=$4 uuid=$5
   local remote="http://127.0.0.1:13201/$side"
-  if [[ "$side" == target && "${RELAY_TRANSFER_SCENARIO:-reported}" == reported ]]; then remote=http://127.0.0.1:13202; fi
+  if [[ "$side" == target && "${RELAY_TRANSFER_SCENARIO:-reported}" == *reported ]]; then remote=http://127.0.0.1:13202; fi
   cat > "$work/$side-config/config.yml" <<YAML
 uuid: $uuid
 token_id: relaytransfer$side
@@ -82,6 +82,11 @@ RUN apk add --no-cache busybox-extras
 ENTRYPOINT ["/bin/sh", "-c", "exec /bin/sh -c \"$STARTUP\""]
 DOCKERFILE
 docker save relay-wings-contract-http:ci | sudo -n docker -H "$inner" load >/dev/null
+if [[ "${RELAY_TRANSFER_SCENARIO:-}" == mumble-* ]]; then
+  image=ghcr.io/parkervcp/yolks:voice_mumble
+  docker pull "$image" >/dev/null
+  docker save "$image" | sudo -n docker -H "$inner" load >/dev/null
+fi
 RELAY_TRANSFER_CHECK_DESTINATION_RUNTIME=1 RELAY_TRANSFER_FIXTURE_ROOT="$work/target-data" ./node_modules/.bin/tsx api/wings/live-transfer.ts &
 pid=$!
 run_wings() {

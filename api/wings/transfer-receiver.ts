@@ -37,11 +37,12 @@ export function createFixtureReceiver(
       cipher: Buffer;
       document: Buffer;
       mode: FixtureMode | null;
+      maxUsers: string | null;
     }>(
       pool,
-      `SELECT e.document,s.fixture_mode AS mode,s.name,s.egg_id AS eggId,a.port,n.token_cipher AS cipher FROM servers s
+      `SELECT e.document,s.mumble_max_users AS maxUsers,s.fixture_mode AS mode,s.name,s.egg_id AS eggId,a.port,n.token_cipher AS cipher FROM servers s
     JOIN eggs e ON e.id=s.egg_id JOIN allocations a ON a.id=? AND a.node_id=? JOIN nodes n ON n.id=a.node_id
-    WHERE s.id=? AND s.node_id=? AND e.document IN (?,?) AND a.ip='127.0.0.1' AND n.origin=? AND n.token_id=?`,
+    WHERE s.id=? AND s.node_id=? AND e.document IN (?,?,?) AND a.ip='127.0.0.1' AND n.origin=? AND n.token_id=?`,
       [
         fixture.allocation,
         fixture.target,
@@ -73,6 +74,7 @@ export function createFixtureReceiver(
               eggId: pending.eggId,
             },
             pending.mode,
+            pending.maxUsers,
           );
         return base.lookup(id);
       },

@@ -96,7 +96,7 @@ export async function loadStagingTransfer(
     throw new Error("Fixture node credential mismatch");
   const [fixture] = await rows(
     pool,
-    "SELECT s.id FROM servers s JOIN allocations a ON a.id=? AND a.node_id=? JOIN eggs e ON e.id=s.egg_id WHERE s.id=? AND s.node_id IN (?,?) AND a.ip='127.0.0.1' AND e.document IN (?,?)",
+    "SELECT s.id FROM servers s JOIN allocations a ON a.id=? AND a.node_id=? JOIN eggs e ON e.id=s.egg_id WHERE s.id=? AND s.node_id IN (?,?) AND a.ip='127.0.0.1' AND e.document IN (?,?,?)",
     [
       settings.allocation,
       settings.target,

@@ -1,3 +1,4 @@
+import { mumbleEgg } from "../eggs/upstream-workload";
 import { createApp } from "../app";
 import type { FixtureTransfer } from "../catalog/routes";
 import type { Pool } from "mysql2/promise";
@@ -56,8 +57,12 @@ async function login(app: Awaited<ReturnType<typeof panel>>, password: string) {
   assert.ok(cookie?.secure && cookie.httpOnly);
   return { ...browserHeaders, cookie: `${cookie.name}=${cookie.value}` };
 }
-async function eventually(label: string, fn: () => boolean | Promise<boolean>) {
-  for (let i = 0; i < 45; i++) {
+async function eventually(
+  label: string,
+  fn: () => boolean | Promise<boolean>,
+  attempts = 45,
+) {
+  for (let i = 0; i < attempts; i++) {
     if (await fn()) return;
     await new Promise((resolve) => setTimeout(resolve, 750));
   }
@@ -93,7 +98,10 @@ async function main() {
   const interrupted = ["sender-killed", "partial-target"].includes(
     process.env.RELAY_TRANSFER_SCENARIO ?? "",
   );
-  const dropReport = process.env.RELAY_TRANSFER_SCENARIO === "missing-report";
+  const mumble = process.env.RELAY_TRANSFER_SCENARIO?.startsWith("mumble-");
+  const dropReport = ["missing-report", "mumble-missing-report"].includes(
+    process.env.RELAY_TRANSFER_SCENARIO ?? "",
+  );
   const partial = process.env.RELAY_TRANSFER_SCENARIO === "partial-target";
   let targetFetched = false;
   let upstream: ClientRequest | undefined;
@@ -140,7 +148,7 @@ async function main() {
     egg,
   ] = Array.from({ length: 7 }, () => randomUUID());
   let transferId: string | undefined;
-  const document = Buffer.from(reviewedHttpEggs[1]);
+  const document = Buffer.from(mumble ? mumbleEgg : reviewedHttpEggs[1]);
   const profile = transferProfile(document);
   assert.ok(profile);
   const selected = profile.workload(
@@ -149,6 +157,7 @@ async function main() {
     },
     { uuid: randomUUID(), name: "HTTP transfer", eggId: egg, port: 25610 },
     "beta",
+    mumble ? "37" : null,
   );
   assert.ok(selected);
   const fixture = selected;
@@ -156,6 +165,7 @@ async function main() {
     () => {},
     { uuid: fixture.uuid, name: "HTTP transfer", eggId: egg, port: 25611 },
     "beta",
+    mumble ? "37" : null,
   );
   assert.ok(destination);
   const app = Fastify({
@@ -384,8 +394,16 @@ async function main() {
       );
     }
     await pool.execute(
-      "INSERT INTO servers (id,name,node_id,owner_id,egg_id,allocation_id,fixture_mode) VALUES (?,'Fixture',?,?,?,?,'beta')",
-      [fixture.uuid, sourceId, owner, egg, sourceAllocation],
+      "INSERT INTO servers (id,name,node_id,owner_id,egg_id,allocation_id,fixture_mode,mumble_max_users) VALUES (?,'Fixture',?,?,?,?,?,?)",
+      [
+        fixture.uuid,
+        sourceId,
+        owner,
+        egg,
+        sourceAllocation,
+        mumble ? null : "beta",
+        mumble ? "37" : null,
+      ],
     );
     await app.listen({ port: 13201, host: "127.0.0.1" });
     if (standalone)
@@ -403,7 +421,11 @@ async function main() {
         }
       });
     await from.create(fixture.uuid);
-    await eventually("source installation", () => installed !== undefined);
+    await eventually(
+      "source installation",
+      () => installed !== undefined,
+      mumble ? 160 : 45,
+    );
     assert.equal(installed, true);
     assert.equal(await from.state(fixture.uuid), "offline");
     const original = await from.readFixtureFile(fixture.uuid, profile.path);

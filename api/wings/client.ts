@@ -144,15 +144,19 @@ export class WingsClient {
   }
   async readFixtureFile(
     id: string,
-    name: "relay-start.sh" | "site/index.html",
+    name: "relay-start.sh" | "site/index.html" | "murmur.ini",
   ) {
-    if (name !== "relay-start.sh" && name !== "site/index.html")
+    if (
+      name !== "relay-start.sh" &&
+      name !== "site/index.html" &&
+      name !== "murmur.ini"
+    )
       throw new Error("Unsupported fixture file");
     const result = await this.#send(
       `${this.#server(id)}/files/contents?file=${encodeURIComponent(name)}`,
       200,
     );
-    const data = await this.#read(result, 8192);
+    const data = await this.#read(result, name === "murmur.ini" ? 65536 : 8192);
     return data.toString("utf8");
   }
   async reinstall(id: string) {

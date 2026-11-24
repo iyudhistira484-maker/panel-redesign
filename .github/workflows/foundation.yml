@@ -103,7 +103,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [reported, missing-report, sender-killed, partial-target]
+        scenario: [reported, missing-report, sender-killed, partial-target, mumble-reported, mumble-missing-report]
     services:
       mysql:
         image: mysql:8.4.8
