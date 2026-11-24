@@ -747,12 +747,17 @@ async function main() {
     if (process.env.RELAY_TRANSFER_CHECK_DESTINATION_RUNTIME === "1") {
       await to.power(fixture.uuid, "start");
       await eventually(
-        "transferred HTTP workload running",
+        "transferred workload running",
         async () => (await to.state(fixture.uuid)) === "running",
       );
+      if (mumble) {
+        const ini = await to.readFixtureFile(fixture.uuid, "murmur.ini");
+        assert.match(ini, /^users\s*=\s*37$/m);
+        assert.match(ini, /^port\s*=\s*25611$/m);
+      }
       await to.power(fixture.uuid, "stop");
       await eventually(
-        "transferred HTTP workload offline",
+        "transferred workload offline",
         async () => (await to.state(fixture.uuid)) === "offline",
       );
     }
