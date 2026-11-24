@@ -15,6 +15,14 @@ import { canManageCatalog, type Actor } from "../policy";
 import { cryptoContext } from "../security";
 import { validateNode, WingsClient, WingsUnavailable } from "../wings/client";
 
+export type FixtureTransfer = {
+  server: string;
+  source: string;
+  target: string;
+  allocation: string;
+  dispatch: (id: string) => Promise<boolean>;
+};
+
 type Options = {
   pool: Pool;
   authenticate: (req: FastifyRequest) => Promise<Actor | null>;
@@ -22,13 +30,7 @@ type Options = {
   provisioner?: ReturnType<typeof createProvisioner>;
   allowedNodeOrigins?: readonly string[];
   pepper: Buffer;
-  fixtureTransfer?: {
-    server: string;
-    source: string;
-    target: string;
-    allocation: string;
-    dispatch: (id: string) => Promise<boolean>;
-  };
+  fixtureTransfer?: FixtureTransfer;
 };
 const id = {
   type: "string",

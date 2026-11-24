@@ -1,5 +1,5 @@
 import { createProvisioner } from "./wings/provision";
-import { registerCatalog } from "./catalog/routes";
+import { registerCatalog, type FixtureTransfer } from "./catalog/routes";
 import { registerRemote } from "./wings/remote";
 import type { WingsNode } from "./wings/client";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -33,6 +33,7 @@ export type Options = {
   enableDisposableProvisioning?: boolean;
   catalogNodeKey?: Buffer;
   allowedCatalogNodeOrigins?: readonly string[];
+  fixtureTransfer?: FixtureTransfer;
 };
 type User = {
   id: string;
@@ -95,7 +96,12 @@ export async function createApp({
   enableDisposableProvisioning,
   catalogNodeKey,
   allowedCatalogNodeOrigins,
+  fixtureTransfer,
 }: Options) {
+  if (fixtureTransfer && !enableDisposableProvisioning)
+    throw new Error(
+      "Fixture transfer requires explicit disposable provisioning",
+    );
   if (new URL(origin).origin !== origin || !origin.startsWith("https://"))
     throw new Error("Set an exact HTTPS panel origin");
   if (
@@ -810,6 +816,7 @@ export async function createApp({
         provisioner,
         nodeKey: catalogNodeKey,
         allowedNodeOrigins: allowedCatalogNodeOrigins,
+        fixtureTransfer,
         authenticate: (req) =>
           actor(req.cookies[sessionCookie], req.headers.authorization),
       }),

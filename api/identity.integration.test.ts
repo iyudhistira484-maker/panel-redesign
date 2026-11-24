@@ -58,12 +58,24 @@ test(
     const addr = daemon.address();
     assert.ok(addr && typeof addr !== "string");
     const daemonOrigin = `http://127.0.0.1:${addr.port}`;
+    let dispatchAttempts = 0;
+    const fixtureTransfer = {
+      server: "",
+      source: "",
+      target: "",
+      allocation: "",
+      dispatch: async () => {
+        dispatchAttempts++;
+        return false;
+      },
+    };
     const app = await createApp({
       pool,
       origin,
       key: randomBytes(32),
       catalogNodeKey: randomBytes(32),
       enableDisposableProvisioning: true,
+      fixtureTransfer,
       wingsTestNode: { origin: daemonOrigin, tokenId: "fixture-test", token },
       allowedCatalogNodeOrigins: [daemonOrigin, "http://127.0.0.1:18081"],
       pepper: randomBytes(32),
@@ -489,6 +501,54 @@ test(
       await pool.execute(
         "INSERT INTO wings_provisions (server_id,phase) VALUES (?,'installed')",
         [serverId],
+      );
+      Object.assign(fixtureTransfer, {
+        server: serverId,
+        source: nodeId,
+        target: anotherNode,
+        allocation: targetAllocation,
+      });
+      const startTransfer = `servers/${serverId}/transfer`;
+      const payload = {
+        confirm: true,
+        nodeId: anotherNode,
+        allocationId: targetAllocation,
+      };
+      const url = `/api/v1/admin/${startTransfer}`;
+      ok(await postAdmin(startTransfer, payload, ""), 401);
+      ok(await postAdmin(startTransfer, payload, b), 403);
+      ok(
+        await app.inject({
+          method: "POST",
+          url,
+          headers: { origin, cookie: operator },
+          payload,
+        }),
+        403,
+      );
+      ok(
+        await app.inject({
+          method: "POST",
+          url,
+          headers: {
+            origin: "https://other.example.test",
+            cookie: operator,
+            "x-relay-request": "1",
+          },
+          payload,
+        }),
+        403,
+      );
+      assert.equal(dispatchAttempts, 0);
+      ok(await postAdmin(startTransfer, payload), 409);
+      assert.equal(dispatchAttempts, 1);
+      assert.deepEqual(
+        await rows(
+          pool,
+          "SELECT phase FROM wings_transfers WHERE server_id=?",
+          [serverId],
+        ),
+        [{ phase: "cancelled" }],
       );
       const ledger = transferLedger(pool);
       assert.equal(
