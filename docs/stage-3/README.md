@@ -291,7 +291,7 @@ Relay tetap mengejar [target pengganti Pterodactyl Panel dan gate penutupan Taha
 
 Untuk dry-run pada salinan uji yang sudah direstore, set `RELAY_ENV=staging` dan `RELAY_LEGACY_SNAPSHOT_URL` ke database loopback `panel_snapshot_*` memakai akun khusus dengan grants seperti di `scripts/legacy-snapshot-ci.sh`, lalu jalankan `npm run legacy:preflight`. CLI hanya menampilkan jumlah baris; tidak menyalin email, hash password, token, atau kunci. Pembacaan dibatasi 10.000 baris per tabel. Restore SQL bukan bagian dari CLI. Jangan restore dump tak tepercaya atau gunakan database produksi.
 
-Ini membuktikan jalur baca snapshot nyata, bukan migrasi umum. Apply masih terbatas pada fixture dua server; lihat latihan akun dan subuser di bawah untuk cakupan terbaru. Gate egg dan transfer workload umum juga tetap terbuka.
+Ini membuktikan jalur baca snapshot nyata, bukan migrasi umum. Batas jumlah dua server sudah dilepas pada rehearsal katalog terbatas; lihat bagian terakhir untuk cakupan terbaru. Gate egg dan transfer workload umum juga tetap terbuka.
 
 ### Latihan impor akun dan subuser
 
@@ -326,3 +326,9 @@ Bukti: [CI 45409988349](https://github.com/iyudhistira484-maker/panel-redesign/a
 [CI 45419070957](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45419070957): sembilan job lulus. `wings-bootstrap (lifecycle)` mengimpor dan mengekspor egg Mumble Panel v1.15.2 dengan byte persis, memakai installer dan image yang dideklarasikan dokumen, memetakan INI dan `MAX_USERS` bawaan, menunggu marker `Server listening on` dan state `running`, lalu stop dan delete. Dokumen tidak ditulis ulang; SHA-256 menjaganya dari perubahan. Override fixture HTTP ditolak untuk Mumble sebelum provision; input variabel Mumble kustom belum didukung. Provenance ada di `THIRD_PARTY_NOTICES.md`. Belum ada egg upstream kedua atau transfer Mumble; test transfer masih menggunakan shell fixture. Image upstream masih berupa tag, bukan digest pin.
 
 [CI 45421049327](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45421049327) menutup batas variabel Mumble di atas: admin staging dapat menetapkan `mumbleMaxUsers` saat membuat draft Mumble. CI menolak `100000`, `+25`, `25` dengan newline, dan `1e2` sebelum draft, lalu mengonfirmasi nilai valid `37` mencapai `users=37` di INI pada container Wings yang berjalan. Dua percobaan sebelumnya gagal pada pengambilan image dan waktu tunggu installer; run terbaru lulus seluruh job. Egg upstream kedua dan transfer workload upstream tetap belum dibuktikan.
+
+### Impor batch katalog lebih dari dua server
+
+[CI 45423134851](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45423134851) lulus semua sembilan job. Apply staging tidak lagi bergantung pada jumlah dua server, port tetap, satu pemilik, atau satu grant. Job `legacy-panel` memperluas salinan manifest dengan baris sintetis ketiga: dua pemilik, dua grant, serta server berbagi node dan egg. CI memverifikasi commit dan replay tanpa duplikasi, membersihkan batch sintetis, lalu tetap menjalankan konflik atomik, adopsi dua workload asli, aktivasi akun, uji izin, verifikasi file, dan rollback.
+
+Batas saat ini: maksimal 100 server dalam batch khusus CI, Wings loopback, identitas non-admin dengan alamat `example.test` yang dipetakan eksplisit, dan dokumen shell yang direview. Alokasi tambahan, konfigurasi egg katalog umum, serta identitas produksi belum tercakup. Baris ketiga bukan server Wings yang dijalankan. Egg upstream kedua dan transfer workload non-shell belum memenuhi gate penutupan.
