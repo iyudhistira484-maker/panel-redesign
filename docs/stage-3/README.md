@@ -234,3 +234,9 @@ Ini apply khusus fixture, bukan importer dump umum: token uji disediakan terpisa
 Manifest kini mencakup `subusers` dan hanya mengeluarkan ID relasi serta daftar izin. Preflight memetakan setiap grant ke UUID user/server yang tepat, menolak referensi yatim, grant kepada pemilik, pasangan duplikat, dan izin di luar daftar terpusat. Tes lokal memakai grant berisi data sintetis dan memastikan wildcard ditolak. Skenario Panel nyata memeriksa ekspor saat tabel subuser kosong. Apply fixture menolak manifest berisi grant, sehingga belum ada perubahan izin atau implementasi pengelolaan subuser Tahap 6.
 
 [CI 45384418879](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45384418879) lulus sembilan job. Gunakan `npm run test:identity` untuk mengulang tes preflight secara lokal.
+
+### Impor dan adopsi dua server sekaligus
+
+Skenario `legacy-panel` kini membaca dua server yang berbeda dari Panel v1.15.2 asli. Keduanya berbagi satu node Wings, owner, dan nest, tetapi punya UUID server, egg, dan alokasi berbeda. Importer fixture menerapkan keduanya dalam satu transaksi. Konflik alokasi pada baris kedua membatalkan seluruh transaksi, termasuk server pertama yang sudah ditulis. Replay identik tidak menambah baris; replay dengan pemetaan alokasi berubah ditolak. Setelah apply, cutover dan rollback mempertahankan kedua UUID, ID Docker, `StartedAt`, checksum file, dan status instalasi sumber. Skenario ini tidak menguji impor lintas node atau dump umum.
+
+[CI 45389518962](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45389518962) lulus sembilan job. Ulangi lewat `wings-bootstrap (legacy-panel)` pada runner disposable.
