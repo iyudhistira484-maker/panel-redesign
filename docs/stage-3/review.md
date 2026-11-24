@@ -29,3 +29,12 @@ Bukti ini masih loopback dan tidak menguji alokasi publik. Dua sasaran lain (eng
 ## Pembaruan: dua transfer pada pasangan node yang sama (MySQL)
 
 [CI 45506638643](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45506638643) lulus 12 job. Job `identity` membuat dua transfer aktif pada pasangan node yang sama, dengan UUID, digest, dan alokasi tujuan berbeda. Laporan dan penyelesaian transfer pertama hanya memindahkan server pertama. Instans ledger baru membaca penyimpanan yang sama dan mengarantina transfer kedua; sumber, digest, serta reservasinya tetap utuh dan laporan terlambat maupun klaim ulang ditolak. Ini bukti isolasi database, bukan dua upload Wings bersamaan atau restart proses Relay untuk skenario gabungan. Bagian tersebut dan validasi egg baru yang hanya menambah data persetujuan masih diperlukan untuk review penutupan.
+
+## Penutupan dua tes tersisa untuk cakupan staging
+
+[CI 45507695633](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45507695633) lulus 13 job, termasuk:
+
+- **Dua transfer nyata pada satu pasangan Wings (`same-pair`).** Dua workload HTTP dengan UUID, isi pohon, dan alokasi berbeda dikirim bersamaan. Dua daemon menggunakan Docker engine terpisah. Harness hanya menyuntikkan hilangnya satu callback dan meneruskan callback sukses ke aplikasi tujuan asli. Setelah restart proses Relay sumber, transfer tanpa laporan dikarantina tanpa replay, dengan pohon sumber dan reservasi tetap utuh. Transfer sukses difinalisasi setelah cek pohon dan bisa start/stop di Wings tujuan. Hasil tidak tertukar.
+- **Egg upstream baru lewat data persetujuan.** Forgejo memakai dokumen upstream byte-persis dan satu entri `api/eggs/upstream/approved.json` berisi SHA-256, input, dan resource limits. Gitea dan Forgejo berjalan melalui loader, compiler, serta tes lifecycle yang sama; tidak ada adapter Forgejo. Job memverifikasi executable ELF, installer asli, `running`, stop, dan delete. Egg baru masih memerlukan peninjauan serta persetujuan eksplisit.
+
+Tiga sasaran yang dibatasi untuk review staging (alokasi tambahan, egg berbasis approval, dan dua transfer pada satu pair) telah terbukti. Ini bukan klaim kompatibilitas seluruh katalog produksi atau semua format egg; [gate pengganti Panel](replacement-gate.md) tetap mendokumentasikan batasnya. Tidak ada cutover atau implementasi Tahap 4.

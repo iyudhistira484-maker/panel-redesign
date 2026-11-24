@@ -155,3 +155,5 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 `api/eggs/upstream/egg-mumble-server.ptdl` is the unmodified Mumble document from `database/Seeders/eggs/voice-servers/egg-mumble-server.json` at Pterodactyl Panel v1.15.2 (`90b2aa87469da4fffd941b3c99f3c1ca48a01b78`), under the Panel MIT notice above. The `.ptdl` extension keeps formatters from changing the bytes.
 
 `api/eggs/upstream/egg-gitea.ptdl` is the unmodified Gitea document from `software/gitea/egg-gitea.json` in `pelican-eggs/eggs` at `fcfd5a3549769ade15127a7577d6d3c397e83b05`. Its license is in `api/eggs/upstream/LICENSE-pelican-eggs.txt`.
+
+`api/eggs/upstream/egg-forgejo.ptdl` is the unmodified Forgejo document from `software/forgejo/egg-forgejo.json` in `pelican-eggs/eggs` at `fcfd5a3549769ade15127a7577d6d3c397e83b05`, under the same vendored MIT notice.
