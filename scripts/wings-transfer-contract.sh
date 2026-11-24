@@ -73,7 +73,12 @@ if ! sudo -n docker -H "$inner" info >/dev/null 2>&1; then
   exit 1
 fi
 docker pull debian:12-slim >/dev/null
-docker network create --internal "$net" >/dev/null
+if [[ "${RELAY_TRANSFER_SCENARIO:-}" == mumble-* ]]; then
+  # Upstream installer needs Alpine repositories; destination never runs the installer.
+  docker network create "$net" >/dev/null
+else
+  docker network create --internal "$net" >/dev/null
+fi
 sudo -n docker -H "$inner" network create --internal "$net" >/dev/null
 # Copy a pinned fixture image into the destination engine rather than sharing a runtime container.
 cat <<'DOCKERFILE' | docker build --tag relay-wings-contract-http:ci - >/dev/null

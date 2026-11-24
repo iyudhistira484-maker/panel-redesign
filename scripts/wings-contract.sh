@@ -63,7 +63,12 @@ YAML
 chmod 0600 "$work/config/config.yml"
 docker pull debian:12-slim
 # Docker allocates a subnet distinct from the MySQL service network.
-docker network create --internal "$network" >/dev/null
+if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == gitea-qualification ]]; then
+  # This upstream installer downloads a release over HTTPS; allocations remain loopback-only.
+  docker network create "$network" >/dev/null
+else
+  docker network create --internal "$network" >/dev/null
+fi
 cat <<'DOCKERFILE' | docker build --tag relay-wings-contract-workload:ci -
 FROM alpine:3.22.2
 ENTRYPOINT ["/bin/sh", "/home/container/relay-start.sh"]
