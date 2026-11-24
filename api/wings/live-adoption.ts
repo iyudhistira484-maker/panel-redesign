@@ -238,8 +238,11 @@ async function main() {
       const outsider = process.env.RELAY_ADOPTION_OUTSIDER_UUID;
       assert.ok(collaborator && outsider);
       const credentials = {
-        collaborator,
-        outsider,
+        accounts: new Map([
+          [owner, "adoption@example.test"],
+          [collaborator, "collaborator@example.test"],
+          [outsider, "outsider@example.test"],
+        ]),
         nodes: new Map([
           [nodeId, node],
           [secondNodeId, secondNode],
@@ -251,6 +254,79 @@ async function main() {
           [second, secondAllocation],
         ]),
       };
+      // Exercise a larger catalog batch without claiming a third live Wings workload.
+      const expanded = structuredClone(manifest) as Record<
+        string,
+        Record<string, unknown>[]
+      >;
+      const extra = randomUUID();
+      const template = expanded.servers[0];
+      const otherOwner = expanded.users.find((row) => row.uuid === outsider);
+      const otherGrant = expanded.users.find(
+        (row) => row.uuid === collaborator,
+      );
+      assert.ok(otherOwner && otherGrant);
+      const nextId = (table: string) =>
+        Math.max(0, ...expanded[table].map((row) => Number(row.id))) + 1;
+      const extraId = nextId("servers"),
+        extraAllocation = nextId("allocations");
+      expanded.servers.push({
+        ...template,
+        id: extraId,
+        uuid: extra,
+        owner_id: otherOwner.id,
+        allocation_id: extraAllocation,
+      });
+      expanded.allocations.push({
+        id: extraAllocation,
+        node_id: template.node_id,
+        server_id: extraId,
+        port: 25612,
+      });
+      expanded.subusers.push({
+        id: nextId("subusers"),
+        user_id: otherGrant.id,
+        server_id: extraId,
+        permissions: ["activity.read"],
+      });
+      const expandedCredentials = {
+        ...credentials,
+        allocations: new Map([
+          ...credentials.allocations,
+          [extra, randomUUID()],
+        ]),
+      };
+      assert.equal(
+        (await applyLegacyFixture(pool, expanded, expandedCredentials)).applied,
+        true,
+      );
+      assert.equal(
+        (await applyLegacyFixture(pool, expanded, expandedCredentials)).applied,
+        false,
+      );
+      assert.deepEqual(
+        await rows(pool, "SELECT owner_id FROM servers WHERE id=?", [extra]),
+        [{ owner_id: outsider }],
+      );
+      assert.deepEqual(
+        await rows(
+          pool,
+          "SELECT user_id FROM server_grants WHERE server_id=?",
+          [extra],
+        ),
+        [{ user_id: collaborator }],
+      );
+      for (const table of [
+        "server_grants",
+        "wings_provisions",
+        "servers",
+        "allocations",
+        "eggs",
+        "nests",
+        "nodes",
+        "users",
+      ])
+        await pool.execute(`DELETE FROM ${table}`);
       await assert.rejects(
         applyLegacyFixture(pool, manifest, {
           ...credentials,

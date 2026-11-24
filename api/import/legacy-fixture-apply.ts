@@ -12,13 +12,12 @@ type Credentials = {
   key: Buffer;
   pepper: Buffer;
   allocations: ReadonlyMap<string, string>;
-  collaborator: string;
-  outsider: string;
+  accounts: ReadonlyMap<string, string>;
 };
 const name = "Existing staging workload";
 const document = Buffer.from(disposableEgg);
 
-/** Two-row allowlisted adoption fixture. Uses disabled fixture identities, never legacy credentials. */
+/** Bounded staging catalog adoption for the reviewed shell workload. Uses disabled fixture identities, never legacy credentials. */
 export async function applyLegacyFixture(
   pool: Pool,
   manifest: unknown,
@@ -42,7 +41,7 @@ export async function applyLegacyFixture(
         typeof nodeId !== "string" ||
         typeof eggId !== "string" ||
         typeof nestId !== "string" ||
-        (port !== 25610 && port !== 25611)
+        typeof port !== "number"
       )
         throw new Error("Invalid staging fixture placement");
       const allocationId = allocations.get(uuid);
@@ -51,6 +50,8 @@ export async function applyLegacyFixture(
       const configured = credentials.nodes.get(nodeId);
       if (!configured) throw new Error("Missing fixture node map");
       const node = validateNode(configured);
+      if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(node.origin))
+        throw new Error("Loopback Wings only");
       return {
         uuid,
         ownerId,
@@ -64,44 +65,43 @@ export async function applyLegacyFixture(
       };
     })
     .sort((a, b) => a.port - b.port);
-  const [first, second] = batch;
+  const nodes = new Map(batch.map((row) => [row.nodeId, row]));
+  const eggs = new Map(batch.map((row) => [row.eggId, row]));
+  const nests = new Set(batch.map((row) => row.nestId));
   if (
-    batch.length !== 2 ||
-    report.counts.nodes !== 2 ||
-    report.counts.users !== 3 ||
-    report.counts.nests !== 1 ||
-    report.counts.eggs !== 2 ||
-    report.counts.allocations !== 2 ||
-    report.counts.subusers !== 1 ||
-    first.port !== 25610 ||
-    second.port !== 25611 ||
-    first.node.origin !== "http://127.0.0.1:18080" ||
-    second.node.origin !== "http://127.0.0.1:18081" ||
-    first.nodeId === second.nodeId
+    !batch.length ||
+    batch.length > 100 ||
+    report.counts.allocations !== batch.length ||
+    report.counts.nodes !== nodes.size ||
+    report.counts.eggs !== eggs.size ||
+    report.counts.nests !== nests.size
   )
-    throw new Error("Only the reviewed two-server fixture is supported");
-  const accounts = [
-    first.ownerId,
-    credentials.collaborator,
-    credentials.outsider,
-  ];
-  const grant = report.grants[0];
+    throw new Error("Unsupported staging catalog scope");
+  const accounts = report.userIds.map((id) => ({
+    id,
+    email: credentials.accounts.get(id) ?? "",
+  }));
   if (
-    accounts.some((id) => !UUID_V4.test(id)) ||
-    new Set(accounts).size !== 3 ||
-    second.ownerId !== first.ownerId ||
-    !isDeepStrictEqual(grant, {
-      userId: credentials.collaborator,
-      serverId: first.uuid,
-      permissions: ["activity.read", "control.start"],
-    })
+    credentials.accounts.size !== accounts.length ||
+    accounts.some(
+      ({ email }) => !/^([a-z0-9._+-]{1,64})@example\.test$/.test(email),
+    ) ||
+    new Set(accounts.map((row) => row.email)).size !== accounts.length
   )
-    throw new Error("Invalid fixture account or grant mapping");
-  const emails = [
-    "adoption@example.test",
-    "collaborator@example.test",
-    "outsider@example.test",
-  ];
+    throw new Error("Invalid staging account mapping");
+  const grants = report.grants.map((row) => ({
+    userId: String(row.userId),
+    serverId: String(row.serverId),
+    permissions: [...row.permissions].sort(),
+  }));
+  const normalize = (list: typeof grants) =>
+    [...list].sort(
+      (a, b) =>
+        a.serverId.localeCompare(b.serverId) ||
+        a.userId.localeCompare(b.userId),
+    );
+  const serverIds = batch.map((row) => row.uuid);
+  const placeholders = serverIds.map(() => "?").join(",");
   const crypto = cryptoContext(key, pepper, "node-token");
 
   return transaction(pool, async (db) => {
@@ -113,8 +113,8 @@ export async function applyLegacyFixture(
       throw new Error("Disposable target database required");
     const existing = await rows(
       db,
-      "SELECT id FROM servers WHERE id IN (?,?) ORDER BY id FOR UPDATE",
-      [first.uuid, second.uuid],
+      `SELECT id FROM servers WHERE id IN (${placeholders}) ORDER BY id FOR UPDATE`,
+      serverIds,
     );
     if (existing.length && existing.length !== batch.length)
       throw new Error("Partial Relay fixture conflicts with import");
@@ -136,7 +136,7 @@ export async function applyLegacyFixture(
         JOIN nodes n ON n.id=s.node_id JOIN allocations a ON a.id=s.allocation_id AND a.node_id=s.node_id
         JOIN users u ON u.id=s.owner_id JOIN eggs e ON e.id=s.egg_id JOIN nests t ON t.id=e.nest_id
         JOIN wings_provisions p ON p.server_id=s.id
-        WHERE s.id=? AND s.name=? AND s.owner_id=? AND u.email='adoption@example.test' AND u.password_hash='disabled' AND u.is_admin=0
+        WHERE s.id=? AND s.name=? AND s.owner_id=? AND u.password_hash='disabled' AND u.is_admin=0
         AND s.node_id=? AND n.origin=? AND n.token_id=? AND s.egg_id=? AND e.nest_id=? AND e.version='PTDL_v2' AND e.document=?
         AND s.allocation_id=? AND a.ip='127.0.0.1' AND a.port=? AND p.phase='installed' FOR UPDATE`,
           [
@@ -159,11 +159,11 @@ export async function applyLegacyFixture(
         if (saved.length !== token.length || !timingSafeEqual(saved, token))
           throw new Error("Existing Relay fixture token differs");
       }
-      for (const [i, id] of accounts.entries()) {
+      for (const { id, email } of accounts) {
         const matched = await rows(
           db,
           "SELECT id FROM users WHERE id=? AND email=? AND password_hash='disabled' AND is_admin=0 FOR UPDATE",
-          [id, emails[i]],
+          [id, email],
         );
         if (matched.length !== 1)
           throw new Error("Existing Relay account conflicts with import");
@@ -174,51 +174,52 @@ export async function applyLegacyFixture(
         permissions: unknown;
       }>(
         db,
-        "SELECT user_id AS userId,server_id AS serverId,permissions FROM server_grants WHERE server_id IN (?,?) FOR UPDATE",
-        [first.uuid, second.uuid],
+        `SELECT user_id AS userId,server_id AS serverId,permissions FROM server_grants WHERE server_id IN (${placeholders}) FOR UPDATE`,
+        serverIds,
       );
       if (
         !isDeepStrictEqual(
-          savedGrants.map((row) => ({
-            ...row,
-            permissions:
-              typeof row.permissions === "string"
-                ? JSON.parse(row.permissions)
-                : row.permissions,
-          })),
-          [grant],
+          normalize(
+            savedGrants
+              .map((row) => ({
+                ...row,
+                permissions:
+                  typeof row.permissions === "string"
+                    ? JSON.parse(row.permissions)
+                    : (row.permissions as string[]),
+              }))
+              .map((row) => ({
+                ...row,
+                permissions: [...row.permissions].sort(),
+              })),
+          ),
+          normalize(grants),
         )
       )
         throw new Error("Existing Relay grants conflict with import");
       return { applied: false, counts: report.counts };
     }
-    const { ownerId, nestId } = first;
-    for (const [i, id] of accounts.entries())
+    for (const { id, email } of accounts)
       await db.execute(
         "INSERT INTO users (id,email,display_name,password_hash) VALUES (?,?,'Fixture','disabled')",
-        [id, emails[i]],
+        [id, email],
       );
-    await db.execute(
-      "INSERT INTO nests (id,name) VALUES (?,'Adoption fixture')",
-      [nestId],
-    );
-    for (const {
-      uuid,
-      eggId,
-      port,
-      allocationId,
-      nodeId,
-      node,
-      token,
-    } of batch) {
+    for (const nestId of nests)
+      await db.execute("INSERT INTO nests (id,name) VALUES (?,?)", [
+        nestId,
+        `Adoption ${nestId}`,
+      ]);
+    for (const { nodeId, node, token } of nodes.values())
       await db.execute(
         "INSERT INTO nodes (id,name,origin,token_id,token_cipher) VALUES (?,'Existing node',?,?,?)",
         [nodeId, node.origin, node.tokenId, crypto.seal(token, nodeId)],
       );
+    for (const { eggId, nestId } of eggs.values())
       await db.execute(
         "INSERT INTO eggs (id,nest_id,name,version,document) VALUES (?,?,?,'PTDL_v2',?)",
-        [eggId, nestId, `Fixture ${port}`, document],
+        [eggId, nestId, `Adoption ${eggId}`, document],
       );
+    for (const { uuid, ownerId, eggId, port, allocationId, nodeId } of batch) {
       await db.execute(
         "INSERT INTO allocations (id,node_id,ip,port) VALUES (?,?,'127.0.0.1',?)",
         [allocationId, nodeId, port],
@@ -232,10 +233,11 @@ export async function applyLegacyFixture(
         [uuid],
       );
     }
-    await db.execute(
-      "INSERT INTO server_grants (user_id,server_id,permissions) VALUES (?,?,?)",
-      [credentials.collaborator, first.uuid, JSON.stringify(grant.permissions)],
-    );
+    for (const grant of grants)
+      await db.execute(
+        "INSERT INTO server_grants (user_id,server_id,permissions) VALUES (?,?,?)",
+        [grant.userId, grant.serverId, JSON.stringify(grant.permissions)],
+      );
     return { applied: true, counts: report.counts };
   });
 }

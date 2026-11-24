@@ -145,6 +145,9 @@ export function legacyPreflight(input: unknown) {
     });
   }
   return {
+    userIds: [...(map.get("users")?.values() ?? [])].map((row) =>
+      String(row.uuid),
+    ),
     counts: Object.fromEntries(
       tables.map((table) => [table, map.get(table)?.size ?? 0]),
     ),
