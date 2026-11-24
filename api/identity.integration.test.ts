@@ -607,6 +607,29 @@ test(
         }),
         false,
       );
+      // Same node pair, different UUIDs and destination allocations. Both transfers are inflight.
+      const sibling = randomUUID(),
+        siblingSource = randomUUID(),
+        siblingTarget = randomUUID();
+      await pool.execute(
+        "INSERT INTO allocations (id,node_id,ip,port) VALUES (?,?,'127.0.0.1',25710),(?,?,'127.0.0.1',25711)",
+        [siblingSource, nodeId, siblingTarget, anotherNode],
+      );
+      await pool.execute(
+        "INSERT INTO servers (id,name,node_id,owner_id,egg_id,allocation_id) SELECT ?,'Sibling',node_id,owner_id,egg_id,? FROM servers WHERE id=?",
+        [sibling, siblingSource, serverId],
+      );
+      await pool.execute(
+        "INSERT INTO wings_provisions (server_id,phase) VALUES (?,'installed')",
+        [sibling],
+      );
+      const siblingMove = await ledger.reserve(
+        sibling,
+        anotherNode,
+        siblingTarget,
+      );
+      assert.ok(siblingMove);
+      assert.equal(await ledger.claim(siblingMove, "b".repeat(64)), true);
       assert.equal(await ledger.reportDestination(serverId, nodeId), false);
       assert.equal(await ledger.reportDestination(serverId, anotherNode), true);
 
@@ -633,6 +656,39 @@ test(
           [serverId],
         ),
         [{ node_id: anotherNode, allocation_id: targetAllocation }],
+      );
+      const reopened = transferLedger(pool);
+      assert.equal(await reopened.reported(siblingMove), undefined);
+      assert.equal(
+        await reopened.settle(siblingMove, { kind: "ambiguous" }),
+        true,
+      );
+      assert.equal(await reopened.claim(siblingMove, "c".repeat(64)), false);
+      assert.equal(
+        await reopened.reportDestination(sibling, anotherNode),
+        false,
+      );
+      assert.deepEqual(
+        await rows(
+          pool,
+          "SELECT node_id,allocation_id FROM servers WHERE id=?",
+          [sibling],
+        ),
+        [{ node_id: nodeId, allocation_id: siblingSource }],
+      );
+      assert.deepEqual(
+        await rows(
+          pool,
+          "SELECT phase,active_allocation,fixture_digest FROM wings_transfers WHERE id=?",
+          [siblingMove],
+        ),
+        [
+          {
+            phase: "uncertain",
+            active_allocation: siblingTarget,
+            fixture_digest: "b".repeat(64),
+          },
+        ],
       );
       const reverse = await ledger.reserve(serverId, nodeId, allocationId);
       assert.ok(reverse);
