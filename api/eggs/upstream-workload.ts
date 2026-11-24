@@ -29,24 +29,42 @@ export function upstreamWorkload(
   );
 }
 
-export const giteaEgg = readFileSync(
-  new URL("./upstream/egg-gitea.ptdl", import.meta.url),
-  "utf8",
-);
-if (
-  createHash("sha256").update(giteaEgg).digest("hex") !==
-  "4383426b6d93ff4d53d7ecd148ea82b1d75d2b6458f8786b16e3d611f2f222a5"
-)
-  throw new Error("Unreviewed Gitea egg bytes");
-export function giteaWorkload(
+type Approval = {
+  name: string;
+  file: string;
+  sha256: string;
+  executable: string;
+  overrides: Record<string, string>;
+  resources: { memory_limit: number; disk_space: number };
+};
+const approvals = JSON.parse(
+  readFileSync(new URL("./upstream/approved.json", import.meta.url), "utf8"),
+) as Approval[];
+export const upstreamProfiles = approvals.map((row) => {
+  if (
+    !/^egg-[a-z0-9-]+\.ptdl$/.test(row.file) ||
+    !/^[-a-z0-9]+$/.test(row.executable)
+  )
+    throw new Error("Invalid approved profile paths");
+  const document = readFileSync(
+    new URL(`./upstream/${row.file}`, import.meta.url),
+    "utf8",
+  );
+  if (createHash("sha256").update(document).digest("hex") !== row.sha256)
+    throw new Error("Unreviewed upstream egg bytes");
+  return { ...row, document };
+});
+export const giteaEgg = upstreamProfiles[0].document;
+export function registeredWorkload(
+  profile: (typeof upstreamProfiles)[number],
   installed: Parameters<typeof lifecycleFixture>[0],
   server: NonNullable<Parameters<typeof lifecycleFixture>[1]>,
 ) {
   return compileReviewedProfile(
-    giteaEgg,
+    profile.document,
     installed,
     server,
-    { VERSION: "1.25.5", DISABLE_SSH: "true", SSH_PORT: "2020" },
-    { memory_limit: 256, disk_space: 512 },
+    profile.overrides,
+    profile.resources,
   );
 }

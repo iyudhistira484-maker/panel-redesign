@@ -1,0 +1,26 @@
+[
+  {
+    "name": "Gitea",
+    "file": "egg-gitea.ptdl",
+    "sha256": "4383426b6d93ff4d53d7ecd148ea82b1d75d2b6458f8786b16e3d611f2f222a5",
+    "executable": "gitea",
+    "overrides": {
+      "VERSION": "1.25.5",
+      "DISABLE_SSH": "true",
+      "SSH_PORT": "2020"
+    },
+    "resources": { "memory_limit": 256, "disk_space": 512 }
+  },
+  {
+    "name": "Forgejo",
+    "file": "egg-forgejo.ptdl",
+    "sha256": "cff7723e0c4ae6ce0416c0de8ca8bffadf3b4babe77b60ca27d31795c459dfc2",
+    "executable": "forgejo",
+    "overrides": {
+      "VERSION": "11.0.5",
+      "DISABLE_SSH": "true",
+      "SSH_PORT": "2020"
+    },
+    "resources": { "memory_limit": 256, "disk_space": 512 }
+  }
+]

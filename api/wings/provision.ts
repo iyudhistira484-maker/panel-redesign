@@ -1,6 +1,6 @@
 import {
-  giteaEgg,
-  giteaWorkload,
+  upstreamProfiles,
+  registeredWorkload,
   mumbleEgg,
   upstreamWorkload,
 } from "../eggs/upstream-workload";
@@ -103,7 +103,7 @@ export function createProvisioner(
     disposableEgg,
     ...reviewedHttpEggs,
     mumbleEgg,
-    ...(experimentalGitea ? [giteaEgg] : []),
+    ...(experimentalGitea ? upstreamProfiles.map((row) => row.document) : []),
   ].map((text) => Buffer.from(text));
   const eligible = (s: ServerRow) =>
     fromNode(s) &&
@@ -143,8 +143,12 @@ export function createProvisioner(
       return lifecycleFixture(installed, s);
     if (s.document.equals(Buffer.from(mumbleEgg)))
       return upstreamWorkload(installed, s, s.mumbleMaxUsers);
-    if (experimentalGitea && s.document.equals(Buffer.from(giteaEgg)))
-      return giteaWorkload(installed, s);
+    const profile =
+      experimentalGitea &&
+      upstreamProfiles.find((row) =>
+        s.document.equals(Buffer.from(row.document)),
+      );
+    if (profile) return registeredWorkload(profile, installed, s);
     const reviewed = reviewedWorkload(s.document, s, installed, s.fixtureMode);
     if (!reviewed) throw new ProvisionError(422, "egg_not_approved");
     return reviewed;

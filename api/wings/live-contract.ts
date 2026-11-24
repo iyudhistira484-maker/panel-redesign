@@ -1,4 +1,4 @@
-import { giteaEgg, mumbleEgg } from "../eggs/upstream-workload";
+import { upstreamProfiles, mumbleEgg } from "../eggs/upstream-workload";
 import { reviewedHttpEggs } from "../eggs/reviewed-workload";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -512,144 +512,155 @@ async function main() {
         .statusCode,
       202,
     );
-    if (process.env.RELAY_EXPERIMENTAL_GITEA === "1") {
-      testClientAddress = "127.0.0.3";
-      const gitEgg = await add("eggs", { nestId, document: giteaEgg });
-      assert.equal(
-        (await admin("GET", `eggs/${gitEgg}/document`)).body,
-        giteaEgg,
-      );
-      const gitPort = 25615;
-      const gitAllocation = await add("allocations", {
-        nodeId,
-        ip: "127.0.0.1",
-        port: gitPort,
-      });
-      const gitDraft = {
-        name: "Upstream Gitea",
-        nodeId,
-        eggId: gitEgg,
-        allocationId: gitAllocation,
-        ownerId: id,
-      };
-      assert.equal(
-        (await admin("POST", "servers", { ...gitDraft, mumbleMaxUsers: "37" }))
-          .statusCode,
-        422,
-      );
-      const gitServer = await add("servers", gitDraft);
-      const gitProvision = await admin(
-        "POST",
-        `servers/${gitServer}/provision`,
-        {
-          confirm: true,
-        },
-      );
-      assert.equal(gitProvision.statusCode, 202, gitProvision.body);
-      await until(
-        "upstream Gitea install",
-        async () => {
-          const [record] = await rows<{ phase: string }>(
-            pool,
-            "SELECT phase FROM wings_provisions WHERE server_id=?",
-            [gitServer],
-          );
-          assert.notEqual(record?.phase, "install_failed");
-          return record?.phase === "installed";
-        },
-        160,
-      );
-      // The upstream installer does not fail on all HTTP errors. Verify it produced a real executable.
-      const data = process.env.RELAY_WINGS_CONTRACT_DATA;
-      assert.ok(data);
-      const candidate = `${data}/${gitServer}/gitea`;
-      const imageHeader = await docker(
-        "sudo",
-        ["-n", "od", "-An", "-tx1", "-N4", candidate],
-        { timeout: 3000 },
-      )
-        .then((result) => result.stdout.trim().replace(/\s+/g, " "))
-        .catch(() => "missing");
-      assert.equal(
-        imageHeader,
-        "7f 45 4c 46",
-        "Upstream Gitea installer did not produce an ELF executable",
-      );
-      assert.equal(
-        (
-          await admin("POST", `servers/${gitServer}/power`, {
-            confirm: true,
-            action: "start",
-          })
-        ).statusCode,
-        202,
-      );
-      try {
-        await until(
-          "upstream Gitea listening",
-          async () => (await client.state(gitServer)) === "running",
-          120,
+    if (process.env.RELAY_EXPERIMENTAL_GITEA === "1")
+      for (const [index, profile] of upstreamProfiles.entries()) {
+        const giteaEgg = profile.document;
+        testClientAddress = `127.0.0.${3 + index}`;
+        const gitEgg = await add("eggs", { nestId, document: giteaEgg });
+        assert.equal(
+          (await admin("GET", `eggs/${gitEgg}/document`)).body,
+          giteaEgg,
         );
-      } catch (error) {
-        const log = await docker(
-          "docker",
-          ["logs", "--tail", "10", gitServer],
+        const gitPort = 25615 + index;
+        const gitAllocation = await add("allocations", {
+          nodeId,
+          ip: "127.0.0.1",
+          port: gitPort,
+        });
+        const gitDraft = {
+          name: `Upstream ${profile.name}`,
+          nodeId,
+          eggId: gitEgg,
+          allocationId: gitAllocation,
+          ownerId: id,
+        };
+        assert.equal(
+          (
+            await admin("POST", "servers", {
+              ...gitDraft,
+              mumbleMaxUsers: "37",
+            })
+          ).statusCode,
+          422,
+        );
+        const gitServer = await add("servers", gitDraft);
+        const gitProvision = await admin(
+          "POST",
+          `servers/${gitServer}/provision`,
           {
-            timeout: 3000,
+            confirm: true,
           },
-        ).catch(() => ({ stdout: "", stderr: "" }));
-        const runtime = await docker(
-          "docker",
-          [
-            "inspect",
-            "-f",
-            "{{.State.Status}}/{{.State.ExitCode}}/{{.State.OOMKilled}}",
-            gitServer,
-          ],
+        );
+        assert.equal(gitProvision.statusCode, 202, gitProvision.body);
+        await until(
+          `upstream ${profile.name} install`,
+          async () => {
+            const [record] = await rows<{ phase: string }>(
+              pool,
+              "SELECT phase FROM wings_provisions WHERE server_id=?",
+              [gitServer],
+            );
+            assert.notEqual(record?.phase, "install_failed");
+            return record?.phase === "installed";
+          },
+          160,
+        );
+        // The upstream installer does not fail on all HTTP errors. Verify it produced a real executable.
+        const data = process.env.RELAY_WINGS_CONTRACT_DATA;
+        assert.ok(data);
+        const candidate = `${data}/${gitServer}/${profile.executable}`;
+        const imageHeader = await docker(
+          "sudo",
+          ["-n", "od", "-An", "-tx1", "-N4", candidate],
           { timeout: 3000 },
         )
-          .then((result) => result.stdout.trim())
-          .catch(() => "not-created");
-        console.log(`::warning::Gitea container state: ${runtime}`);
-        const text = log.stdout + log.stderr;
-        const hints = [
-          "not found",
-          "Permission denied",
-          "syntax error",
-          "exec format error",
-          "Listen:",
-          "bad interpreter",
-          "failed",
-          "Gitea version",
-          "Invalid",
-          "address already in use",
-          "OOM",
-          "Killed",
-        ].filter((marker) => text.toLowerCase().includes(marker.toLowerCase()));
-        console.log(
-          `::warning::Gitea boot diagnostics: ${hints.join(", ") || "no recognized markers"}`,
+          .then((result) => result.stdout.trim().replace(/\s+/g, " "))
+          .catch(() => "missing");
+        assert.equal(
+          imageHeader,
+          "7f 45 4c 46",
+          "Upstream Gitea installer did not produce an ELF executable",
         );
-        throw error;
+        assert.equal(
+          (
+            await admin("POST", `servers/${gitServer}/power`, {
+              confirm: true,
+              action: "start",
+            })
+          ).statusCode,
+          202,
+        );
+        try {
+          await until(
+            `upstream ${profile.name} listening`,
+            async () => (await client.state(gitServer)) === "running",
+            120,
+          );
+        } catch (error) {
+          const log = await docker(
+            "docker",
+            ["logs", "--tail", "10", gitServer],
+            {
+              timeout: 3000,
+            },
+          ).catch(() => ({ stdout: "", stderr: "" }));
+          const runtime = await docker(
+            "docker",
+            [
+              "inspect",
+              "-f",
+              "{{.State.Status}}/{{.State.ExitCode}}/{{.State.OOMKilled}}",
+              gitServer,
+            ],
+            { timeout: 3000 },
+          )
+            .then((result) => result.stdout.trim())
+            .catch(() => "not-created");
+          console.log(`::warning::Gitea container state: ${runtime}`);
+          const text = log.stdout + log.stderr;
+          const hints = [
+            "not found",
+            "Permission denied",
+            "syntax error",
+            "exec format error",
+            "Listen:",
+            "bad interpreter",
+            "failed",
+            "Gitea version",
+            "Invalid",
+            "address already in use",
+            "OOM",
+            "Killed",
+          ].filter((marker) =>
+            text.toLowerCase().includes(marker.toLowerCase()),
+          );
+          console.log(
+            `::warning::Gitea boot diagnostics: ${hints.join(", ") || "no recognized markers"}`,
+          );
+          throw error;
+        }
+        assert.equal(
+          (
+            await admin("POST", `servers/${gitServer}/power`, {
+              confirm: true,
+              action: "stop",
+            })
+          ).statusCode,
+          202,
+        );
+        await until(
+          `upstream ${profile.name} offline`,
+          async () => (await client.state(gitServer)) === "offline",
+        );
+        assert.equal(
+          (
+            await admin("POST", `servers/${gitServer}/delete`, {
+              confirm: true,
+            })
+          ).statusCode,
+          202,
+        );
       }
-      assert.equal(
-        (
-          await admin("POST", `servers/${gitServer}/power`, {
-            confirm: true,
-            action: "stop",
-          })
-        ).statusCode,
-        202,
-      );
-      await until(
-        "upstream Gitea offline",
-        async () => (await client.state(gitServer)) === "offline",
-      );
-      assert.equal(
-        (await admin("POST", `servers/${gitServer}/delete`, { confirm: true }))
-          .statusCode,
-        202,
-      );
-    }
     console.log(
       "Real Wings verified via admin: create, install, start, stop, reinstall and delete",
     );
