@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { lifecycleFixture } from "../wings/lifecycle-fixture";
 
 export const mumbleEgg = readFileSync(
-  new URL("./upstream/egg-mumble-server.json", import.meta.url),
+  new URL("./upstream/egg-mumble-server.ptdl", import.meta.url),
   "utf8",
 );
 if (

@@ -149,3 +149,7 @@ INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
 DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
+
+## Vendored Panel egg
+
+`api/eggs/upstream/egg-mumble-server.ptdl` is the unmodified Mumble document from `database/Seeders/eggs/voice-servers/egg-mumble-server.json` at Pterodactyl Panel v1.15.2 (`90b2aa87469da4fffd941b3c99f3c1ca48a01b78`), under the Panel MIT notice above. The `.ptdl` extension keeps formatters from changing the bytes.
