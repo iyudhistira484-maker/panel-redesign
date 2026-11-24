@@ -563,11 +563,36 @@ async function main() {
       ).statusCode,
       202,
     );
-    await until(
-      "upstream Gitea listening",
-      async () => (await client.state(gitServer)) === "running",
-      120,
-    );
+    try {
+      await until(
+        "upstream Gitea listening",
+        async () => (await client.state(gitServer)) === "running",
+        120,
+      );
+    } catch (error) {
+      const log = await docker("docker", ["logs", "--tail", "10", gitServer], {
+        timeout: 3000,
+      }).catch(() => ({ stdout: "", stderr: "" }));
+      const text = log.stdout + log.stderr;
+      const hints = [
+        "not found",
+        "Permission denied",
+        "syntax error",
+        "exec format error",
+        "Listen:",
+        "bad interpreter",
+        "failed",
+        "Gitea version",
+        "Invalid",
+        "address already in use",
+        "OOM",
+        "Killed",
+      ].filter((marker) => text.toLowerCase().includes(marker.toLowerCase()));
+      console.log(
+        `::warning::Gitea boot diagnostics: ${hints.join(", ") || "no recognized markers"}`,
+      );
+      throw error;
+    }
     assert.equal(
       (
         await admin("POST", `servers/${gitServer}/power`, {
