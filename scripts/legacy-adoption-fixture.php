@@ -15,6 +15,20 @@ if (($argv[1] ?? '') === 'status') {
     echo json_encode($server, JSON_THROW_ON_ERROR);
     exit;
 }
+if (($argv[1] ?? '') === 'manifest') {
+    $manifest = DB::transaction(function () {
+        return [
+            'servers' => DB::table('servers')->orderBy('id')->get(['id', 'uuid', 'owner_id', 'node_id', 'egg_id', 'nest_id', 'allocation_id', 'status', 'installed_at']),
+            'users' => DB::table('users')->orderBy('id')->get(['id', 'uuid']),
+            'nodes' => DB::table('nodes')->orderBy('id')->get(['id', 'uuid']),
+            'nests' => DB::table('nests')->orderBy('id')->get(['id', 'uuid']),
+            'eggs' => DB::table('eggs')->orderBy('id')->get(['id', 'uuid', 'nest_id']),
+            'allocations' => DB::table('allocations')->orderBy('id')->get(['id', 'node_id', 'server_id', 'port']),
+        ];
+    });
+    echo json_encode($manifest, JSON_THROW_ON_ERROR);
+    exit;
+}
 DB::transaction(function () use ($uuid, $app) {
     $location = DB::table('locations')->insertGetId(['short' => 'fixture']);
     $node = DB::table('nodes')->insertGetId([

@@ -1,3 +1,4 @@
+import { legacyPreflight } from "../import/legacy-preflight";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -155,6 +156,31 @@ async function main() {
         : ready,
     );
     const legacyBefore = actual ? await legacyStatus() : undefined;
+    if (actual) {
+      const { stdout } = await docker(
+        "docker",
+        [
+          "exec",
+          "relay-adoption-panel",
+          "php",
+          "/tmp/relay-fixture.php",
+          "manifest",
+        ],
+        { timeout: 5000, maxBuffer: 65536 },
+      );
+      const report = legacyPreflight(JSON.parse(stdout));
+      assert.deepEqual(report.counts, {
+        servers: 1,
+        users: 1,
+        nodes: 1,
+        nests: 1,
+        eggs: 1,
+        allocations: 1,
+      });
+      assert.deepEqual(report.servers, [
+        { uuid, ownerId: owner, nodeId, eggId: egg, nestId: nest, port: 25610 },
+      ]);
+    }
     await client.power(uuid, "start");
     await until(
       "source running",
