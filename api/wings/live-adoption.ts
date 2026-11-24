@@ -108,6 +108,7 @@ async function main() {
     },
     { prefix: "/api/remote" },
   );
+  const resetTokens = new Map<string, string>();
   const relayFor = (configured: typeof node) =>
     createApp({
       pool,
@@ -118,7 +119,9 @@ async function main() {
       allowedCatalogNodeOrigins: [configured.origin],
       wingsTestNode: configured,
       enableDisposableProvisioning: true,
-      deliverReset: async () => {},
+      deliverReset: async ({ email, token }) => {
+        resetTokens.set(email, token);
+      },
     });
   const relay = await relayFor(node);
   const relay2 = actual ? await relayFor(secondNode) : undefined;
@@ -475,6 +478,73 @@ async function main() {
       ]),
       [],
     );
+    if (actual) {
+      const headers = {
+        origin: "https://relay.example.test",
+        "x-relay-request": "1",
+      };
+      const password = `Relay-ci-${randomUUID()}!`;
+      const post = (path: string, payload: object) =>
+        relay.inject({
+          method: "POST",
+          url: `/api/v1/auth/${path}`,
+          headers,
+          payload,
+        });
+      async function activate(email: string) {
+        assert.equal(
+          (await post("login", { email, password })).statusCode,
+          401,
+        );
+        assert.equal(
+          (await post("forgot-password", { email })).statusCode,
+          202,
+        );
+        const token = resetTokens.get(email);
+        assert.ok(token);
+        assert.equal(
+          (await post("reset-password", { token, password })).statusCode,
+          204,
+        );
+        assert.equal(
+          (await post("reset-password", { token, password })).statusCode,
+          400,
+        );
+        const result = await post("login", { email, password });
+        assert.equal(result.statusCode, 200);
+        const cookie = result.cookies.find(
+          (value) => value.name === "__Host-relay_session",
+        );
+        assert.ok(cookie?.secure && cookie.httpOnly);
+        return { cookie: `${cookie.name}=${cookie.value}` };
+      }
+      const collaborator = await activate("collaborator@example.test");
+      const outsider = await activate("outsider@example.test");
+      const ownerSession = await activate("adoption@example.test");
+      await pool.execute(
+        "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'catalog.fixture_checked',?)",
+        [owner, uuid],
+      );
+      const activity = (id: string, session?: { cookie: string }) =>
+        relay.inject({
+          url: `/api/v1/servers/${id}/activity`,
+          headers: session,
+        });
+      const allowed = await activity(uuid, collaborator);
+      assert.equal(allowed.statusCode, 200);
+      assert.equal(allowed.headers["cache-control"], "no-store");
+      assert.deepEqual(
+        allowed.json<{ event: string }[]>().map((row) => row.event),
+        ["catalog.fixture_checked"],
+      );
+      assert.equal((await activity(uuid, ownerSession)).statusCode, 200);
+      assert.equal((await activity(uuid, outsider)).statusCode, 404);
+      assert.ok(second);
+      assert.equal((await activity(second, collaborator)).statusCode, 404);
+      assert.equal((await activity(uuid)).statusCode, 401);
+      await pool.execute("DELETE FROM server_grants WHERE server_id=?", [uuid]);
+      assert.equal((await activity(uuid, collaborator)).statusCode, 404);
+    }
     await copyFile(`${config}.backup`, config);
     if (actual && secondConfig)
       await copyFile(`${secondConfig}.backup`, secondConfig);

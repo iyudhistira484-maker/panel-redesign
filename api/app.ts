@@ -5,7 +5,7 @@ import {
 import { createProvisioner } from "./wings/provision";
 import { registerCatalog, type FixtureTransfer } from "./catalog/routes";
 import { registerRemote } from "./wings/remote";
-import type { WingsNode } from "./wings/client";
+import { UUID_V4, type WingsNode } from "./wings/client";
 import { randomBytes, randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
@@ -815,6 +815,36 @@ export async function createApp({
       [u.id],
     );
   });
+  app.get<{ Params: { id: string } }>(
+    "/api/v1/servers/:id/activity",
+    async (req, reply) => {
+      reply.header("cache-control", "no-store");
+      const principal = await actor(
+        req.cookies[sessionCookie],
+        req.headers.authorization,
+      );
+      if (!principal || principal.channel !== "session")
+        return reply.code(401).send({ error: "unauthenticated" });
+      if (!UUID_V4.test(req.params.id))
+        return reply.code(404).send({ error: "not_found" });
+      const result = await rows<{
+        id: string | null;
+        event: string | null;
+        created_at: Date | null;
+      }>(
+        pool,
+        `SELECT CAST(a.id AS CHAR) AS id, a.event, a.created_at
+      FROM servers s JOIN users u ON u.id=?
+      LEFT JOIN server_grants g ON g.server_id=s.id AND g.user_id=u.id
+      LEFT JOIN audit_log a ON a.subject_id=s.id AND a.event LIKE 'catalog.%'
+      WHERE s.id=? AND (s.owner_id=u.id OR u.is_admin=1 OR JSON_CONTAINS(g.permissions,JSON_QUOTE('activity.read'))=1)
+      ORDER BY a.id DESC LIMIT 100`,
+        [principal.id, req.params.id],
+      );
+      if (!result.length) return reply.code(404).send({ error: "not_found" });
+      return result.filter((entry) => entry.id !== null);
+    },
+  );
   if (wingsTestNode)
     await app.register(
       async (instance) =>
