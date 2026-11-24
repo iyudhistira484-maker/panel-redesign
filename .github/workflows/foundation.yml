@@ -61,6 +61,10 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 6
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [lifecycle, adoption]
     services:
       mysql:
         image: mysql:8.4.8
@@ -89,6 +93,7 @@ jobs:
       - run: npm run test:wings
       - run: bash scripts/wings-contract.sh
         env:
+          RELAY_BOOTSTRAP_SCENARIO: ${{ matrix.scenario }}
           RELAY_STAGING_DATABASE_URL: mysql://relay:disposable-ci@127.0.0.1:${{ job.services.mysql.ports[3306] }}/relay_test
   wings-transfer:
     if: github.event_name == 'push'

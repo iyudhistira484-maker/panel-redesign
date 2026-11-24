@@ -6,6 +6,12 @@ work=$(mktemp -d)
 name=relay-wings-contract
 network=relay-wings-contract-net
 harness_pid=''
+remote_port=13200
+harness=api/wings/live-contract.ts
+if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == adoption ]]; then
+  remote_port=13202
+  harness=api/wings/live-adoption.ts
+fi
 cleanup() {
   docker rm -f "$name" >/dev/null 2>&1 || true
   docker network rm "$network" >/dev/null 2>&1 || true
@@ -26,7 +32,7 @@ cat > "$work/config/config.yml" <<YAML
 uuid: 3ab63670-f83b-4a2c-adeb-5b2852859319
 token_id: $RELAY_WINGS_TEST_TOKEN_ID
 token: $RELAY_WINGS_TEST_TOKEN
-remote: http://127.0.0.1:13200
+remote: http://127.0.0.1:$remote_port
 api:
   host: 127.0.0.1
   port: 18080
@@ -61,7 +67,7 @@ cat <<'DOCKERFILE' | docker build --tag relay-wings-contract-workload:ci -
 FROM alpine:3.22.2
 ENTRYPOINT ["/bin/sh", "/home/container/relay-start.sh"]
 DOCKERFILE
-./node_modules/.bin/tsx api/wings/live-contract.ts &
+RELAY_ADOPTION_FIXTURE_CONFIG="$work/config/config.yml" ./node_modules/.bin/tsx "$harness" &
 harness_pid=$!
 docker run --detach --name "$name" --network host \
   -v /var/run/docker.sock:/var/run/docker.sock \
