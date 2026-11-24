@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Pool, PoolConnection } from "mysql2/promise";
+import type { Pool, PoolConnection, ResultSetHeader } from "mysql2/promise";
 import { rows, transaction } from "../db";
 
 export async function lockFreeAllocation(
@@ -35,6 +35,20 @@ export async function lockFreeAllocation(
     )
   ).length;
 }
+const expiredWithoutReport =
+  "phase='reserved' AND dispatched_at<=UTC_TIMESTAMP(3)-INTERVAL 5 MINUTE AND destination_reported_at IS NULL";
+
+export async function quarantineServerTransfer(
+  db: PoolConnection,
+  server: string,
+) {
+  const [result] = await db.execute<ResultSetHeader>(
+    `UPDATE wings_transfers SET phase='uncertain' WHERE active_server=? AND ${expiredWithoutReport}`,
+    [server],
+  );
+  return result.affectedRows === 1;
+}
+
 type Transfer = {
   id: string;
   server_id: string;
@@ -96,7 +110,7 @@ export function transferLedger(pool: Pool) {
     // One bounded pass; no remote calls, redispatch or reservation release.
     async expireUnconfirmedDispatches() {
       const [result] = await pool.execute<import("mysql2").ResultSetHeader>(
-        "UPDATE wings_transfers SET phase='uncertain' WHERE phase='reserved' AND dispatched_at<=UTC_TIMESTAMP(3)-INTERVAL 5 MINUTE AND destination_reported_at IS NULL ORDER BY dispatched_at,id LIMIT 100",
+        `UPDATE wings_transfers SET phase='uncertain' WHERE ${expiredWithoutReport} ORDER BY dispatched_at,id LIMIT 100`,
       );
       return result.affectedRows;
     },

@@ -572,32 +572,50 @@ test(
       const reverse = await ledger.reserve(serverId, nodeId, allocationId);
       assert.ok(reverse);
       assert.equal(await ledger.claim(reverse), true);
-      const recoveredPool = stagingPool();
-      try {
-        const recovered = transferLedger(recoveredPool);
-        assert.equal(await recovered.expireUnconfirmedDispatches(), 0);
-        await pool.execute(
-          "UPDATE wings_transfers SET dispatched_at=UTC_TIMESTAMP(3)-INTERVAL 6 MINUTE WHERE id=?",
-          [reverse],
-        );
-        assert.equal(await recovered.expireUnconfirmedDispatches(), 1);
-        assert.equal(await recovered.expireUnconfirmedDispatches(), 0);
-        assert.equal(await recovered.claim(reverse), false);
-        assert.equal(
-          await recovered.reportDestination(serverId, nodeId),
-          false,
-        );
-        assert.deepEqual(
-          await rows(
-            recoveredPool,
-            "SELECT phase FROM wings_transfers WHERE id=?",
-            [reverse],
-          ),
-          [{ phase: "uncertain" }],
-        );
-      } finally {
-        await recoveredPool.end();
-      }
+      const endpoint = `servers/${serverId}/transfer`;
+      ok(await getAdmin(endpoint), 401);
+      ok(await getAdmin(endpoint, b), 403);
+      ok(await getAdmin(`servers/${randomUUID()}/transfer`, operator), 404);
+      const active = ok(await getAdmin(endpoint, operator), 200);
+      assert.equal(active.headers["cache-control"], "no-store");
+      assert.deepEqual(active.json(), {
+        id: reverse,
+        phase: "reserved",
+        sourceNodeId: anotherNode,
+        targetNodeId: nodeId,
+        targetAllocationId: allocationId,
+        claimed: 1,
+        destinationReported: 0,
+      });
+      ok(await postAdmin(`${endpoint}/reconcile`, { confirm: false }), 400);
+      ok(await postAdmin(`${endpoint}/reconcile`, { confirm: true }, b), 403);
+      ok(await postAdmin(`${endpoint}/reconcile`, { confirm: true }), 409);
+      await pool.execute(
+        "UPDATE wings_transfers SET dispatched_at=UTC_TIMESTAMP(3)-INTERVAL 6 MINUTE WHERE id=?",
+        [reverse],
+      );
+      assert.deepEqual(
+        ok(
+          await postAdmin(`${endpoint}/reconcile`, { confirm: true }),
+          200,
+        ).json(),
+        { phase: "uncertain" },
+      );
+      ok(await postAdmin(`${endpoint}/reconcile`, { confirm: true }), 409);
+      assert.equal(
+        ok(await getAdmin(endpoint, operator), 200).json().phase,
+        "uncertain",
+      );
+      assert.deepEqual(
+        await rows(
+          pool,
+          "SELECT actor_id FROM audit_log WHERE event='catalog.transfer_quarantined' AND subject_id=?",
+          [serverId],
+        ),
+        [{ actor_id: admin }],
+      );
+      assert.equal(await ledger.claim(reverse), false);
+      assert.equal(await ledger.reportDestination(serverId, nodeId), false);
       assert.equal(
         await ledger.settle(reverse, { kind: "not_dispatched" }),
         false,

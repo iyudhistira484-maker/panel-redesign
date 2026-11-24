@@ -1,4 +1,4 @@
-import { lockFreeAllocation } from "./transfer";
+import { lockFreeAllocation, quarantineServerTransfer } from "./transfer";
 import { ProvisionError, type createProvisioner } from "../wings/provision";
 import { randomUUID } from "node:crypto";
 import { isIP } from "node:net";
@@ -73,10 +73,11 @@ export async function registerCatalog(
     req: FastifyRequest,
     event: string,
     run: (db: PoolConnection, uuid: string) => Promise<void>,
+    subjectId?: string,
   ) {
     const principal = principals.get(req);
     if (!principal) throw new CatalogError(403, "forbidden");
-    const uuid = randomUUID();
+    const uuid = subjectId ?? randomUUID();
     await transaction(pool, async (db) => {
       // Check current admin role once more inside the transaction before persisting.
       const active = (
@@ -312,6 +313,45 @@ export async function registerCatalog(
         },
       );
       return reply.code(201).send({ ...result, status: "draft" });
+    },
+  );
+  app.get<{ Params: { id: string } }>(
+    "/servers/:id/transfer",
+    {
+      schema: byId,
+      config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+    },
+    async (req, reply) => {
+      const [active] = await rows(
+        pool,
+        "SELECT id,phase,source_node_id AS sourceNodeId,target_node_id AS targetNodeId,target_allocation_id AS targetAllocationId,dispatched_at IS NOT NULL AS claimed,destination_reported_at IS NOT NULL AS destinationReported FROM wings_transfers WHERE active_server=?",
+        [req.params.id],
+      );
+      if (!active)
+        return reply.code(404).send({ error: "active_transfer_not_found" });
+      return reply.header("Cache-Control", "no-store").send(active);
+    },
+  );
+  app.post<{ Params: { id: string } }>(
+    "/servers/:id/transfer/reconcile",
+    {
+      schema: {
+        ...byId,
+        body: schema({ confirm: { type: "boolean", const: true } }),
+      },
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+    },
+    async (req) => {
+      await write(
+        req,
+        "catalog.transfer_quarantined",
+        async (db) => {
+          if (!(await quarantineServerTransfer(db, req.params.id)))
+            throw new CatalogError(409, "transfer_not_quarantinable");
+        },
+        req.params.id,
+      );
+      return { phase: "uncertain" };
     },
   );
   if (provisioner) {
