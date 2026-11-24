@@ -7,7 +7,7 @@ Keputusan pengguna, 24 November 2026: Relay mengejar **paritas fitur Pterodactyl
 | Area | Sudah terbukti di staging | Belum memenuhi target pengganti |
 | --- | --- | --- |
 | Adopsi Wings | Dua node dari Panel v1.15.2 dialihkan ke Relay dan kembali tanpa membuat ulang workload; UUID dan checksum fixture tetap sama. | Rehearsal umum dengan salinan katalog yang merepresentasikan variasi data dan konfigurasi node. |
-| Impor | Preflight relasi dan izin; transaksi dua server uji, replay idempoten, rollback konflik. | Jalur baca dari salinan database Panel, pemetaan dan pemeriksaan akun, relasi, izin, serta data terenkripsi. Dry-run harus tanpa tulis. Apply hanya ke staging, disertai laporan hasil tanpa rahasia. |
+| Impor | Preflight relasi dan izin dari salinan MariaDB Panel; transaksi dua server uji, replay idempoten, rollback konflik. | Pemetaan dan pemeriksaan akun, relasi, izin, serta data terenkripsi. Dry-run harus tanpa tulis. Apply hanya ke staging, disertai laporan hasil tanpa rahasia. |
 | Eksekusi egg | PTDL v1/v2 diimpor dan dijalankan pada Wings dengan variabel startup serta satu rewrite JSON. | Kualifikasi egg representatif di luar daftar byte fixture, dengan validasi variabel, image, startup, konfigurasi dan isolasi eksekusi. Egg yang belum didukung harus ditolak dengan alasan yang jelas. |
 | Transfer | Dispatch, callback, finalisasi dan status ambigu di dua Wings; skenario sukses serta pemulihan memakai proses Relay terpisah. | Transfer workload yang tidak bergantung pada fixture tunggal, dan rekonsiliasi yang aman untuk hasil ambigu. Tidak ada penghapusan sumber berdasarkan timeout atau callback saja. |
 

@@ -284,3 +284,11 @@ Transfer fixture, verifikasi restart, adopsi dua node dari Panel v1.15.2, dan ru
 ## Keputusan cakupan
 
 Relay tetap mengejar [target pengganti Pterodactyl Panel dan gate penutupan Tahap 3](replacement-gate.md), bukan instalasi baru saja.
+
+### Preflight dari salinan database Pterodactyl
+
+[CI 45404841767](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45404841767) lulus semua sembilan job. Job `wings-bootstrap (legacy-panel)` menyalin database Panel v1.15.2 dengan `mariadb-dump --single-transaction` melalui pipe ke schema lokal terpisah `panel_snapshot_ci`. Relay membaca snapshot tersebut langsung dari MariaDB memakai transaksi read-only dan akun terpisah dengan `SELECT` per kolom. Manifest itu menjadi input adopsi dua node, termasuk pengujian replay, konflik dan rollback. Tidak ada dump yang disimpan sebagai artefak.
+
+Untuk dry-run pada salinan uji yang sudah direstore, set `RELAY_ENV=staging` dan `RELAY_LEGACY_SNAPSHOT_URL` ke database loopback `panel_snapshot_*` memakai akun khusus dengan grants seperti di `scripts/legacy-snapshot-ci.sh`, lalu jalankan `npm run legacy:preflight`. CLI hanya menampilkan jumlah baris; tidak menyalin email, hash password, token, atau kunci. Pembacaan dibatasi 10.000 baris per tabel. Restore SQL bukan bagian dari CLI. Jangan restore dump tak tepercaya atau gunakan database produksi.
+
+Ini membuktikan jalur baca snapshot nyata, bukan migrasi umum. Apply masih mengizinkan fixture dua server dengan satu pemilik dan tanpa subuser; pemindahan akun dan izin tetap belum lulus. Gate egg dan transfer workload umum juga tetap terbuka.
