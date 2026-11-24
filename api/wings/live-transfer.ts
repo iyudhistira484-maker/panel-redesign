@@ -676,7 +676,6 @@ async function main() {
       return;
     }
     assert.equal(completion, true);
-    await receiver?.close();
     await adminApp.close();
     await app.close();
     assert.ok(sourceApp);
