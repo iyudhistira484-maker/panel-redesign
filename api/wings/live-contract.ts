@@ -1,3 +1,4 @@
+import { reviewedHttpEggs } from "../eggs/reviewed-workload";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { WingsSocket } from "./socket";
@@ -290,6 +291,73 @@ async function main() {
     assert.equal((await remote(`servers/${uuid}`)).statusCode, 404);
     const after = await remote("servers?page=0&per_page=50");
     assert.deepEqual(after.json().data, []);
+    for (const [index, document] of reviewedHttpEggs.entries()) {
+      const eggId = await add("eggs", { nestId, document });
+      const attachment = await admin("GET", `eggs/${eggId}/document`);
+      assert.equal(attachment.statusCode, 200);
+      assert.equal(attachment.body, document);
+      const port = 25611 + index;
+      const allocationId = await add("allocations", {
+        nodeId,
+        ip: "127.0.0.1",
+        port,
+      });
+      const serverId = await add("servers", {
+        name: `Reviewed HTTP ${index + 1}`,
+        nodeId,
+        eggId,
+        allocationId,
+        ownerId: id,
+      });
+      const provision = await admin("POST", `servers/${serverId}/provision`, {
+        confirm: true,
+      });
+      assert.equal(provision.statusCode, 202, provision.body);
+      await until(`HTTP egg ${index + 1} installation`, async () => {
+        const [record] = await rows<{ phase: string }>(
+          pool,
+          "SELECT phase FROM wings_provisions WHERE server_id=?",
+          [serverId],
+        );
+        assert.notEqual(record?.phase, "install_failed");
+        return record?.phase === "installed";
+      });
+      const start = await admin("POST", `servers/${serverId}/power`, {
+        confirm: true,
+        action: "start",
+      });
+      assert.equal(start.statusCode, 202, start.body);
+      await until(`HTTP egg ${index + 1} response`, async () => {
+        try {
+          const { stdout } = await docker(
+            "docker",
+            ["exec", serverId, "wget", "-qO-", `http://127.0.0.1:${port}/`],
+            { timeout: 2000 },
+          );
+          return stdout.trim() === "RELAY_REVIEWED_EGG_HTTP";
+        } catch {
+          return false;
+        }
+      });
+      assert.equal(
+        (
+          await admin("POST", `servers/${serverId}/power`, {
+            confirm: true,
+            action: "stop",
+          })
+        ).statusCode,
+        202,
+      );
+      await until(
+        `HTTP egg ${index + 1} offline`,
+        async () => (await client.state(serverId)) === "offline",
+      );
+      assert.equal(
+        (await admin("POST", `servers/${serverId}/delete`, { confirm: true }))
+          .statusCode,
+        202,
+      );
+    }
     console.log(
       "Real Wings verified via admin: create, install, start, stop, reinstall and delete",
     );

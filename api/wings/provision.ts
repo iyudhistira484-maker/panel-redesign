@@ -1,3 +1,4 @@
+import { reviewedHttpEggs, reviewedWorkload } from "../eggs/reviewed-workload";
 import { WingsSocket, SocketError } from "./socket";
 import { timingSafeEqual } from "node:crypto";
 import type { Pool } from "mysql2/promise";
@@ -13,7 +14,7 @@ import {
 import { lifecycleFixture } from "./lifecycle-fixture";
 import type { WorkloadProvider } from "./remote";
 
-// Exact allowlisted document. Imported scripts and images are NEVER executed in this slice.
+// Default shell fixture; additional reviewed documents are exact-byte staging allowlists.
 export const disposableEgg = JSON.stringify({
   meta: { version: "PTDL_v2" },
   name: "Relay Disposable Shell",
@@ -81,8 +82,12 @@ export function createProvisioner(
         [id],
       )
     )[0];
+  const approvedDocuments = [disposableEgg, ...reviewedHttpEggs].map((text) =>
+    Buffer.from(text),
+  );
   const eligible = (s: ServerRow) =>
-    fromNode(s) && s.document.equals(Buffer.from(disposableEgg));
+    fromNode(s) &&
+    approvedDocuments.some((document) => s.document.equals(document));
   async function installStatus(
     server: ServerRow,
     result: { successful: boolean; reinstall: boolean },
@@ -110,8 +115,16 @@ export function createProvisioner(
       );
     });
   }
-  const workload = (s: ServerRow) =>
-    lifecycleFixture((result) => installStatus(s, result), s);
+  const workload = (s: ServerRow) => {
+    const installed: ReturnType<typeof lifecycleFixture>["installed"] = (
+      result,
+    ) => installStatus(s, result);
+    if (s.document.equals(approvedDocuments[0]))
+      return lifecycleFixture(installed, s);
+    const reviewed = reviewedWorkload(s.document, s, installed);
+    if (!reviewed) throw new ProvisionError(422, "egg_not_approved");
+    return reviewed;
+  };
   const provider: WorkloadProvider = {
     lookup: async (id) => {
       const s = await load(pool, id);
@@ -139,8 +152,8 @@ export function createProvisioner(
       )
         return { data: [], total: 0 };
       const scoped =
-        "s.node_id=? AND p.phase IN ('installed','transferring') AND e.document=?";
-      const args = [registered.id, Buffer.from(disposableEgg)];
+        "s.node_id=? AND p.phase IN ('installed','transferring') AND e.document IN (?,?,?)";
+      const args = [registered.id, ...approvedDocuments];
       const total = (
         await rows<{ total: number }>(
           pool,

@@ -68,6 +68,12 @@ cat <<'DOCKERFILE' | docker build --tag relay-wings-contract-workload:ci -
 FROM alpine:3.22.2
 ENTRYPOINT ["/bin/sh", "/home/container/relay-start.sh"]
 DOCKERFILE
+if [[ "$harness" == api/wings/live-contract.ts ]]; then
+  cat <<'DOCKERFILE' | docker build --tag relay-wings-contract-http:ci -
+FROM alpine:3.22.2
+ENTRYPOINT ["/bin/sh", "-c", "exec /bin/sh -c \"$STARTUP\""]
+DOCKERFILE
+fi
 if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then
   for key in SERVER EGG OWNER NEST; do
     export "RELAY_ADOPTION_${key}_UUID=$(cat /proc/sys/kernel/random/uuid)"
