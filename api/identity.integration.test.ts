@@ -572,7 +572,32 @@ test(
       const reverse = await ledger.reserve(serverId, nodeId, allocationId);
       assert.ok(reverse);
       assert.equal(await ledger.claim(reverse), true);
-      assert.equal(await ledger.settle(reverse, { kind: "ambiguous" }), true);
+      const recoveredPool = stagingPool();
+      try {
+        const recovered = transferLedger(recoveredPool);
+        assert.equal(await recovered.expireUnconfirmedDispatches(), 0);
+        await pool.execute(
+          "UPDATE wings_transfers SET dispatched_at=UTC_TIMESTAMP(3)-INTERVAL 6 MINUTE WHERE id=?",
+          [reverse],
+        );
+        assert.equal(await recovered.expireUnconfirmedDispatches(), 1);
+        assert.equal(await recovered.expireUnconfirmedDispatches(), 0);
+        assert.equal(await recovered.claim(reverse), false);
+        assert.equal(
+          await recovered.reportDestination(serverId, nodeId),
+          false,
+        );
+        assert.deepEqual(
+          await rows(
+            recoveredPool,
+            "SELECT phase FROM wings_transfers WHERE id=?",
+            [reverse],
+          ),
+          [{ phase: "uncertain" }],
+        );
+      } finally {
+        await recoveredPool.end();
+      }
       assert.equal(
         await ledger.settle(reverse, { kind: "not_dispatched" }),
         false,

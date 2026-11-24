@@ -93,6 +93,13 @@ export function transferLedger(pool: Pool) {
       );
       return result.affectedRows === 1;
     },
+    // One bounded pass; no remote calls, redispatch or reservation release.
+    async expireUnconfirmedDispatches() {
+      const [result] = await pool.execute<import("mysql2").ResultSetHeader>(
+        "UPDATE wings_transfers SET phase='uncertain' WHERE phase='reserved' AND dispatched_at<=UTC_TIMESTAMP(3)-INTERVAL 5 MINUTE AND destination_reported_at IS NULL ORDER BY dispatched_at,id LIMIT 100",
+      );
+      return result.affectedRows;
+    },
     async reportDestination(server: string, node: string) {
       const [result] = await pool.execute<import("mysql2").ResultSetHeader>(
         "UPDATE wings_transfers SET destination_reported_at=UTC_TIMESTAMP(3) WHERE active_server=? AND target_node_id=? AND phase='reserved' AND dispatched_at IS NOT NULL AND destination_reported_at IS NULL",
