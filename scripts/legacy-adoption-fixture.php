@@ -81,11 +81,19 @@ SCRIPT,
     $copy['uuid'] = getenv('RELAY_ADOPTION_SECOND_EGG_UUID');
     $copy['name'] = 'Second adoption fixture';
     $otherEgg = DB::table('eggs')->insertGetId($copy);
-    $otherAllocation = DB::table('allocations')->insertGetId(['node_id' => $node, 'ip' => '127.0.0.1', 'port' => 25611]);
+    $secondNode = DB::table('nodes')->insertGetId([
+        'uuid' => '33113cc5-78fb-4cd0-881b-326c3888b38b', 'public' => 1,
+        'name' => 'Second adoption node', 'location_id' => $location, 'fqdn' => '127.0.0.1',
+        'scheme' => 'http', 'memory' => 1024, 'disk' => 1024, 'daemonListen' => 18081,
+        'daemon_token_id' => getenv('RELAY_SECOND_NODE_TOKEN_ID'),
+        'daemon_token' => $app->make('encrypter')->encrypt(getenv('RELAY_SECOND_NODE_TOKEN')),
+    ]);
+    $otherAllocation = DB::table('allocations')->insertGetId(['node_id' => $secondNode, 'ip' => '127.0.0.1', 'port' => 25611]);
     $other = (array) DB::table('servers')->where('id', $server)->first();
     unset($other['id']);
     $other['uuid'] = getenv('RELAY_ADOPTION_SECOND_UUID');
     $other['uuidShort'] = substr($other['uuid'], 0, 8);
+    $other['node_id'] = $secondNode;
     $other['egg_id'] = $otherEgg;
     $other['allocation_id'] = $otherAllocation;
     $otherServer = DB::table('servers')->insertGetId($other);

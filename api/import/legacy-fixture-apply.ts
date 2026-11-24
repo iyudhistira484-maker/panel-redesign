@@ -7,7 +7,7 @@ import { disposableEgg } from "../wings/provision";
 import { legacyPreflight } from "./legacy-preflight";
 
 type Credentials = {
-  node: WingsNode;
+  nodes: ReadonlyMap<string, WingsNode>;
   key: Buffer;
   pepper: Buffer;
   allocations: ReadonlyMap<string, string>;
@@ -30,7 +30,7 @@ export async function applyLegacyFixture(
     throw new Error("Disposable staging fixture only");
   const report = legacyPreflight(manifest);
   const { key, pepper, allocations } = credentials;
-  const node = validateNode(credentials.node);
+
   const batch = report.servers
     .map(({ uuid, ownerId, nodeId, eggId, nestId, port }) => {
       if (
@@ -45,13 +45,26 @@ export async function applyLegacyFixture(
       const allocationId = allocations.get(uuid);
       if (!allocationId || !UUID_V4.test(allocationId))
         throw new Error("Missing fixture allocation map");
-      return { uuid, ownerId, nodeId, eggId, nestId, port, allocationId };
+      const configured = credentials.nodes.get(nodeId);
+      if (!configured) throw new Error("Missing fixture node map");
+      const node = validateNode(configured);
+      return {
+        uuid,
+        ownerId,
+        nodeId,
+        eggId,
+        nestId,
+        port,
+        allocationId,
+        node,
+        token: Buffer.from(node.token),
+      };
     })
     .sort((a, b) => a.port - b.port);
   const [first, second] = batch;
   if (
     batch.length !== 2 ||
-    report.counts.nodes !== 1 ||
+    report.counts.nodes !== 2 ||
     report.counts.users !== 1 ||
     report.counts.nests !== 1 ||
     report.counts.eggs !== 2 ||
@@ -59,11 +72,13 @@ export async function applyLegacyFixture(
     report.counts.subusers !== 0 ||
     first.port !== 25610 ||
     second.port !== 25611 ||
-    node.origin !== "http://127.0.0.1:18080"
+    first.node.origin !== "http://127.0.0.1:18080" ||
+    second.node.origin !== "http://127.0.0.1:18081" ||
+    first.nodeId === second.nodeId
   )
     throw new Error("Only the reviewed two-server fixture is supported");
   const crypto = cryptoContext(key, pepper, "node-token");
-  const token = Buffer.from(node.token);
+
   return transaction(pool, async (db) => {
     const [database] = await rows<{ name: string }>(
       db,
@@ -87,6 +102,8 @@ export async function applyLegacyFixture(
         nestId,
         port,
         allocationId,
+        node,
+        token,
       } of batch) {
         const [matched] = await rows<{ cipher: Buffer }>(
           db,
@@ -119,7 +136,7 @@ export async function applyLegacyFixture(
       }
       return { applied: false, counts: report.counts };
     }
-    const { ownerId, nestId, nodeId } = first;
+    const { ownerId, nestId } = first;
     await db.execute(
       "INSERT INTO users (id,email,display_name,password_hash) VALUES (?,'adoption@example.test','Fixture','disabled')",
       [ownerId],
@@ -128,11 +145,19 @@ export async function applyLegacyFixture(
       "INSERT INTO nests (id,name) VALUES (?,'Adoption fixture')",
       [nestId],
     );
-    await db.execute(
-      "INSERT INTO nodes (id,name,origin,token_id,token_cipher) VALUES (?,'Existing node',?,?,?)",
-      [nodeId, node.origin, node.tokenId, crypto.seal(token, nodeId)],
-    );
-    for (const { uuid, eggId, port, allocationId } of batch) {
+    for (const {
+      uuid,
+      eggId,
+      port,
+      allocationId,
+      nodeId,
+      node,
+      token,
+    } of batch) {
+      await db.execute(
+        "INSERT INTO nodes (id,name,origin,token_id,token_cipher) VALUES (?,'Existing node',?,?,?)",
+        [nodeId, node.origin, node.tokenId, crypto.seal(token, nodeId)],
+      );
       await db.execute(
         "INSERT INTO eggs (id,nest_id,name,version,document) VALUES (?,?,?,'PTDL_v2',?)",
         [eggId, nestId, `Fixture ${port}`, document],

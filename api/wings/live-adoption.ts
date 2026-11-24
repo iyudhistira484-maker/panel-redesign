@@ -60,6 +60,21 @@ async function main() {
     allocation = randomUUID();
   const second = actual ? legacyId("SECOND") : undefined;
   const secondEgg = actual ? legacyId("SECOND_EGG") : undefined;
+  const secondNodeId = "33113cc5-78fb-4cd0-881b-326c3888b38b";
+  const secondNode = {
+    origin: "http://127.0.0.1:18081",
+    tokenId: process.env.RELAY_SECOND_NODE_TOKEN_ID ?? "",
+    token: process.env.RELAY_SECOND_NODE_TOKEN ?? "",
+  };
+  const secondConfig = process.env.RELAY_ADOPTION_SECOND_CONFIG;
+  if (
+    actual &&
+    secondConfig !== config.replace("/config/config.yml", "/config2/config.yml")
+  )
+    throw new Error("Invalid second fixture config");
+  const secondClient = actual ? new WingsClient(secondNode) : undefined;
+  const clientFor = (id: string) =>
+    id === second && secondClient ? secondClient : client;
   const secondAllocation = randomUUID();
   const workloadIds = second ? [uuid, second] : [uuid];
   const name = "Existing staging workload";
@@ -92,17 +107,20 @@ async function main() {
     },
     { prefix: "/api/remote" },
   );
-  const relay = await createApp({
-    pool,
-    origin: "https://relay.example.test",
-    key: randomBytes(32),
-    pepper,
-    catalogNodeKey: key,
-    allowedCatalogNodeOrigins: [node.origin],
-    wingsTestNode: node,
-    enableDisposableProvisioning: true,
-    deliverReset: async () => {},
-  });
+  const relayFor = (configured: typeof node) =>
+    createApp({
+      pool,
+      origin: "https://relay.example.test",
+      key: randomBytes(32),
+      pepper,
+      catalogNodeKey: key,
+      allowedCatalogNodeOrigins: [configured.origin],
+      wingsTestNode: configured,
+      enableDisposableProvisioning: true,
+      deliverReset: async () => {},
+    });
+  const relay = await relayFor(node);
+  const relay2 = actual ? await relayFor(secondNode) : undefined;
   const docker = promisify(execFile);
   const legacyStatus = async (which = "first") =>
     JSON.parse(
@@ -130,30 +148,36 @@ async function main() {
       )
     ).stdout.trim();
   const restart = async () => {
-    await docker(
-      "docker",
-      ["restart", "--time", "10", "relay-wings-contract"],
-      { timeout: 20000 },
-    );
+    for (const container of actual
+      ? ["relay-wings-contract", "relay-wings-adoption-second"]
+      : ["relay-wings-contract"]) {
+      await docker("docker", ["restart", "--time", "10", container], {
+        timeout: 20000,
+      });
+    }
     await until("running workload rediscovery", async () =>
-      (await Promise.all(workloadIds.map((id) => client.state(id)))).every(
-        (state) => state === "running",
-      ),
+      (
+        await Promise.all(workloadIds.map((id) => clientFor(id).state(id)))
+      ).every((state) => state === "running"),
     );
   };
   const checksum = async (id = uuid) =>
     createHash("sha256")
-      .update(await client.readFixtureFile(id, "relay-start.sh"))
+      .update(await clientFor(id).readFixtureFile(id, "relay-start.sh"))
       .digest("hex");
   try {
     await migrate(pool, "up");
     if (!actual) await legacy.listen({ host: "127.0.0.1", port: 13202 });
     await relay.listen({ host: "127.0.0.1", port: 13200 });
-    await until("source Wings health", async () =>
-      Boolean(await client.health()),
+    if (relay2) await relay2.listen({ host: "127.0.0.1", port: 13201 });
+    await until(
+      "source Wings health",
+      async () =>
+        Boolean(await client.health()) &&
+        (!secondClient || Boolean(await secondClient.health())),
     );
     for (const [index, id] of workloadIds.entries()) {
-      if (actual) await client.reinstall(id);
+      if (actual) await clientFor(id).reinstall(id);
       else await client.create(id);
       await until("legacy fixture installation", async () => {
         if (!actual) return ready;
@@ -182,7 +206,7 @@ async function main() {
       assert.deepEqual(report.counts, {
         servers: 2,
         users: 1,
-        nodes: 1,
+        nodes: 2,
         nests: 1,
         eggs: 2,
         allocations: 2,
@@ -193,25 +217,28 @@ async function main() {
         {
           uuid: second,
           ownerId: owner,
-          nodeId,
+          nodeId: secondNodeId,
           eggId: secondEgg,
           nestId: nest,
           port: 25611,
         },
       ]);
     }
-    for (const id of workloadIds) await client.power(id, "start");
+    for (const id of workloadIds) await clientFor(id).power(id, "start");
     await until("source running", async () =>
-      (await Promise.all(workloadIds.map((id) => client.state(id)))).every(
-        (state) => state === "running",
-      ),
+      (
+        await Promise.all(workloadIds.map((id) => clientFor(id).state(id)))
+      ).every((state) => state === "running"),
     );
     const before = await Promise.all(workloadIds.map(inspect)),
       hash = await Promise.all(workloadIds.map(checksum));
     if (actual) {
       assert.ok(second);
       const credentials = {
-        node,
+        nodes: new Map([
+          [nodeId, node],
+          [secondNodeId, secondNode],
+        ]),
         key,
         pepper,
         allocations: new Map([
@@ -278,6 +305,7 @@ async function main() {
                 "allocations",
                 "servers",
                 "wings_provisions",
+                "nodes",
               ].includes(table)
                 ? 2
                 : 1,
@@ -322,16 +350,57 @@ async function main() {
         [uuid],
       );
     }
-    const original = await readFile(config, "utf8");
-    assert.equal(original.split("remote: http://127.0.0.1:13202").length, 2);
-    await copyFile(config, `${config}.backup`);
-    await writeFile(
-      config,
-      original.replace(
-        "remote: http://127.0.0.1:13202",
-        "remote: http://127.0.0.1:13200",
-      ),
-    );
+    const setRemote = async (file: string, port: number) => {
+      const original = await readFile(file, "utf8");
+      assert.equal(original.split("remote: http://127.0.0.1:13202").length, 2);
+      await copyFile(file, `${file}.backup`);
+      await writeFile(
+        file,
+        original.replace(
+          "remote: http://127.0.0.1:13202",
+          `remote: http://127.0.0.1:${port}`,
+        ),
+      );
+    };
+    await setRemote(config, 13200);
+    if (actual && secondConfig && relay2) {
+      await setRemote(secondConfig, 13201);
+      const auth = (n: typeof node) => ({
+        authorization: `Bearer ${n.tokenId}.${n.token}`,
+      });
+      for (const [app, own, other, server, foreign] of [
+        [relay, node, secondNode, uuid, second],
+        [relay2, secondNode, node, second, uuid],
+      ] as const) {
+        const list = await app.inject({
+          url: "/api/remote/servers?page=0",
+          headers: auth(own),
+        });
+        assert.equal(list.statusCode, 200);
+        assert.deepEqual(
+          list.json().data.map((item: { uuid: string }) => item.uuid),
+          [server],
+        );
+        assert.equal(
+          (
+            await app.inject({
+              url: `/api/remote/servers/${foreign}`,
+              headers: auth(own),
+            })
+          ).statusCode,
+          404,
+        );
+        assert.equal(
+          (
+            await app.inject({
+              url: `/api/remote/servers/${server}`,
+              headers: auth(other),
+            })
+          ).statusCode,
+          401,
+        );
+      }
+    }
     const calls = legacyCalls;
     await restart();
     assert.equal(legacyCalls, calls);
@@ -350,6 +419,8 @@ async function main() {
       [],
     );
     await copyFile(`${config}.backup`, config);
+    if (actual && secondConfig)
+      await copyFile(`${secondConfig}.backup`, secondConfig);
     await restart();
     if (actual)
       assert.deepEqual(
@@ -361,18 +432,19 @@ async function main() {
     assert.deepEqual(await Promise.all(workloadIds.map(checksum)), hash);
     if (!actual) assert.equal(installed, 1);
     for (const id of workloadIds) {
-      await client.power(id, "stop");
+      await clientFor(id).power(id, "stop");
       await until(
         "fixture stop",
-        async () => (await client.state(id)) === "offline",
+        async () => (await clientFor(id).state(id)) === "offline",
       );
-      await client.remove(id);
+      await clientFor(id).remove(id);
     }
     console.log(
       "Remote cutover and rollback preserved existing UUID, file and running container",
     );
   } finally {
     await relay.close();
+    await relay2?.close();
     await legacy.close();
     await pool.end();
   }
