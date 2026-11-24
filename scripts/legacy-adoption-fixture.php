@@ -50,6 +50,12 @@ SCRIPT,
         'uuid' => getenv('RELAY_ADOPTION_OWNER_UUID'), 'username' => 'fixture',
         'email' => 'adoption@example.test', 'password' => 'disabled', 'use_totp' => 0,
     ]);
+    foreach (['collaborator', 'outsider'] as $role) {
+        $users[$role] = DB::table('users')->insertGetId([
+            'uuid' => getenv('RELAY_ADOPTION_' . strtoupper($role) . '_UUID'), 'username' => $role,
+            'email' => $role . '@example.test', 'password' => 'disabled', 'use_totp' => 0,
+        ]);
+    }
     $allocation = DB::table('allocations')->insertGetId(['node_id' => $node, 'ip' => '127.0.0.1', 'port' => 25610]);
     $server = DB::table('servers')->insertGetId([
         'uuid' => $uuid, 'uuidShort' => substr($uuid, 0, 8), 'node_id' => $node,
@@ -58,6 +64,7 @@ SCRIPT,
         'allocation_id' => $allocation, 'nest_id' => $nest, 'egg_id' => $egg, 'startup' => $startup, 'image' => $image,
     ]);
     DB::table('allocations')->where('id', $allocation)->update(['server_id' => $server]);
+    DB::table('subusers')->insert(['user_id' => $users['collaborator'], 'server_id' => $server, 'permissions' => json_encode(['activity.read', 'control.start'], JSON_THROW_ON_ERROR)]);
     $copy = (array) DB::table('eggs')->where('id', $egg)->first();
     unset($copy['id']);
     $copy['uuid'] = getenv('RELAY_ADOPTION_SECOND_EGG_UUID');

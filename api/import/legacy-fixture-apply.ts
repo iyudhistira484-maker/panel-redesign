@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { timingSafeEqual } from "node:crypto";
 import type { Pool } from "mysql2/promise";
 import { rows, transaction } from "../db";
@@ -11,11 +12,13 @@ type Credentials = {
   key: Buffer;
   pepper: Buffer;
   allocations: ReadonlyMap<string, string>;
+  collaborator: string;
+  outsider: string;
 };
 const name = "Existing staging workload";
 const document = Buffer.from(disposableEgg);
 
-/** Two-row allowlisted adoption fixture. No source database connection, SQL dump or account migration. */
+/** Two-row allowlisted adoption fixture. Uses disabled fixture identities, never legacy credentials. */
 export async function applyLegacyFixture(
   pool: Pool,
   manifest: unknown,
@@ -65,11 +68,11 @@ export async function applyLegacyFixture(
   if (
     batch.length !== 2 ||
     report.counts.nodes !== 2 ||
-    report.counts.users !== 1 ||
+    report.counts.users !== 3 ||
     report.counts.nests !== 1 ||
     report.counts.eggs !== 2 ||
     report.counts.allocations !== 2 ||
-    report.counts.subusers !== 0 ||
+    report.counts.subusers !== 1 ||
     first.port !== 25610 ||
     second.port !== 25611 ||
     first.node.origin !== "http://127.0.0.1:18080" ||
@@ -77,6 +80,28 @@ export async function applyLegacyFixture(
     first.nodeId === second.nodeId
   )
     throw new Error("Only the reviewed two-server fixture is supported");
+  const accounts = [
+    first.ownerId,
+    credentials.collaborator,
+    credentials.outsider,
+  ];
+  const grant = report.grants[0];
+  if (
+    accounts.some((id) => !UUID_V4.test(id)) ||
+    new Set(accounts).size !== 3 ||
+    second.ownerId !== first.ownerId ||
+    !isDeepStrictEqual(grant, {
+      userId: credentials.collaborator,
+      serverId: first.uuid,
+      permissions: ["activity.read", "control.start"],
+    })
+  )
+    throw new Error("Invalid fixture account or grant mapping");
+  const emails = [
+    "adoption@example.test",
+    "collaborator@example.test",
+    "outsider@example.test",
+  ];
   const crypto = cryptoContext(key, pepper, "node-token");
 
   return transaction(pool, async (db) => {
@@ -134,13 +159,45 @@ export async function applyLegacyFixture(
         if (saved.length !== token.length || !timingSafeEqual(saved, token))
           throw new Error("Existing Relay fixture token differs");
       }
+      for (const [i, id] of accounts.entries()) {
+        const matched = await rows(
+          db,
+          "SELECT id FROM users WHERE id=? AND email=? AND password_hash='disabled' AND is_admin=0 FOR UPDATE",
+          [id, emails[i]],
+        );
+        if (matched.length !== 1)
+          throw new Error("Existing Relay account conflicts with import");
+      }
+      const savedGrants = await rows<{
+        userId: string;
+        serverId: string;
+        permissions: unknown;
+      }>(
+        db,
+        "SELECT user_id AS userId,server_id AS serverId,permissions FROM server_grants WHERE server_id IN (?,?) FOR UPDATE",
+        [first.uuid, second.uuid],
+      );
+      if (
+        !isDeepStrictEqual(
+          savedGrants.map((row) => ({
+            ...row,
+            permissions:
+              typeof row.permissions === "string"
+                ? JSON.parse(row.permissions)
+                : row.permissions,
+          })),
+          [grant],
+        )
+      )
+        throw new Error("Existing Relay grants conflict with import");
       return { applied: false, counts: report.counts };
     }
     const { ownerId, nestId } = first;
-    await db.execute(
-      "INSERT INTO users (id,email,display_name,password_hash) VALUES (?,'adoption@example.test','Fixture','disabled')",
-      [ownerId],
-    );
+    for (const [i, id] of accounts.entries())
+      await db.execute(
+        "INSERT INTO users (id,email,display_name,password_hash) VALUES (?,?,'Fixture','disabled')",
+        [id, emails[i]],
+      );
     await db.execute(
       "INSERT INTO nests (id,name) VALUES (?,'Adoption fixture')",
       [nestId],
@@ -175,6 +232,10 @@ export async function applyLegacyFixture(
         [uuid],
       );
     }
+    await db.execute(
+      "INSERT INTO server_grants (user_id,server_id,permissions) VALUES (?,?,?)",
+      [credentials.collaborator, first.uuid, JSON.stringify(grant.permissions)],
+    );
     return { applied: true, counts: report.counts };
   });
 }

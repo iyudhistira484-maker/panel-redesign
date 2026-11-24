@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import Fastify from "fastify";
 import { createApp } from "../app";
 import { rows, stagingPool } from "../db";
+import { canServer } from "../policy";
 import { migrate } from "../migrate";
 import { cryptoContext } from "../security";
 import { WingsClient } from "./client";
@@ -201,12 +202,12 @@ async function main() {
       const { report } = snapshot;
       assert.deepEqual(report.counts, {
         servers: 2,
-        users: 1,
+        users: 3,
         nodes: 2,
         nests: 1,
         eggs: 2,
         allocations: 2,
-        subusers: 0,
+        subusers: 1,
       });
       assert.deepEqual(report.servers, [
         { uuid, ownerId: owner, nodeId, eggId: egg, nestId: nest, port: 25610 },
@@ -230,7 +231,12 @@ async function main() {
       hash = await Promise.all(workloadIds.map(checksum));
     if (actual) {
       assert.ok(second);
+      const collaborator = process.env.RELAY_ADOPTION_COLLABORATOR_UUID;
+      const outsider = process.env.RELAY_ADOPTION_OUTSIDER_UUID;
+      assert.ok(collaborator && outsider);
       const credentials = {
+        collaborator,
+        outsider,
         nodes: new Map([
           [nodeId, node],
           [secondNodeId, secondNode],
@@ -260,6 +266,7 @@ async function main() {
         "allocations",
         "servers",
         "wings_provisions",
+        "server_grants",
       ])
         assert.deepEqual(
           await rows(pool, `SELECT COUNT(*) AS total FROM ${table}`),
@@ -271,6 +278,44 @@ async function main() {
       );
       assert.equal(
         (await applyLegacyFixture(pool, manifest, credentials)).applied,
+        false,
+      );
+      const [saved] = await rows<{
+        user: string;
+        server: string;
+        permissions: string[] | string;
+      }>(
+        pool,
+        "SELECT user_id AS user,server_id AS server,permissions FROM server_grants",
+      );
+      const grant = {
+        ...saved,
+        permissions:
+          typeof saved.permissions === "string"
+            ? JSON.parse(saved.permissions)
+            : saved.permissions,
+      };
+      const actor = {
+        id: collaborator,
+        admin: false,
+        channel: "session" as const,
+      };
+      assert.ok(canServer(actor, { id: uuid, owner }, grant, "control.start"));
+      assert.equal(
+        canServer(actor, { id: uuid, owner }, grant, "control.stop"),
+        false,
+      );
+      assert.equal(
+        canServer(actor, { id: second, owner }, grant, "control.start"),
+        false,
+      );
+      assert.equal(
+        canServer(
+          { ...actor, id: outsider },
+          { id: uuid, owner },
+          grant,
+          "control.start",
+        ),
         false,
       );
       await assert.rejects(
@@ -291,20 +336,18 @@ async function main() {
         "allocations",
         "servers",
         "wings_provisions",
+        "server_grants",
       ])
         assert.deepEqual(
           await rows(pool, `SELECT COUNT(*) AS total FROM ${table}`),
           [
             {
-              total: [
-                "eggs",
-                "allocations",
-                "servers",
-                "wings_provisions",
-                "nodes",
-              ].includes(table)
-                ? 2
-                : 1,
+              total:
+                table === "users"
+                  ? 3
+                  : ["nests", "server_grants"].includes(table)
+                    ? 1
+                    : 2,
             },
           ],
         );
