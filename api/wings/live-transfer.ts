@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import assert from "node:assert/strict";
 import { rows, stagingPool } from "../db";
 import { migrate } from "../migrate";
@@ -9,6 +11,8 @@ import { lifecycleFixture } from "./lifecycle-fixture";
 import { registerRemote } from "./remote";
 import { signTransferCapability } from "./transfer-token";
 
+const digest = (value: string) =>
+  createHash("sha256").update(value).digest("hex");
 const issuer = "http://127.0.0.1:13201";
 async function eventually(label: string, fn: () => boolean | Promise<boolean>) {
   for (let i = 0; i < 45; i++) {
@@ -43,6 +47,39 @@ async function main() {
     "relaytransfertarget",
     process.env.RELAY_TRANSFER_TARGET_TOKEN,
   );
+  if (process.argv[2] === "recover") {
+    const [, , , id, expected] = process.argv;
+    assert.match(expected ?? "", /^[a-f0-9]{64}$/);
+    const pool = stagingPool();
+    try {
+      const ledger = transferLedger(pool);
+      const entry = await ledger.reported(id);
+      assert.ok(entry);
+      assert.equal(await ledger.claim(id), false);
+      const to = new WingsClient(target),
+        from = new WingsClient(source);
+      assert.equal(await to.state(entry.server_id), "offline");
+      assert.equal(
+        digest(await to.readFixtureFile(entry.server_id, "relay-start.sh")),
+        expected,
+      );
+      assert.equal(
+        digest(await from.readFixtureFile(entry.server_id, "relay-start.sh")),
+        expected,
+      );
+      assert.equal(
+        await ledger.settle(id, {
+          kind: "verified_destination",
+          node: entry.target_node_id,
+          server: entry.server_id,
+        }),
+        true,
+      );
+    } finally {
+      await pool.end();
+    }
+    return;
+  }
   let installed: boolean | undefined;
   let completion: boolean | undefined;
   let failure = false;
@@ -161,8 +198,6 @@ async function main() {
     await eventually("source installation", () => installed !== undefined);
     assert.equal(installed, true);
     assert.equal(await from.state(fixture.uuid), "offline");
-    const digest = (value: string) =>
-      createHash("sha256").update(value).digest("hex");
     const original = await from.readFixtureFile(fixture.uuid, "relay-start.sh");
     assert.ok(original.includes("RELAY_CONTRACT_READY"));
     const forged = await app.inject({
@@ -199,22 +234,11 @@ async function main() {
     );
     assert.equal(failure, false);
     assert.equal(completion, true);
-    assert.equal(await to.state(fixture.uuid), "offline");
-    assert.equal(
-      digest(await to.readFixtureFile(fixture.uuid, "relay-start.sh")),
-      digest(original),
-    );
-    assert.equal(
-      digest(await from.readFixtureFile(fixture.uuid, "relay-start.sh")),
-      digest(original),
-    );
-    assert.equal(
-      await transferLedger(pool).settle(transferId, {
-        kind: "verified_destination",
-        node: targetId,
-        server: fixture.uuid,
-      }),
-      true,
+    await app.close();
+    await promisify(execFile)(
+      "./node_modules/.bin/tsx",
+      ["api/wings/live-transfer.ts", "recover", transferId, digest(original)],
+      { timeout: 15000 },
     );
     assert.deepEqual(
       await rows(pool, "SELECT node_id,allocation_id FROM servers WHERE id=?", [

@@ -115,6 +115,14 @@ export function transferLedger(pool: Pool) {
       );
       return entry;
     },
+    async reported(id: string) {
+      const [entry] = await rows<Transfer>(
+        pool,
+        "SELECT * FROM wings_transfers WHERE id=? AND phase='reserved' AND dispatched_at IS NOT NULL AND destination_reported_at IS NOT NULL",
+        [id],
+      );
+      return entry;
+    },
     async settle(
       id: string,
       result:
