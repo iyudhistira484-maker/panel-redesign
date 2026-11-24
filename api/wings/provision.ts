@@ -95,11 +95,15 @@ export function createProvisioner(
         [id],
       )
     )[0];
+  const experimentalGitea =
+    process.env.RELAY_EXPERIMENTAL_GITEA === "1" &&
+    process.env.RELAY_DISPOSABLE_WINGS_CI === "1" &&
+    process.env.RUNNER_ENVIRONMENT === "github-hosted";
   const approvedDocuments = [
     disposableEgg,
     ...reviewedHttpEggs,
     mumbleEgg,
-    giteaEgg,
+    ...(experimentalGitea ? [giteaEgg] : []),
   ].map((text) => Buffer.from(text));
   const eligible = (s: ServerRow) =>
     fromNode(s) &&
@@ -139,7 +143,7 @@ export function createProvisioner(
       return lifecycleFixture(installed, s);
     if (s.document.equals(Buffer.from(mumbleEgg)))
       return upstreamWorkload(installed, s, s.mumbleMaxUsers);
-    if (s.document.equals(Buffer.from(giteaEgg)))
+    if (experimentalGitea && s.document.equals(Buffer.from(giteaEgg)))
       return giteaWorkload(installed, s);
     const reviewed = reviewedWorkload(s.document, s, installed, s.fixtureMode);
     if (!reviewed) throw new ProvisionError(422, "egg_not_approved");

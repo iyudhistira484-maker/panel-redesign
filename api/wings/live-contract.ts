@@ -512,105 +512,115 @@ async function main() {
         .statusCode,
       202,
     );
-    testClientAddress = "127.0.0.3";
-    const gitEgg = await add("eggs", { nestId, document: giteaEgg });
-    assert.equal(
-      (await admin("GET", `eggs/${gitEgg}/document`)).body,
-      giteaEgg,
-    );
-    const gitPort = 25615;
-    const gitAllocation = await add("allocations", {
-      nodeId,
-      ip: "127.0.0.1",
-      port: gitPort,
-    });
-    const gitDraft = {
-      name: "Upstream Gitea",
-      nodeId,
-      eggId: gitEgg,
-      allocationId: gitAllocation,
-      ownerId: id,
-    };
-    assert.equal(
-      (await admin("POST", "servers", { ...gitDraft, mumbleMaxUsers: "37" }))
-        .statusCode,
-      422,
-    );
-    const gitServer = await add("servers", gitDraft);
-    const gitProvision = await admin("POST", `servers/${gitServer}/provision`, {
-      confirm: true,
-    });
-    assert.equal(gitProvision.statusCode, 202, gitProvision.body);
-    await until(
-      "upstream Gitea install",
-      async () => {
-        const [record] = await rows<{ phase: string }>(
-          pool,
-          "SELECT phase FROM wings_provisions WHERE server_id=?",
-          [gitServer],
-        );
-        assert.notEqual(record?.phase, "install_failed");
-        return record?.phase === "installed";
-      },
-      160,
-    );
-    assert.equal(
-      (
-        await admin("POST", `servers/${gitServer}/power`, {
+    if (process.env.RELAY_EXPERIMENTAL_GITEA === "1") {
+      testClientAddress = "127.0.0.3";
+      const gitEgg = await add("eggs", { nestId, document: giteaEgg });
+      assert.equal(
+        (await admin("GET", `eggs/${gitEgg}/document`)).body,
+        giteaEgg,
+      );
+      const gitPort = 25615;
+      const gitAllocation = await add("allocations", {
+        nodeId,
+        ip: "127.0.0.1",
+        port: gitPort,
+      });
+      const gitDraft = {
+        name: "Upstream Gitea",
+        nodeId,
+        eggId: gitEgg,
+        allocationId: gitAllocation,
+        ownerId: id,
+      };
+      assert.equal(
+        (await admin("POST", "servers", { ...gitDraft, mumbleMaxUsers: "37" }))
+          .statusCode,
+        422,
+      );
+      const gitServer = await add("servers", gitDraft);
+      const gitProvision = await admin(
+        "POST",
+        `servers/${gitServer}/provision`,
+        {
           confirm: true,
-          action: "start",
-        })
-      ).statusCode,
-      202,
-    );
-    try {
+        },
+      );
+      assert.equal(gitProvision.statusCode, 202, gitProvision.body);
       await until(
-        "upstream Gitea listening",
-        async () => (await client.state(gitServer)) === "running",
-        120,
+        "upstream Gitea install",
+        async () => {
+          const [record] = await rows<{ phase: string }>(
+            pool,
+            "SELECT phase FROM wings_provisions WHERE server_id=?",
+            [gitServer],
+          );
+          assert.notEqual(record?.phase, "install_failed");
+          return record?.phase === "installed";
+        },
+        160,
       );
-    } catch (error) {
-      const log = await docker("docker", ["logs", "--tail", "10", gitServer], {
-        timeout: 3000,
-      }).catch(() => ({ stdout: "", stderr: "" }));
-      const text = log.stdout + log.stderr;
-      const hints = [
-        "not found",
-        "Permission denied",
-        "syntax error",
-        "exec format error",
-        "Listen:",
-        "bad interpreter",
-        "failed",
-        "Gitea version",
-        "Invalid",
-        "address already in use",
-        "OOM",
-        "Killed",
-      ].filter((marker) => text.toLowerCase().includes(marker.toLowerCase()));
-      console.log(
-        `::warning::Gitea boot diagnostics: ${hints.join(", ") || "no recognized markers"}`,
+      assert.equal(
+        (
+          await admin("POST", `servers/${gitServer}/power`, {
+            confirm: true,
+            action: "start",
+          })
+        ).statusCode,
+        202,
       );
-      throw error;
+      try {
+        await until(
+          "upstream Gitea listening",
+          async () => (await client.state(gitServer)) === "running",
+          120,
+        );
+      } catch (error) {
+        const log = await docker(
+          "docker",
+          ["logs", "--tail", "10", gitServer],
+          {
+            timeout: 3000,
+          },
+        ).catch(() => ({ stdout: "", stderr: "" }));
+        const text = log.stdout + log.stderr;
+        const hints = [
+          "not found",
+          "Permission denied",
+          "syntax error",
+          "exec format error",
+          "Listen:",
+          "bad interpreter",
+          "failed",
+          "Gitea version",
+          "Invalid",
+          "address already in use",
+          "OOM",
+          "Killed",
+        ].filter((marker) => text.toLowerCase().includes(marker.toLowerCase()));
+        console.log(
+          `::warning::Gitea boot diagnostics: ${hints.join(", ") || "no recognized markers"}`,
+        );
+        throw error;
+      }
+      assert.equal(
+        (
+          await admin("POST", `servers/${gitServer}/power`, {
+            confirm: true,
+            action: "stop",
+          })
+        ).statusCode,
+        202,
+      );
+      await until(
+        "upstream Gitea offline",
+        async () => (await client.state(gitServer)) === "offline",
+      );
+      assert.equal(
+        (await admin("POST", `servers/${gitServer}/delete`, { confirm: true }))
+          .statusCode,
+        202,
+      );
     }
-    assert.equal(
-      (
-        await admin("POST", `servers/${gitServer}/power`, {
-          confirm: true,
-          action: "stop",
-        })
-      ).statusCode,
-      202,
-    );
-    await until(
-      "upstream Gitea offline",
-      async () => (await client.state(gitServer)) === "offline",
-    );
-    assert.equal(
-      (await admin("POST", `servers/${gitServer}/delete`, { confirm: true }))
-        .statusCode,
-      202,
-    );
     console.log(
       "Real Wings verified via admin: create, install, start, stop, reinstall and delete",
     );
