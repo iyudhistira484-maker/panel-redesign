@@ -159,3 +159,10 @@ Job `wings-transfer` kini menguji `reported` dan `missing-report` di runner terp
 ### Upload terpotong setelah Wings tujuan mulai memproses transfer
 
 `wings-transfer (partial-target)` meneruskan potongan awal body multipart melalui proxy loopback ke Wings tujuan asli. Harness menunggu Wings tujuan meminta konfigurasi UUID, menghentikan container Wings sumber, lalu memutus koneksi upstream. Wings tujuan mengirim callback gagal; tes memeriksa bahwa UUID tidak ada di registri tujuan dan direktori volume UUID tidak tertinggal. Relay tetap mengarantina transfer dengan alokasi terkunci dan katalog menunjuk sumber; setelah Wings sumber hidup kembali, checksum file sumber cocok. Skenario ini menguji pemutusan awal stream, bukan arsip besar yang sudah diekstrak sebagian atau seluruh kemungkinan titik kegagalan. [CI 45374365515](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45374365515) lulus tujuh job. Jalankan melalui workflow runner sekali pakai.
+
+### Status dan karantina transfer khusus admin staging
+
+- `GET /api/v1/admin/servers/{id}/transfer`: status transfer aktif, identitas sumber/tujuan, alokasi, dan indikator klaim/laporan. Tidak menyertakan kredensial; `Cache-Control: no-store`; 404 jika tidak ada transfer aktif.
+- `POST /api/v1/admin/servers/{id}/transfer/reconcile` dengan JSON `{"confirm":true}`: hanya mengarantina klaim tanpa laporan yang telah melewati lima menit untuk UUID yang diminta. Menghasilkan `409` jika belum memenuhi syarat. Autentikasi sesi admin dan aturan CSRF katalog tetap berlaku; role dicek lagi dalam transaksi yang sama dengan karantina dan audit `catalog.transfer_quarantined`.
+
+Tidak ada pengiriman, percobaan ulang, pelepasan alokasi, pemindahan katalog, atau cleanup melalui kedua endpoint ini. [CI 45374942303](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45374942303) lulus tujuh job; `RELAY_RUN_MYSQL_TESTS=1 npm run test:identity` memverifikasi kontrak admin pada database staging sekali pakai `relay_test`. Dispatch transfer dari API dan verifikasi otomatis oleh layanan aplikasi masih terbuka.
