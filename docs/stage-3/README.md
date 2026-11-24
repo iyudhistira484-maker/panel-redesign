@@ -248,3 +248,9 @@ Migrasi `008_fixture_mode` menyimpan opsi `fixtureMode` yang hanya menerima `alp
 Harness menguji default `alpha` dan override `beta`, serta penolakan nilai di luar daftar sebelum draft dibuat. HTTP menyajikan `runtime.txt` yang ditulis dari environment dan `settings.json` yang diubah Wings, sementara key lain tetap utuh. Keduanya tetap melalui install, start, stop, dan delete. Dukungan parser dan aturan variabel egg secara umum belum dibuktikan.
 
 [CI 45392536934](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45392536934) lulus sembilan job. Jalankan `npm run test:eggs` untuk unit atau `wings-bootstrap (lifecycle)` untuk verifikasi runtime dan rewrite dengan Wings nyata.
+
+### Impor dan adopsi lintas dua node
+
+Skenario `legacy-panel` kini memakai dua daemon Wings v1.13.5 dengan UUID node, kredensial, port API/SFTP, dan direktori data yang berbeda pada satu Docker Engine CI. Masing-masing memulai satu workload di bawah Panel lama. Apply memetakan setiap UUID node ke kredensial uji terpisah. Konflik saat menulis alokasi server kedua membatalkan seluruh batch, termasuk kedua record node; replay identik tidak menambah data. Pada Relay, dua instans staging dengan database yang sama masing-masing melayani satu node: listing hanya memuat UUID milik node tersebut, permintaan UUID tetangga mendapat 404, dan kredensial node lain ditolak 401. Setelah cutover dan rollback, kedua workload tetap `running` dengan ID, waktu mulai, dan checksum uji tidak berubah.
+
+[CI 45393105819](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45393105819) lulus sembilan job. Ulangi melalui `wings-bootstrap (legacy-panel)` pada runner disposable. Ini bukan deployment multi-node produksi, dukungan dump umum, atau proses impor akun/izin penuh.
