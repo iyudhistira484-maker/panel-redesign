@@ -166,3 +166,11 @@ Job `wings-transfer` kini menguji `reported` dan `missing-report` di runner terp
 - `POST /api/v1/admin/servers/{id}/transfer/reconcile` dengan JSON `{"confirm":true}`: hanya mengarantina klaim tanpa laporan yang telah melewati lima menit untuk UUID yang diminta. Menghasilkan `409` jika belum memenuhi syarat. Autentikasi sesi admin dan aturan CSRF katalog tetap berlaku; role dicek lagi dalam transaksi yang sama dengan karantina dan audit `catalog.transfer_quarantined`.
 
 Tidak ada pengiriman, percobaan ulang, pelepasan alokasi, pemindahan katalog, atau cleanup melalui kedua endpoint ini. [CI 45374942303](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45374942303) lulus tujuh job; `RELAY_RUN_MYSQL_TESTS=1 npm run test:identity` memverifikasi kontrak admin pada database staging sekali pakai `relay_test`. Dispatch transfer dari API dan verifikasi otomatis oleh layanan aplikasi masih terbuka.
+
+### Layanan internal dispatch dan verifikasi fixture
+
+`api/wings/transfer-service.ts` menolak penempatan yang tidak cocok dengan dua endpoint staging yang disediakan pemanggil dan hanya mengirim fixture offline. Migrasi `007_transfer_digest` menyimpan checksum file startup bersama klaim atomik sebelum panggilan Wings. Proses pemulihan menerima ID transfer saja, membaca laporan sukses dan checksum dari MySQL, memeriksa server tujuan offline dan checksum sumber/tujuan, lalu menyelesaikan perubahan katalog. Transfer lama tanpa checksum tidak dapat diselesaikan lewat layanan ini. Hasil dispatch ambigu dikarantina tanpa retry. Tidak ada penghapusan sumber oleh layanan.
+
+Kontrak dijalankan melalui matriks `wings-transfer`. Layanan belum dipasang ke endpoint untuk memulai transfer: resolusi node dan alokasi serta otorisasi admin untuk dispatch aplikasi masih perlu dihubungkan dan diuji. Validasi checksum hanya mencakup satu file fixture, bukan pemeriksaan semua file workload umum.
+
+[CI 45375703704](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45375703704) lulus tujuh job, termasuk dispatch, pemulihan proses terpisah, dan tiga skenario gagal. Lint dan build lokal lulus.
