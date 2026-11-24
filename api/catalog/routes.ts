@@ -1,3 +1,4 @@
+import { lockFreeAllocation } from "./transfer";
 import { ProvisionError, type createProvisioner } from "../wings/provision";
 import { randomUUID } from "node:crypto";
 import { isIP } from "node:net";
@@ -302,6 +303,8 @@ export async function registerCatalog(
         req,
         "catalog.server_draft_created",
         async (db, uuid) => {
+          if (!(await lockFreeAllocation(db, nodeId, allocationId)))
+            throw new CatalogError(409, "allocation_unavailable");
           await db.execute(
             "INSERT INTO servers (id,name,node_id,owner_id,egg_id,allocation_id) VALUES (?,?,?,?,?,?)",
             [uuid, name, nodeId, ownerId, eggId, allocationId],

@@ -1,3 +1,4 @@
+import { transferLedger } from "./catalog/transfer";
 import { disposableEgg } from "./wings/provision";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -482,6 +483,89 @@ test(
       ok(await request("POST", "auth/logout", undefined, live), 204);
       ok(await request("GET", "account", undefined, live), 401);
       ok(await app.inject("/health/ready"), 200);
+      const targetAllocation = createdId(
+        await postAdmin("allocations", { ...allocation, nodeId: anotherNode }),
+      );
+      await pool.execute(
+        "INSERT INTO wings_provisions (server_id,phase) VALUES (?,'installed')",
+        [serverId],
+      );
+      const ledger = transferLedger(pool);
+      assert.equal(
+        await ledger.reserve(serverId, nodeId, allocationId),
+        undefined,
+      );
+      const attempts = await Promise.all([
+        ledger.reserve(serverId, anotherNode, targetAllocation),
+        ledger.reserve(serverId, anotherNode, targetAllocation),
+      ]);
+      assert.equal(attempts.filter(Boolean).length, 1);
+      const firstTransfer = attempts[0] ?? attempts[1];
+      assert.ok(firstTransfer);
+      const destinationDraft = {
+        ...draft,
+        nodeId: anotherNode,
+        allocationId: targetAllocation,
+      };
+      ok(await postAdmin("servers", destinationDraft), 409);
+      assert.equal(
+        await ledger.settle(firstTransfer, {
+          kind: "verified_destination",
+          node: nodeId,
+          server: serverId,
+        }),
+        false,
+      );
+      assert.equal(
+        await ledger.settle(firstTransfer, { kind: "not_dispatched" }),
+        true,
+      );
+      const move = await ledger.reserve(
+        serverId,
+        anotherNode,
+        targetAllocation,
+      );
+      assert.ok(move);
+      assert.equal(
+        await ledger.settle(move, {
+          kind: "verified_destination",
+          node: anotherNode,
+          server: serverId,
+        }),
+        true,
+      );
+      assert.equal(
+        await ledger.settle(move, {
+          kind: "verified_destination",
+          node: anotherNode,
+          server: serverId,
+        }),
+        false,
+      );
+      assert.deepEqual(
+        await rows(
+          pool,
+          "SELECT node_id,allocation_id FROM servers WHERE id=?",
+          [serverId],
+        ),
+        [{ node_id: anotherNode, allocation_id: targetAllocation }],
+      );
+      const reverse = await ledger.reserve(serverId, nodeId, allocationId);
+      assert.ok(reverse);
+      assert.equal(await ledger.settle(reverse, { kind: "ambiguous" }), true);
+      assert.equal(
+        await ledger.settle(reverse, { kind: "not_dispatched" }),
+        false,
+      );
+      ok(await postAdmin("servers", draft), 409);
+      assert.deepEqual(
+        await rows(
+          pool,
+          "SELECT node_id,allocation_id FROM servers WHERE id=?",
+          [serverId],
+        ),
+        [{ node_id: anotherNode, allocation_id: targetAllocation }],
+      );
       await migrate(pool, "down");
       ok(await app.inject("/health/ready"), 503);
       await migrate(pool, "up");

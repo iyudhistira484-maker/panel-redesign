@@ -27,6 +27,7 @@ export async function migrate(pool: Pool, direction: "up" | "down") {
         { version: 2, file: "002_catalog" },
         { version: 3, file: "003_provision" },
         { version: 4, file: "004_lifecycle" },
+        { version: 5, file: "005_transfer" },
       ];
       if (direction === "down") migrations.reverse();
       for (const { version, file } of migrations) {

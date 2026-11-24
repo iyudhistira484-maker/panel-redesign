@@ -26,6 +26,7 @@ export type Phase =
   | "dispatching"
   | "installing"
   | "installed"
+  | "transferring"
   | "install_failed"
   | "uncertain"
   | "reinstalling"
@@ -137,7 +138,8 @@ export function createProvisioner(
         !timingSafeEqual(decrypted, expected)
       )
         return { data: [], total: 0 };
-      const scoped = "s.node_id=? AND p.phase='installed' AND e.document=?";
+      const scoped =
+        "s.node_id=? AND p.phase IN ('installed','transferring') AND e.document=?";
       const args = [registered.id, Buffer.from(disposableEgg)];
       const total = (
         await rows<{ total: number }>(
