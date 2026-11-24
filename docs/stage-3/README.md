@@ -268,3 +268,15 @@ Opsi eksplisit `fixtureReceiver` pada `createApp()` memasang callback Wings di `
 Skenario `reported` menjalankan callback melalui listener aplikasi asli pada loopback; skenario gagal masih memakai injeksi fault di listener harness. Entrypoint `api/server.ts` biasa belum memuat konfigurasi receiver dan belum ada bundle deployment multi-node mandiri.
 
 [CI 45398606059](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45398606059) lulus sembilan job. `wings-transfer (reported)` memverifikasi callback sumber ditolak 401, callback tujuan sebelum klaim atau duplikat ditolak 404, dan laporan tujuan yang valid dapat difinalisasi setelah proses admin dimulai ulang.
+
+### Transfer dari entrypoint staging mandiri
+
+`api/server.ts` membaca `RELAY_FIXTURE_TRANSFER_ROLE` (`off` secara default, `source` atau `destination` untuk pengujian). Gunakan database staging dan dua daemon loopback sekali pakai. Kedua instans memakai `RELAY_FIXTURE_TRANSFER_{SERVER,SOURCE,TARGET,ALLOCATION}` yang sama, serta `RELAY_NODE_KEY` dan `RELAY_TOKEN_PEPPER` yang sama untuk membuka token katalog; masing-masing memakai `RELAY_API_PORT`, `RELAY_WINGS_TEST_*`, dan `RELAY_CATALOG_NODE_ORIGIN` yang berbeda sesuai node lokal. `RELAY_ENABLE_EMPTY_WINGS_TEST_NODE` dan `RELAY_ENABLE_DISPOSABLE_PROVISIONING` harus eksplisit `1`. `RELAY_ORIGIN` harus origin HTTPS persis; CI berbicara HTTP hanya pada loopback dan memberi header origin uji. Startup gagal jika katalog, UUID, kredensial lokal, alokasi, atau egg tidak cocok. Tidak ada pengaturan ini untuk produksi.
+
+Untuk pengulangan dari database kosong, jalankan workflow push `wings-transfer (reported)` dan `wings-transfer (missing-report)`, bukan skrip pada VPS bersama. Workflow menyemai data uji dan menjalankan proses `api/server.ts` asli. Pada jalur sukses, kedua peran memakai entrypoint ini; admin login lewat HTTP, tujuan menyimpan callback, proses sumber direstart, lalu admin memverifikasi dan menyelesaikan perpindahan. Pada jalur laporan hilang, proses sumber juga direstart, dan admin mengarantina lewat API; penolakan callback sengaja diinjeksi di sisi tujuan. Skenario pemutusan upload lain tetap memakai harness fault injection. Penghapusan kedua workload hanya teardown CI.
+
+### Status penutupan Tahap 3
+
+Transfer fixture, verifikasi restart, adopsi dua node dari Panel v1.15.2, dan runtime egg HTTP v1/v2 adalah bukti staging, bukan paritas fitur umum. Tahap 3 tetap terbuka: importer belum membaca dump Panel umum atau memigrasikan akun/secret/grant; engine egg belum menangani egg komunitas, parser, mounts, image eksternal, dan aturan variabel secara umum; transfer masih hanya satu fixture loopback dan tidak mendukung rekonsiliasi semua hasil ambigu atau cleanup sumber oleh aplikasi. Tidak ada persetujuan Tahap 4 atau langkah produksi.
+
+[CI 45401636979](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45401636979) lulus sembilan job, termasuk kedua skenario proses mandiri. Lokal: lint, build, dan sembilan tes Wings lulus (`npm run test:wings`).
