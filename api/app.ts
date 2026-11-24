@@ -1,3 +1,5 @@
+import { registerRemote } from "./wings/remote";
+import type { WingsNode } from "./wings/client";
 import { randomBytes, randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
@@ -25,6 +27,7 @@ export type Options = {
   key: Buffer;
   pepper: Buffer;
   deliverReset: (message: ResetMessage) => Promise<void>;
+  wingsTestNode?: WingsNode;
 };
 type User = {
   id: string;
@@ -83,6 +86,7 @@ export async function createApp({
   key,
   pepper,
   deliverReset,
+  wingsTestNode,
 }: Options) {
   if (new URL(origin).origin !== origin || !origin.startsWith("https://"))
     throw new Error("Set an exact HTTPS panel origin");
@@ -110,6 +114,11 @@ export async function createApp({
   app.addHook("onRequest", async (req, reply) => {
     reply.header("Cache-Control", "no-store");
     if (
+      !(
+        wingsTestNode &&
+        req.routeOptions.url === "/api/remote/servers/reset" &&
+        req.method === "POST"
+      ) &&
       !["GET", "HEAD", "OPTIONS"].includes(req.method) &&
       (req.headers.origin !== origin || req.headers["x-relay-request"] !== "1")
     ) {
@@ -757,5 +766,10 @@ export async function createApp({
       [u.id],
     );
   });
+  if (wingsTestNode)
+    await app.register(
+      async (instance) => registerRemote(instance, wingsTestNode),
+      { prefix: "/api/remote" },
+    );
   return app;
 }

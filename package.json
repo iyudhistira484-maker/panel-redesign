@@ -13,7 +13,9 @@
     "api": "tsx api/server.ts",
     "db": "tsx api/cli.ts",
     "test:identity": "tsx --test api/*.test.ts",
-    "provision": "tsx api/provision.ts"
+    "provision": "tsx api/provision.ts",
+    "wings:health": "tsx api/wings/health.ts",
+    "test:wings": "tsx --test api/wings/*.test.ts"
   },
   "repository": {
     "type": "git",

@@ -52,3 +52,7 @@ Untuk skenario MySQL, buat **database kosong yang boleh dihapus** bernama `relay
 - Lint, build, audit, dan 5 tes non-DB dijalankan lokal; laporan akhir menyebutkan statusnya.
 - Integrasi MySQL, Mailpit dan Compose belum dieksekusi di sandbox ini (tidak ada Docker/MySQL lokal). Hasil GitHub Actions belum terverifikasi. Tes non-DB tidak membuktikan bahwa alur login/reset/2FA lulus end-to-end.
 - Tahap 3 tidak dimulai; gerbang berikutnya adalah hasil verifikasi MySQL staging dan persetujuan pengguna.
+
+### Bukti verifikasi lanjutan
+
+Job `identity` pada [GitHub Actions 45348918962](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45348918962) lulus dengan layanan MySQL 8.4. Tes memeriksa rollback skema, autentikasi, rehash, pergantian sesi, TOTP/recovery, reset dengan pengiriman terinjeksi, dan isolasi akun. Pengiriman SMTP nyata ke Mailpit tetap belum diuji. Job frontend yang sebelumnya berhenti saat mengunduh Chromium diperbaiki agar memakai browser bawaan runner; [run 45349496259](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45349496259) lulus.

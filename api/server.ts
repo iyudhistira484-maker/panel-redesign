@@ -18,7 +18,16 @@ async function main() {
     connectionTimeout: 2000,
     socketTimeout: 5000,
   });
+  const wingsTestNode =
+    process.env.RELAY_ENABLE_EMPTY_WINGS_TEST_NODE === "1"
+      ? {
+          origin: process.env.RELAY_WINGS_TEST_ORIGIN ?? "",
+          tokenId: process.env.RELAY_WINGS_TEST_TOKEN_ID ?? "",
+          token: process.env.RELAY_WINGS_TEST_TOKEN ?? "",
+        }
+      : undefined;
   const app = await createApp({
+    wingsTestNode,
     pool,
     origin,
     key,
