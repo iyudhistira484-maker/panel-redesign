@@ -17,6 +17,6 @@ GRANT SELECT (id,uuid) ON panel_snapshot_ci.users TO 'relay_snapshot'@'%';
 GRANT SELECT (id,uuid) ON panel_snapshot_ci.nodes TO 'relay_snapshot'@'%';
 GRANT SELECT (id,uuid) ON panel_snapshot_ci.nests TO 'relay_snapshot'@'%';
 GRANT SELECT (id,uuid,nest_id) ON panel_snapshot_ci.eggs TO 'relay_snapshot'@'%';
-GRANT SELECT (id,node_id,server_id,port) ON panel_snapshot_ci.allocations TO 'relay_snapshot'@'%';
+GRANT SELECT (id,node_id,server_id,ip,port) ON panel_snapshot_ci.allocations TO 'relay_snapshot'@'%';
 GRANT SELECT (id,user_id,server_id,permissions) ON panel_snapshot_ci.subusers TO 'relay_snapshot'@'%';
 SQL

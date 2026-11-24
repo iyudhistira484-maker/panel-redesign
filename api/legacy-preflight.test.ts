@@ -14,7 +14,9 @@ const fixture = () => ({
   nodes: [{ id: 2, uuid: randomUUID() }],
   nests: [{ id: 3, uuid: randomUUID() }],
   eggs: [{ id: 4, uuid: randomUUID(), nest_id: 3 }],
-  allocations: [{ id: 5, node_id: 2, server_id: 6, port: 25610 }],
+  allocations: [
+    { id: 5, node_id: 2, server_id: 6, ip: "127.0.0.1", port: 25610 },
+  ],
   servers: [
     {
       id: 6,

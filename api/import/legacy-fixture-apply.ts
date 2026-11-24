@@ -12,6 +12,7 @@ type Credentials = {
   key: Buffer;
   pepper: Buffer;
   allocations: ReadonlyMap<string, string>;
+  secondaryAllocations?: ReadonlyMap<number, string>;
   accounts: ReadonlyMap<string, string>;
 };
 const name = "Existing staging workload";
@@ -71,7 +72,8 @@ export async function applyLegacyFixture(
   if (
     !batch.length ||
     batch.length > 100 ||
-    report.counts.allocations !== batch.length ||
+    report.counts.allocations !==
+      batch.length + report.secondaryAllocations.length ||
     report.counts.nodes !== nodes.size ||
     report.counts.eggs !== eggs.size ||
     report.counts.nests !== nests.size
@@ -102,6 +104,14 @@ export async function applyLegacyFixture(
     );
   const serverIds = batch.map((row) => row.uuid);
   const placeholders = serverIds.map(() => "?").join(",");
+  const secondary = report.secondaryAllocations.map(({ legacyId, ...row }) => {
+    const allocationId = credentials.secondaryAllocations?.get(legacyId);
+    if (!allocationId || !UUID_V4.test(allocationId) || !/^127\./.test(row.ip))
+      throw new Error("Missing or unsupported secondary allocation mapping");
+    return { ...row, allocationId };
+  });
+  const orderSecondary = (items: typeof secondary) =>
+    [...items].sort((a, b) => a.allocationId.localeCompare(b.allocationId));
   const crypto = cryptoContext(key, pepper, "node-token");
 
   return transaction(pool, async (db) => {
@@ -197,6 +207,20 @@ export async function applyLegacyFixture(
         )
       )
         throw new Error("Existing Relay grants conflict with import");
+      const existingSecondary = await rows<(typeof secondary)[number]>(
+        db,
+        `SELECT a.id AS allocationId, a.ip,a.port,a.node_id AS nodeId,x.server_id AS serverId FROM server_secondary_allocations x JOIN allocations a ON a.id=x.allocation_id WHERE x.server_id IN (${placeholders}) FOR UPDATE`,
+        serverIds,
+      );
+      if (
+        !isDeepStrictEqual(
+          orderSecondary(existingSecondary),
+          orderSecondary(secondary),
+        )
+      )
+        throw new Error(
+          "Existing Relay secondary allocations conflict with import",
+        );
       return { applied: false, counts: report.counts };
     }
     for (const { id, email } of accounts)
@@ -231,6 +255,21 @@ export async function applyLegacyFixture(
       await db.execute(
         "INSERT INTO wings_provisions (server_id,phase) VALUES (?,'installed')",
         [uuid],
+      );
+    }
+    for (const allocation of secondary) {
+      await db.execute(
+        "INSERT INTO allocations (id,node_id,ip,port) VALUES (?,?,?,?)",
+        [
+          allocation.allocationId,
+          allocation.nodeId,
+          allocation.ip,
+          allocation.port,
+        ],
+      );
+      await db.execute(
+        "INSERT INTO server_secondary_allocations (allocation_id,server_id,node_id) VALUES (?,?,?)",
+        [allocation.allocationId, allocation.serverId, allocation.nodeId],
       );
     }
     for (const grant of grants)

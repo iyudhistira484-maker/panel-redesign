@@ -1,3 +1,4 @@
+import { legacyPreflight } from "../import/legacy-preflight";
 import { stagingMail } from "../staging-mail";
 import { applyLegacyFixture } from "../import/legacy-fixture-apply";
 import { readLegacySnapshot } from "../import/legacy-snapshot";
@@ -209,7 +210,7 @@ async function main() {
         nodes: 2,
         nests: 1,
         eggs: 2,
-        allocations: 2,
+        allocations: 3,
         subusers: 1,
       });
       assert.deepEqual(report.servers, [
@@ -237,7 +238,13 @@ async function main() {
       const collaborator = process.env.RELAY_ADOPTION_COLLABORATOR_UUID;
       const outsider = process.env.RELAY_ADOPTION_OUTSIDER_UUID;
       assert.ok(collaborator && outsider);
+      const { secondaryAllocations } = legacyPreflight(manifest);
+      assert.equal(secondaryAllocations.length, 1);
+      const secondaryId = randomUUID();
       const credentials = {
+        secondaryAllocations: new Map([
+          [secondaryAllocations[0].legacyId, secondaryId],
+        ]),
         accounts: new Map([
           [owner, "adoption@example.test"],
           [collaborator, "collaborator@example.test"],
@@ -281,6 +288,7 @@ async function main() {
         id: extraAllocation,
         node_id: template.node_id,
         server_id: extraId,
+        ip: "127.0.0.1",
         port: 25612,
       });
       expanded.subusers.push({
@@ -317,6 +325,7 @@ async function main() {
         [{ user_id: collaborator }],
       );
       for (const table of [
+        "server_secondary_allocations",
         "server_grants",
         "wings_provisions",
         "servers",
@@ -345,6 +354,7 @@ async function main() {
         "allocations",
         "servers",
         "wings_provisions",
+        "server_secondary_allocations",
         "server_grants",
       ])
         assert.deepEqual(
@@ -358,6 +368,14 @@ async function main() {
       assert.equal(
         (await applyLegacyFixture(pool, manifest, credentials)).applied,
         false,
+      );
+      assert.deepEqual(
+        await rows(
+          pool,
+          "SELECT x.server_id,a.ip,a.port FROM server_secondary_allocations x JOIN allocations a ON a.id=x.allocation_id WHERE x.allocation_id=?",
+          [secondaryId],
+        ),
+        [{ server_id: uuid, ip: "127.0.0.2", port: 25616 }],
       );
       const [saved] = await rows<{
         user: string;
@@ -433,18 +451,22 @@ async function main() {
         "allocations",
         "servers",
         "wings_provisions",
+        "server_secondary_allocations",
         "server_grants",
       ])
         assert.deepEqual(
           await rows(pool, `SELECT COUNT(*) AS total FROM ${table}`),
           [
             {
-              total:
-                table === "users"
-                  ? 3
-                  : ["nests", "server_grants"].includes(table)
-                    ? 1
-                    : 2,
+              total: ["users", "allocations"].includes(table)
+                ? 3
+                : [
+                      "nests",
+                      "server_grants",
+                      "server_secondary_allocations",
+                    ].includes(table)
+                  ? 1
+                  : 2,
             },
           ],
         );

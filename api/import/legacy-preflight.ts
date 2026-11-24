@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { serverPermissions } from "../policy";
 import { UUID_V4 } from "../wings/client";
 
@@ -32,7 +33,7 @@ export const legacyColumns: Record<Table, string[]> = {
   nodes: ["id", "uuid"],
   nests: ["id", "uuid"],
   eggs: ["id", "uuid", "nest_id"],
-  allocations: ["id", "node_id", "server_id", "port"],
+  allocations: ["id", "node_id", "server_id", "ip", "port"],
   subusers: ["id", "user_id", "server_id", "permissions"],
 };
 
@@ -73,8 +74,12 @@ export function legacyPreflight(input: unknown) {
     integer(id) ? map.get(table)?.get(id) : undefined;
   for (const egg of map.get("eggs")?.values() ?? [])
     if (!get("nests", egg.nest_id)) throw new Error("Invalid legacy egg nest");
+  const secondaryAllocations = [];
+  const allocationAddresses = new Set<string>();
   for (const allocation of map.get("allocations")?.values() ?? []) {
     if (
+      typeof allocation.ip !== "string" ||
+      !isIP(allocation.ip) ||
       !integer(allocation.port) ||
       allocation.port > 65535 ||
       !get("nodes", allocation.node_id)
@@ -85,6 +90,23 @@ export function legacyPreflight(input: unknown) {
       get("servers", allocation.server_id)?.node_id !== allocation.node_id
     )
       throw new Error("Invalid legacy allocation owner");
+    const address = JSON.stringify([
+      allocation.node_id,
+      allocation.ip,
+      allocation.port,
+    ]);
+    if (allocationAddresses.has(address))
+      throw new Error("Duplicate legacy allocation address");
+    allocationAddresses.add(address);
+    const server = get("servers", allocation.server_id);
+    if (server && server.allocation_id !== allocation.id)
+      secondaryAllocations.push({
+        legacyId: Number(allocation.id),
+        serverId: String(server.uuid),
+        nodeId: String(get("nodes", allocation.node_id)?.uuid),
+        ip: allocation.ip,
+        port: allocation.port,
+      });
   }
   const servers = [];
   for (const server of map.get("servers")?.values() ?? []) {
@@ -152,6 +174,7 @@ export function legacyPreflight(input: unknown) {
       tables.map((table) => [table, map.get(table)?.size ?? 0]),
     ),
     servers,
+    secondaryAllocations,
     grants,
   };
 }

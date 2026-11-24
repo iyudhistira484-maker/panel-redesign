@@ -65,6 +65,7 @@ SCRIPT,
     ]);
     DB::table('allocations')->where('id', $allocation)->update(['server_id' => $server]);
     DB::table('subusers')->insert(['user_id' => $users['collaborator'], 'server_id' => $server, 'permissions' => json_encode(['activity.read', 'control.start'], JSON_THROW_ON_ERROR)]);
+    DB::table('allocations')->insert(['node_id' => $node, 'ip' => '127.0.0.2', 'port' => 25616, 'server_id' => $server]);
     $copy = (array) DB::table('eggs')->where('id', $egg)->first();
     unset($copy['id']);
     $copy['uuid'] = getenv('RELAY_ADOPTION_SECOND_EGG_UUID');

@@ -149,13 +149,31 @@ export function createProvisioner(
     if (!reviewed) throw new ProvisionError(422, "egg_not_approved");
     return reviewed;
   };
+  const withAllocations = async (s: ServerRow) => {
+    const result = workload(s);
+    const extras = await rows<{ ip: string; port: number }>(
+      pool,
+      "SELECT a.ip,a.port FROM server_secondary_allocations x JOIN allocations a ON a.id=x.allocation_id WHERE x.server_id=? ORDER BY a.ip,a.port",
+      [s.uuid],
+    );
+    const configuration = (
+      result.configuration.settings as Record<string, unknown>
+    ).allocations as {
+      mappings: Record<string, number[]>;
+    };
+    for (const { ip, port } of extras) {
+      configuration.mappings[ip] ??= [];
+      configuration.mappings[ip].push(port);
+    }
+    return result;
+  };
   const provider: WorkloadProvider = {
     lookup: async (id) => {
       const s = await load(pool, id);
       return s?.phase &&
         !["deleting", "delete_uncertain", "deleted"].includes(s.phase) &&
         eligible(s)
-        ? workload(s)
+        ? withAllocations(s)
         : undefined;
     },
     list: async (page, perPage) => {
@@ -191,10 +209,12 @@ export function createProvisioner(
       );
       return {
         total,
-        data: records.map((s) => ({
-          uuid: s.uuid,
-          ...workload(s).configuration,
-        })),
+        data: await Promise.all(
+          records.map(async (s) => ({
+            uuid: s.uuid,
+            ...(await withAllocations(s)).configuration,
+          })),
+        ),
       };
     },
   };

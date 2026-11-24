@@ -27,6 +27,16 @@ export async function lockFreeAllocation(
     ).length
   )
     return false;
+  if (
+    (
+      await rows(
+        db,
+        "SELECT allocation_id FROM server_secondary_allocations WHERE allocation_id=? FOR UPDATE",
+        [id],
+      )
+    ).length
+  )
+    return false;
   return !(
     await rows(
       db,
@@ -82,6 +92,13 @@ export async function reserveTransfer(
     current.phase !== "installed" ||
     current.node_id === node ||
     (expectedSource !== undefined && current.node_id !== expectedSource) ||
+    (
+      await rows(
+        db,
+        "SELECT allocation_id FROM server_secondary_allocations WHERE server_id=? FOR UPDATE",
+        [server],
+      )
+    ).length > 0 ||
     !(await lockFreeAllocation(db, node, allocation))
   )
     return undefined;
