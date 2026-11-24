@@ -1,3 +1,4 @@
+import { stagingMail } from "../staging-mail";
 import { applyLegacyFixture } from "../import/legacy-fixture-apply";
 import { readLegacySnapshot } from "../import/legacy-snapshot";
 import assert from "node:assert/strict";
@@ -108,20 +109,19 @@ async function main() {
     },
     { prefix: "/api/remote" },
   );
-  const resetTokens = new Map<string, string>();
+  const origin = "https://relay.example.test";
+  const mail = stagingMail(origin);
   const relayFor = (configured: typeof node) =>
     createApp({
       pool,
-      origin: "https://relay.example.test",
+      origin,
       key: randomBytes(32),
       pepper,
       catalogNodeKey: key,
       allowedCatalogNodeOrigins: [configured.origin],
       wingsTestNode: configured,
       enableDisposableProvisioning: true,
-      deliverReset: async ({ email, token }) => {
-        resetTokens.set(email, token);
-      },
+      deliverReset: mail.deliverReset,
     });
   const relay = await relayFor(node);
   const relay2 = actual ? await relayFor(secondNode) : undefined;
@@ -481,7 +481,7 @@ async function main() {
     let verifyPower: (() => Promise<void>) | undefined;
     if (actual) {
       const headers = {
-        origin: "https://relay.example.test",
+        origin,
         "x-relay-request": "1",
       };
       const password = `Relay-ci-${randomUUID()}!`;
@@ -501,8 +501,35 @@ async function main() {
           (await post("forgot-password", { email })).statusCode,
           202,
         );
-        const token = resetTokens.get(email);
-        assert.ok(token);
+        let token: string | undefined;
+        let messageId: string | undefined;
+        await until("Mailpit reset message", async () => {
+          const search = new URL("http://127.0.0.1:8025/api/v1/search");
+          search.searchParams.set("query", `to:${email}`);
+          const list = await fetch(search, {
+            signal: AbortSignal.timeout(1500),
+          });
+          if (!list.ok) return false;
+          const { messages } = (await list.json()) as {
+            messages?: { ID: string; To: { Address: string }[] }[];
+          };
+          const entry = messages?.find((row) =>
+            row.To.some((recipient) => recipient.Address === email),
+          );
+          if (!entry) return false;
+          const response = await fetch(
+            `http://127.0.0.1:8025/api/v1/message/${encodeURIComponent(entry.ID)}`,
+            { signal: AbortSignal.timeout(1500) },
+          );
+          if (!response.ok) return false;
+          const { Text } = (await response.json()) as { Text: string };
+          token = Text.split(/\s+/)
+            .find((line) => line.startsWith(`${origin}/#reset-password?token=`))
+            ?.match(/#reset-password\?token=([A-Za-z0-9_-]{43})$/)?.[1];
+          messageId = entry.ID;
+          return !!token;
+        });
+        assert.ok(token && messageId);
         assert.equal(
           (await post("reset-password", { token, password })).statusCode,
           204,
@@ -617,6 +644,7 @@ async function main() {
       "Remote cutover and rollback preserved existing UUID, file and running container",
     );
   } finally {
+    mail.close();
     await relay.close();
     await relay2?.close();
     await legacy.close();

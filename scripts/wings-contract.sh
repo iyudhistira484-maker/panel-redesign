@@ -13,7 +13,7 @@ if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == adoption || "${RELAY_BOOTSTRAP_SCENARIO
   harness=api/wings/live-adoption.ts
 fi
 cleanup() {
-  if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then docker rm -f relay-adoption-panel relay-adoption-db relay-wings-adoption-second >/dev/null 2>&1 || true; fi
+  if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then docker rm -f relay-adoption-panel relay-adoption-db relay-wings-adoption-second relay-adoption-mailpit >/dev/null 2>&1 || true; fi
   docker rm -f "$name" >/dev/null 2>&1 || true
   docker network rm "$network" >/dev/null 2>&1 || true
   if [[ -n "$harness_pid" ]]; then kill "$harness_pid" 2>/dev/null || true; fi
@@ -85,6 +85,7 @@ if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then
     -e "s/$RELAY_WINGS_TEST_TOKEN_ID/$RELAY_SECOND_NODE_TOKEN_ID/; s/$RELAY_WINGS_TEST_TOKEN/$RELAY_SECOND_NODE_TOKEN/" \
     -e 's|/data\b|/data2|g; s/18080/18081/; s/12022/12023/' "$work/config/config.yml" > "$work/config2/config.yml"
   chmod 0600 "$work/config2/config.yml"
+  docker run -d --name relay-adoption-mailpit -p 127.0.0.1:1025:1025 -p 127.0.0.1:8025:8025 axllent/mailpit:v1.27.11 >/dev/null
   for key in SERVER EGG OWNER NEST SECOND SECOND_EGG COLLABORATOR OUTSIDER; do
     export "RELAY_ADOPTION_${key}_UUID=$(cat /proc/sys/kernel/random/uuid)"
   done

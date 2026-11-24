@@ -2,7 +2,7 @@ import {
   loadStagingTransfer,
   parseStagingTransfer,
 } from "./wings/staging-transfer";
-import nodemailer from "nodemailer";
+import { stagingMail } from "./staging-mail";
 import { createApp } from "./app";
 import { stagingPool } from "./db";
 import { keyFrom } from "./security";
@@ -15,13 +15,7 @@ async function main() {
   if (!Number.isInteger(port) || port < 1024 || port > 65535)
     throw new Error("Invalid port");
   const pool = stagingPool();
-  const mail = nodemailer.createTransport({
-    host: "127.0.0.1",
-    port: 1025,
-    ignoreTLS: true,
-    connectionTimeout: 2000,
-    socketTimeout: 5000,
-  });
+  const mail = stagingMail(origin);
   const wingsTestNode =
     process.env.RELAY_ENABLE_EMPTY_WINGS_TEST_NODE === "1"
       ? {
@@ -53,22 +47,7 @@ async function main() {
     origin,
     key,
     pepper,
-    async deliverReset({ email, locale, token }) {
-      if (!/^[A-Z0-9._%+-]+@example\.test$/i.test(email))
-        throw new Error("Only staging mail recipients are permitted");
-      const id = locale === "id";
-      // Fragment prevents the token entering reverse-proxy access logs. UI wiring is Stage 4.
-      const url = new URL("/#reset-password", origin);
-      url.hash = `reset-password?token=${token}`;
-      await mail.sendMail({
-        from: "relay@example.test",
-        to: email,
-        subject: id
-          ? "Atur ulang kata sandi Relay"
-          : "Reset your Relay password",
-        text: `${id ? "Gunakan tautan ini dalam 30 menit. Abaikan email ini jika kamu tidak meminta pengaturan ulang." : "Use this link within 30 minutes. Ignore this message if you did not request a password reset."}\n\n${url.href}`,
-      });
-    },
+    deliverReset: mail.deliverReset,
   });
   app.addHook("onClose", async () => {
     mail.close();
