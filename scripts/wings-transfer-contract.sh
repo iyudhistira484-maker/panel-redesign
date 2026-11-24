@@ -53,6 +53,7 @@ docker:
   network:
     name: $net
     network_mode: $net
+    dns: []
 allowed_mounts: []
 YAML
   chmod 0600 "$work/$side-config/config.yml"
