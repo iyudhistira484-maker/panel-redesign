@@ -15,8 +15,9 @@ import { disposableEgg } from "./provision";
 async function until(
   label: string,
   condition: () => boolean | Promise<boolean>,
+  attempts = 40,
 ) {
-  for (let attempt = 0; attempt < 40; attempt++) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
     if (await condition()) return;
     await new Promise((resolve) => setTimeout(resolve, 750));
   }
@@ -456,15 +457,19 @@ async function main() {
       confirm: true,
     });
     assert.equal(provisionVoice.statusCode, 202, provisionVoice.body);
-    await until("upstream Mumble install", async () => {
-      const [record] = await rows<{ phase: string }>(
-        pool,
-        "SELECT phase FROM wings_provisions WHERE server_id=?",
-        [voice],
-      );
-      assert.notEqual(record?.phase, "install_failed");
-      return record?.phase === "installed";
-    });
+    await until(
+      "upstream Mumble install",
+      async () => {
+        const [record] = await rows<{ phase: string }>(
+          pool,
+          "SELECT phase FROM wings_provisions WHERE server_id=?",
+          [voice],
+        );
+        assert.notEqual(record?.phase, "install_failed");
+        return record?.phase === "installed";
+      },
+      160,
+    );
     assert.equal(
       (
         await admin("POST", `servers/${voice}/power`, {
