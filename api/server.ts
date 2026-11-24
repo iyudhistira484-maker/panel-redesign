@@ -1,3 +1,7 @@
+import {
+  loadStagingTransfer,
+  parseStagingTransfer,
+} from "./wings/staging-transfer";
 import nodemailer from "nodemailer";
 import { createApp } from "./app";
 import { stagingPool } from "./db";
@@ -26,13 +30,22 @@ async function main() {
           token: process.env.RELAY_WINGS_TEST_TOKEN ?? "",
         }
       : undefined;
+  const catalogNodeKey = process.env.RELAY_NODE_KEY
+    ? keyFrom(process.env.RELAY_NODE_KEY, "RELAY_NODE_KEY")
+    : undefined;
+  const transfer = await loadStagingTransfer(
+    pool,
+    parseStagingTransfer(process.env),
+    wingsTestNode,
+    catalogNodeKey,
+    pepper,
+  );
   const app = await createApp({
     wingsTestNode,
     enableDisposableProvisioning:
       process.env.RELAY_ENABLE_DISPOSABLE_PROVISIONING === "1",
-    catalogNodeKey: process.env.RELAY_NODE_KEY
-      ? keyFrom(process.env.RELAY_NODE_KEY, "RELAY_NODE_KEY")
-      : undefined,
+    catalogNodeKey,
+    ...transfer,
     allowedCatalogNodeOrigins: process.env.RELAY_CATALOG_NODE_ORIGIN
       ? [process.env.RELAY_CATALOG_NODE_ORIGIN]
       : [],

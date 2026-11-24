@@ -5,7 +5,8 @@ import { disposableEgg } from "./provision";
 import { cryptoContext, passwordHash } from "../security";
 import { fixtureTransferService } from "./transfer-service";
 import { createServer, request, type ClientRequest } from "node:http";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { once } from "node:events";
 import { promisify } from "node:util";
 import assert from "node:assert/strict";
 import { rows, stagingPool } from "../db";
@@ -87,107 +88,6 @@ async function main() {
     "relaytransfertarget",
     process.env.RELAY_TRANSFER_TARGET_TOKEN,
   );
-  if (process.argv[2] === "recover") {
-    const id = process.argv[3];
-    const pool = stagingPool();
-    try {
-      const resolve = async (node: WingsNode) => {
-        const [record] = await rows<{ id: string }>(
-          pool,
-          "SELECT id FROM nodes WHERE origin=? AND token_id=?",
-          [node.origin, node.tokenId],
-        );
-        assert.ok(record);
-        return { id: record.id, node };
-      };
-      const transfer = fixtureTransferService(
-        pool,
-        await resolve(source),
-        await resolve(target),
-        issuer,
-      );
-      assert.equal(await transfer.dispatch(id), false);
-      const entry = await transferLedger(pool).reported(id);
-      assert.ok(entry);
-      const [server] = await rows<{ owner_id: string }>(
-        pool,
-        "SELECT owner_id FROM servers WHERE id=?",
-        [entry.server_id],
-      );
-      assert.ok(server);
-      const password = process.env.RELAY_TRANSFER_FIXTURE_PASSWORD;
-      assert.ok(password);
-      const app = await panel(pool, source, {
-        server: entry.server_id,
-        source: entry.source_node_id,
-        target: entry.target_node_id,
-        allocation: entry.target_allocation_id,
-        dispatch: transfer.dispatch,
-        finalize: transfer.finalize,
-      });
-      try {
-        const url = `/api/v1/admin/servers/${entry.server_id}/transfer/finalize`;
-        const payload = { confirm: true, transferId: id };
-        assert.equal(
-          (
-            await app.inject({
-              method: "POST",
-              url,
-              headers: browserHeaders,
-              payload,
-            })
-          ).statusCode,
-          401,
-        );
-        const headers = await login(app, password);
-        assert.equal(
-          (
-            await app.inject({
-              method: "POST",
-              url,
-              headers,
-              payload: { ...payload, transferId: randomUUID() },
-            })
-          ).statusCode,
-          409,
-        );
-        await pool.execute("UPDATE users SET is_admin=0 WHERE id=?", [
-          server.owner_id,
-        ]);
-        assert.equal(
-          (await app.inject({ method: "POST", url, headers, payload }))
-            .statusCode,
-          403,
-        );
-        await pool.execute("UPDATE users SET is_admin=1 WHERE id=?", [
-          server.owner_id,
-        ]);
-        assert.equal(
-          (await app.inject({ method: "POST", url, headers, payload }))
-            .statusCode,
-          200,
-        );
-        assert.equal(
-          (await app.inject({ method: "POST", url, headers, payload }))
-            .statusCode,
-          409,
-        );
-        assert.deepEqual(
-          await rows(
-            pool,
-            "SELECT actor_id FROM audit_log WHERE event='catalog.transfer_completed' AND subject_id=?",
-            [entry.server_id],
-          ),
-          [{ actor_id: server.owner_id }],
-        );
-      } finally {
-        await app.close();
-      }
-    } finally {
-      await pool.end();
-    }
-    return;
-  }
   let installed: boolean | undefined;
   const interrupted = ["sender-killed", "partial-target"].includes(
     process.env.RELAY_TRANSFER_SCENARIO ?? "",
@@ -331,25 +231,113 @@ async function main() {
   };
   const receiverKey = randomBytes(32),
     receiverPepper = randomBytes(32);
-  const receiver =
-    !interrupted && !dropReport
-      ? await createApp({
-          pool,
-          origin: panelOrigin,
-          key: randomBytes(32),
-          pepper: receiverPepper,
-          catalogNodeKey: receiverKey,
-          enableDisposableProvisioning: true,
-          wingsTestNode: target,
-          allowedCatalogNodeOrigins: [target.origin],
-          fixtureReceiver: {
-            server: fixture.uuid,
-            target: targetId,
-            allocation: targetAllocation,
+  const standalone = !interrupted && !dropReport;
+  async function startInstance(
+    role: "source" | "destination",
+    node: WingsNode,
+    port: number,
+  ) {
+    const processChild = spawn(
+      process.execPath,
+      ["--import", "tsx", "api/server.ts"],
+      {
+        stdio: "ignore",
+        env: {
+          ...process.env,
+          RELAY_API_PORT: String(port),
+          RELAY_ORIGIN: panelOrigin,
+          RELAY_TOTP_KEY: randomBytes(32).toString("base64"),
+          RELAY_TOKEN_PEPPER: receiverPepper.toString("base64"),
+          RELAY_NODE_KEY: receiverKey.toString("base64"),
+          RELAY_ENABLE_EMPTY_WINGS_TEST_NODE: "1",
+          RELAY_ENABLE_DISPOSABLE_PROVISIONING: "1",
+          RELAY_CATALOG_NODE_ORIGIN: node.origin,
+          RELAY_WINGS_TEST_ORIGIN: node.origin,
+          RELAY_WINGS_TEST_TOKEN_ID: node.tokenId,
+          RELAY_WINGS_TEST_TOKEN: node.token,
+          RELAY_FIXTURE_TRANSFER_ROLE: role,
+          RELAY_FIXTURE_TRANSFER_SERVER: fixture.uuid,
+          RELAY_FIXTURE_TRANSFER_SOURCE: sourceId,
+          RELAY_FIXTURE_TRANSFER_TARGET: targetId,
+          RELAY_FIXTURE_TRANSFER_ALLOCATION: targetAllocation,
+        },
+      },
+    );
+    const url = `http://127.0.0.1:${port}`;
+    const close = async () => {
+      if (processChild.exitCode !== null || processChild.signalCode !== null)
+        return;
+      const stopped = once(processChild, "exit");
+      processChild.kill("SIGTERM");
+      const timer = setTimeout(() => processChild.kill("SIGKILL"), 5000);
+      try {
+        await stopped;
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    try {
+      await eventually(`standalone ${role} readiness`, async () => {
+        if (processChild.exitCode !== null)
+          throw new Error(`Standalone ${role} process exited`);
+        try {
+          return (
+            await fetch(`${url}/health/ready`, {
+              signal: AbortSignal.timeout(1000),
+            })
+          ).ok;
+        } catch {
+          return false;
+        }
+      });
+    } catch (error) {
+      await close();
+      throw error;
+    }
+    return {
+      close,
+      inject: async <T = unknown>(options: {
+        method?: string;
+        url: string;
+        headers?: Record<string, string>;
+        payload?: object;
+      }) => {
+        const result = await fetch(`${url}${options.url}`, {
+          method: options.method ?? "GET",
+          headers: {
+            ...options.headers,
+            ...(options.payload ? { "content-type": "application/json" } : {}),
           },
-          deliverReset: async () => {},
-        })
-      : undefined;
+          body: options.payload ? JSON.stringify(options.payload) : undefined,
+          signal: AbortSignal.timeout(12000),
+        });
+        const text = await result.text();
+        return {
+          statusCode: result.status,
+          headers: result.headers,
+          json: <R = T>() => JSON.parse(text) as R,
+        };
+      },
+    };
+  }
+  let receiver: Awaited<ReturnType<typeof startInstance>> | undefined;
+  let sourceApp: Awaited<ReturnType<typeof startInstance>> | undefined;
+  const networkLogin = async (instance: NonNullable<typeof sourceApp>) => {
+    const response = await instance.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      headers: browserHeaders,
+      payload: { email: "transfer@example.test", password },
+    });
+    assert.equal(response.statusCode, 200);
+    const cookie = response.headers
+      .getSetCookie()
+      .find((value) => value.startsWith("__Host-relay_session="));
+    assert.ok(
+      cookie && cookie.includes("Secure") && cookie.includes("HttpOnly"),
+    );
+    return { ...browserHeaders, cookie: cookie.split(";", 1)[0] };
+  };
   const adminApp = await panel(pool, source, fixtureTransfer);
   try {
     await migrate(pool, "up");
@@ -391,7 +379,10 @@ async function main() {
       [fixture.uuid, sourceId, owner, egg, sourceAllocation],
     );
     await app.listen({ port: 13201, host: "127.0.0.1" });
-    if (receiver) await receiver.listen({ port: 13202, host: "127.0.0.1" });
+    if (standalone) {
+      receiver = await startInstance("destination", target, 13202);
+      sourceApp = await startInstance("source", source, 13203);
+    }
     const from = new WingsClient(source),
       to = new WingsClient(target);
     for (const client of [from, to])
@@ -449,7 +440,10 @@ async function main() {
         sink.listen(18182, "127.0.0.1", resolve);
       });
     const url = `/api/v1/admin/servers/${fixture.uuid}/transfer`;
-    const headers = await login(adminApp, password);
+    const headers = sourceApp
+      ? await networkLogin(sourceApp)
+      : await login(adminApp, password);
+    const request = sourceApp ?? adminApp;
     const payload = {
       confirm: true,
       nodeId: targetId,
@@ -457,7 +451,7 @@ async function main() {
     };
     assert.equal(
       (
-        await adminApp.inject({
+        await request.inject({
           method: "POST",
           url,
           headers: browserHeaders,
@@ -468,7 +462,7 @@ async function main() {
     );
     assert.equal(
       (
-        await adminApp.inject({
+        await request.inject({
           method: "POST",
           url,
           headers,
@@ -477,7 +471,7 @@ async function main() {
       ).statusCode,
       404,
     );
-    const response = await adminApp.inject({
+    const response = await request.inject({
       method: "POST",
       url,
       headers,
@@ -487,7 +481,7 @@ async function main() {
     transferId = response.json<{ id: string; phase: string }>().id;
     assert.ok(transferId);
     assert.equal(
-      (await adminApp.inject({ method: "POST", url, headers, payload }))
+      (await request.inject({ method: "POST", url, headers, payload }))
         .statusCode,
       409,
     );
@@ -669,13 +663,37 @@ async function main() {
     await receiver?.close();
     await adminApp.close();
     await app.close();
-    await promisify(execFile)(
-      "./node_modules/.bin/tsx",
-      ["api/wings/live-transfer.ts", "recover", transferId],
-      {
-        timeout: 20000,
-        env: { ...process.env, RELAY_TRANSFER_FIXTURE_PASSWORD: password },
-      },
+    assert.ok(sourceApp);
+    await sourceApp.close();
+    sourceApp = await startInstance("source", source, 13203);
+    const recoveredHeaders = await networkLogin(sourceApp);
+    const finish = {
+      method: "POST",
+      url: `${url}/finalize`,
+      headers: recoveredHeaders,
+      payload: { confirm: true, transferId },
+    };
+    assert.equal(
+      (
+        await sourceApp.inject({
+          ...finish,
+          payload: { ...finish.payload, transferId: randomUUID() },
+        })
+      ).statusCode,
+      409,
+    );
+    await pool.execute("UPDATE users SET is_admin=0 WHERE id=?", [owner]);
+    assert.equal((await sourceApp.inject(finish)).statusCode, 403);
+    await pool.execute("UPDATE users SET is_admin=1 WHERE id=?", [owner]);
+    assert.equal((await sourceApp.inject(finish)).statusCode, 200);
+    assert.equal((await sourceApp.inject(finish)).statusCode, 409);
+    assert.deepEqual(
+      await rows(
+        pool,
+        "SELECT actor_id FROM audit_log WHERE event='catalog.transfer_completed' AND subject_id=?",
+        [fixture.uuid],
+      ),
+      [{ actor_id: owner }],
     );
     assert.deepEqual(
       await rows(pool, "SELECT node_id,allocation_id FROM servers WHERE id=?", [
@@ -689,6 +707,7 @@ async function main() {
       "Wings-to-Wings transfer verified on independent Docker engines; archive matched and source preserved before cleanup",
     );
   } finally {
+    await sourceApp?.close();
     await receiver?.close();
     await adminApp.close();
     await app.close();
