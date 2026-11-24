@@ -42,6 +42,8 @@ type Transfer = {
   source_allocation_id: string;
   target_node_id: string;
   target_allocation_id: string;
+  dispatched_at: string | null;
+  destination_reported_at: string | null;
   phase: "reserved" | "uncertain" | "completed" | "cancelled";
 };
 /** Internal persistence only. No dispatch, public route, or caller-controlled proof. */
@@ -84,6 +86,28 @@ export function transferLedger(pool: Pool) {
         return id;
       });
     },
+    async claim(id: string) {
+      const [result] = await pool.execute<import("mysql2").ResultSetHeader>(
+        "UPDATE wings_transfers SET dispatched_at=UTC_TIMESTAMP(3) WHERE id=? AND phase='reserved' AND dispatched_at IS NULL",
+        [id],
+      );
+      return result.affectedRows === 1;
+    },
+    async reportDestination(server: string, node: string) {
+      const [result] = await pool.execute<import("mysql2").ResultSetHeader>(
+        "UPDATE wings_transfers SET destination_reported_at=UTC_TIMESTAMP(3) WHERE active_server=? AND target_node_id=? AND phase='reserved' AND dispatched_at IS NOT NULL AND destination_reported_at IS NULL",
+        [server, node],
+      );
+      return result.affectedRows === 1;
+    },
+    async placement(server: string, node: string) {
+      const [entry] = await rows<Transfer>(
+        pool,
+        "SELECT * FROM wings_transfers WHERE active_server=? AND target_node_id=? AND phase='reserved' AND dispatched_at IS NOT NULL",
+        [server, node],
+      );
+      return entry;
+    },
     async settle(
       id: string,
       result:
@@ -98,6 +122,17 @@ export function transferLedger(pool: Pool) {
           [id],
         );
         if (!entry || entry.phase !== "reserved") return false;
+        if (
+          result.kind === "not_dispatched"
+            ? entry.dispatched_at !== null
+            : entry.dispatched_at === null
+        )
+          return false;
+        if (
+          result.kind === "verified_destination" &&
+          !entry.destination_reported_at
+        )
+          return false;
         if (result.kind === "ambiguous") {
           await db.execute(
             "UPDATE wings_transfers SET phase='uncertain' WHERE id=?",

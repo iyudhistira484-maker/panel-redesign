@@ -37,7 +37,7 @@ export async function registerRemote(
   rawNode: WingsNode,
   fixture?: ContractWorkload,
   provider?: WorkloadProvider,
-  onTransfer?: (id: string, successful: boolean) => boolean,
+  onTransfer?: (id: string, successful: boolean) => boolean | Promise<boolean>,
 ) {
   if (fixture && !UUID_V4.test(fixture.uuid))
     throw new Error("Invalid test fixture UUID");
@@ -89,7 +89,7 @@ export async function registerRemote(
         if (
           !UUID_V4.test(uuid) ||
           (result !== "success" && result !== "failure") ||
-          !onTransfer(uuid, result === "success")
+          !(await onTransfer(uuid, result === "success"))
         )
           return reply.code(404).send({ error: "transfer_not_found" });
         return reply.code(204).send();

@@ -526,6 +526,17 @@ test(
         targetAllocation,
       );
       assert.ok(move);
+      assert.deepEqual(
+        (await Promise.all([ledger.claim(move), ledger.claim(move)])).sort(),
+        [false, true],
+      );
+      assert.equal(
+        await ledger.settle(move, { kind: "not_dispatched" }),
+        false,
+      );
+      assert.equal(await ledger.reportDestination(serverId, nodeId), false);
+      assert.equal(await ledger.reportDestination(serverId, anotherNode), true);
+
       assert.equal(
         await ledger.settle(move, {
           kind: "verified_destination",
@@ -552,6 +563,7 @@ test(
       );
       const reverse = await ledger.reserve(serverId, nodeId, allocationId);
       assert.ok(reverse);
+      assert.equal(await ledger.claim(reverse), true);
       assert.equal(await ledger.settle(reverse, { kind: "ambiguous" }), true);
       assert.equal(
         await ledger.settle(reverse, { kind: "not_dispatched" }),

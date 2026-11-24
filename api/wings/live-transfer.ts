@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { rows, stagingPool } from "../db";
+import { migrate } from "../migrate";
+import { transferLedger } from "../catalog/transfer";
+import { createHash, randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import { WingsClient, type WingsNode } from "./client";
 import { lifecycleFixture } from "./lifecycle-fixture";
@@ -43,7 +46,18 @@ async function main() {
   let installed: boolean | undefined;
   let completion: boolean | undefined;
   let failure = false;
-  let transferring = false;
+  const pool = stagingPool();
+  const ledger = transferLedger(pool);
+  const [
+    sourceId,
+    targetId,
+    sourceAllocation,
+    targetAllocation,
+    owner,
+    nest,
+    egg,
+  ] = Array.from({ length: 7 }, () => randomUUID());
+  let transferId: string | undefined;
   const fixture = lifecycleFixture((result) => {
     installed = result.successful;
   });
@@ -60,7 +74,7 @@ async function main() {
   await app.register(
     (instance) =>
       registerRemote(instance, source, fixture, undefined, (id, ok) => {
-        if (id !== fixture.uuid || ok || !transferring) return false;
+        if (id !== fixture.uuid || ok || !transferId) return false;
         failure = true;
         return true;
       }),
@@ -74,11 +88,15 @@ async function main() {
         undefined,
         {
           lookup: async (id) =>
-            transferring && id === fixture.uuid ? destination : undefined,
+            id === fixture.uuid && (await ledger.placement(id, targetId))
+              ? destination
+              : undefined,
           list: async () => ({ data: [], total: 0 }),
         },
-        (id, ok) => {
-          if (id !== fixture.uuid || !transferring) return false;
+        async (id, ok) => {
+          if (id !== fixture.uuid || !transferId) return false;
+          if (ok && !(await ledger.reportDestination(id, targetId)))
+            return false;
           completion ??= ok;
           return true;
         },
@@ -86,6 +104,41 @@ async function main() {
     { prefix: "/target/api/remote" },
   );
   try {
+    await migrate(pool, "up");
+    await pool.execute(
+      "INSERT INTO users (id,email,display_name,password_hash) VALUES (?,'transfer@example.test','Fixture','disabled')",
+      [owner],
+    );
+    await pool.execute("INSERT INTO nests (id,name) VALUES (?,'Fixture')", [
+      nest,
+    ]);
+    await pool.execute(
+      "INSERT INTO eggs (id,nest_id,name,version,document) VALUES (?,?,'Fixture','PTDL_v2','{}')",
+      [egg, nest],
+    );
+    for (const [id, n, a, port] of [
+      [sourceId, source, sourceAllocation, 25610],
+      [targetId, target, targetAllocation, 25611],
+    ] as const) {
+      await pool.execute(
+        "INSERT INTO nodes (id,name,origin,token_id,token_cipher) VALUES (?,?,?,?,?)",
+        [
+          id,
+          n.tokenId,
+          n.origin,
+          n.tokenId,
+          Buffer.from("unused fixture placeholder"),
+        ],
+      );
+      await pool.execute(
+        "INSERT INTO allocations (id,node_id,ip,port) VALUES (?,?,'127.0.0.1',?)",
+        [a, id, port],
+      );
+    }
+    await pool.execute(
+      "INSERT INTO servers (id,name,node_id,owner_id,egg_id,allocation_id) VALUES (?,'Fixture',?,?,?,?)",
+      [fixture.uuid, sourceId, owner, egg, sourceAllocation],
+    );
     await app.listen({ port: 13201, host: "127.0.0.1" });
     const from = new WingsClient(source),
       to = new WingsClient(target);
@@ -112,7 +165,14 @@ async function main() {
       headers: { authorization: `Bearer ${source.tokenId}.${source.token}` },
     });
     assert.equal(forged.statusCode, 401);
-    transferring = true;
+    await pool.execute(
+      "INSERT INTO wings_provisions (server_id,phase) VALUES (?,'installed')",
+      [fixture.uuid],
+    );
+    transferId = await ledger.reserve(fixture.uuid, targetId, targetAllocation);
+    assert.ok(transferId);
+    assert.equal(await ledger.claim(transferId), true);
+    assert.equal(await transferLedger(pool).claim(transferId), false);
     const sourceToken = signTransferCapability(source, issuer, fixture.uuid);
     const rejected = await fetch(`${target.origin}/api/transfers`, {
       method: "POST",
@@ -142,6 +202,20 @@ async function main() {
       digest(await from.readFixtureFile(fixture.uuid, "relay-start.sh")),
       digest(original),
     );
+    assert.equal(
+      await transferLedger(pool).settle(transferId, {
+        kind: "verified_destination",
+        node: targetId,
+        server: fixture.uuid,
+      }),
+      true,
+    );
+    assert.deepEqual(
+      await rows(pool, "SELECT node_id,allocation_id FROM servers WHERE id=?", [
+        fixture.uuid,
+      ]),
+      [{ node_id: targetId, allocation_id: targetAllocation }],
+    );
     await to.remove(fixture.uuid);
     await from.remove(fixture.uuid);
     console.log(
@@ -149,6 +223,7 @@ async function main() {
     );
   } finally {
     await app.close();
+    await pool.end();
   }
 }
 void main().catch((error) => {
