@@ -240,3 +240,11 @@ Manifest kini mencakup `subusers` dan hanya mengeluarkan ID relasi serta daftar 
 Skenario `legacy-panel` kini membaca dua server yang berbeda dari Panel v1.15.2 asli. Keduanya berbagi satu node Wings, owner, dan nest, tetapi punya UUID server, egg, dan alokasi berbeda. Importer fixture menerapkan keduanya dalam satu transaksi. Konflik alokasi pada baris kedua membatalkan seluruh transaksi, termasuk server pertama yang sudah ditulis. Replay identik tidak menambah baris; replay dengan pemetaan alokasi berubah ditolak. Setelah apply, cutover dan rollback mempertahankan kedua UUID, ID Docker, `StartedAt`, checksum file, dan status instalasi sumber. Skenario ini tidak menguji impor lintas node atau dump umum.
 
 [CI 45389518962](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45389518962) lulus sembilan job. Ulangi lewat `wings-bootstrap (legacy-panel)` pada runner disposable.
+
+### Variabel runtime dan rewrite konfigurasi egg yang diperiksa
+
+Migrasi `008_fixture_mode` menyimpan opsi `fixtureMode` yang hanya menerima `alpha` atau `beta`. Opsi ini hanya dapat dipakai dengan provisioning disposable aktif dan dokumen egg HTTP yang lolos allowlist byte persis. Jika tidak diberikan, nilai default dokumen dipakai. Adaptor meneruskan `RELAY_SITE_MODE` ke startup dan mengompilasi satu placeholder yang dikenali pada `site/settings.json` menjadi aturan parser JSON Wings. Tidak ada evaluasi ekspresi umum atau jalur file yang diambil dari permintaan pengguna.
+
+Harness menguji default `alpha` dan override `beta`, serta penolakan nilai di luar daftar sebelum draft dibuat. HTTP menyajikan `runtime.txt` yang ditulis dari environment dan `settings.json` yang diubah Wings, sementara key lain tetap utuh. Keduanya tetap melalui install, start, stop, dan delete. Dukungan parser dan aturan variabel egg secara umum belum dibuktikan.
+
+[CI 45392536934](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45392536934) lulus sembilan job. Jalankan `npm run test:eggs` untuk unit atau `wings-bootstrap (lifecycle)` untuk verifikasi runtime dan rewrite dengan Wings nyata.
