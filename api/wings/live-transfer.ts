@@ -81,6 +81,8 @@ async function main() {
     return;
   }
   let installed: boolean | undefined;
+  const dropReport = process.env.RELAY_TRANSFER_SCENARIO === "missing-report";
+  let reportDropped = false;
   let completion: boolean | undefined;
   let failure = false;
   const pool = stagingPool();
@@ -138,6 +140,10 @@ async function main() {
         async (id, ok) => {
           if (id !== fixture.uuid || !(await ledger.placement(id, targetId)))
             return false;
+          if (ok && dropReport) {
+            reportDropped = true;
+            return false;
+          }
           if (ok && !(await ledger.reportDestination(id, targetId)))
             return false;
           completion ??= ok;
@@ -230,9 +236,76 @@ async function main() {
     );
     await eventually(
       "destination callback",
-      () => failure || completion !== undefined,
+      () => failure || reportDropped || completion !== undefined,
     );
     assert.equal(failure, false);
+    if (dropReport) {
+      assert.equal(reportDropped, true);
+      assert.equal(completion, undefined);
+      await app.close();
+      assert.equal(await to.state(fixture.uuid), "offline");
+      assert.equal(
+        digest(await to.readFixtureFile(fixture.uuid, "relay-start.sh")),
+        digest(original),
+      );
+      await pool.execute(
+        "UPDATE wings_transfers SET dispatched_at=UTC_TIMESTAMP(3)-INTERVAL 6 MINUTE WHERE id=?",
+        [transferId],
+      );
+      const recoveredPool = stagingPool();
+      try {
+        const recovered = transferLedger(recoveredPool);
+        assert.equal(await recovered.expireUnconfirmedDispatches(), 1);
+        assert.equal(await recovered.claim(transferId), false);
+        assert.equal(
+          await recovered.reportDestination(fixture.uuid, targetId),
+          false,
+        );
+        assert.equal(
+          await recovered.settle(transferId, {
+            kind: "verified_destination",
+            node: targetId,
+            server: fixture.uuid,
+          }),
+          false,
+        );
+        assert.deepEqual(
+          await rows(
+            recoveredPool,
+            "SELECT phase,active_allocation,destination_reported_at FROM wings_transfers WHERE id=?",
+            [transferId],
+          ),
+          [
+            {
+              phase: "uncertain",
+              active_allocation: targetAllocation,
+              destination_reported_at: null,
+            },
+          ],
+        );
+        assert.deepEqual(
+          await rows(
+            recoveredPool,
+            "SELECT node_id,allocation_id FROM servers WHERE id=?",
+            [fixture.uuid],
+          ),
+          [{ node_id: sourceId, allocation_id: sourceAllocation }],
+        );
+      } finally {
+        await recoveredPool.end();
+      }
+      assert.equal(
+        digest(await from.readFixtureFile(fixture.uuid, "relay-start.sh")),
+        digest(original),
+      );
+      // Dispose both copies only after checking that reconciliation preserved them.
+      await to.remove(fixture.uuid);
+      await from.remove(fixture.uuid);
+      console.log(
+        "Missing destination report quarantined; source and reservation preserved before fixture teardown",
+      );
+      return;
+    }
     assert.equal(completion, true);
     await app.close();
     await promisify(execFile)(
