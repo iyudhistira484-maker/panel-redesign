@@ -144,7 +144,8 @@ async function main() {
     await until("source Wings health", async () =>
       Boolean(await client.health()),
     );
-    await client.create(uuid);
+    if (actual) await client.reinstall(uuid);
+    else await client.create(uuid);
     await until("legacy fixture installation", async () =>
       actual
         ? Boolean(

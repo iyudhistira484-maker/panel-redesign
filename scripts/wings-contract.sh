@@ -89,7 +89,7 @@ if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then
     -e APP_DEBUG=false -e DB_CONNECTION=mysql -e DB_HOST=127.0.0.1 -e DB_PORT=13306 -e DB_DATABASE=panel_adoption_fixture \
     -e DB_USERNAME=panel_fixture -e DB_PASSWORD="$db_password" \
     -e CACHE_DRIVER=file -e SESSION_DRIVER=file -e QUEUE_CONNECTION=sync \
-    -e PTERODACTYL_SEND_INSTALL_NOTIFICATION=false -e RELAY_LEGACY_FIXTURE=1 \
+    -e PTERODACTYL_SEND_INSTALL_NOTIFICATION=false -e PTERODACTYL_SEND_REINSTALL_NOTIFICATION=false -e RELAY_LEGACY_FIXTURE=1 \
     -e RELAY_WINGS_TEST_TOKEN -e RELAY_WINGS_TEST_TOKEN_ID \
     -e RELAY_ADOPTION_SERVER_UUID -e RELAY_ADOPTION_EGG_UUID -e RELAY_ADOPTION_OWNER_UUID -e RELAY_ADOPTION_NEST_UUID \
     ghcr.io/pterodactyl/panel:v1.15.2 -ec 'cd /app; printf "[client]\nskip-ssl\n" > /root/.my.cnf; php artisan migrate --force; php /tmp/relay-fixture.php; exec php -S 127.0.0.1:13202 -t public' >/dev/null
