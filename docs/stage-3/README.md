@@ -48,3 +48,5 @@ Untuk mencoba, ikuti [setup Tahap 2](../stage-2/README.md), jalankan `npm run db
 | `/servers` | Daftar; simpan draft `{name,nodeId,ownerId,eggId,allocationId}`. |
 
 `npm run test:identity` menjalankan tes non-DB lokal. Untuk skenario MySQL aktifkan `RELAY_RUN_MYSQL_TESTS=1` dan gunakan **hanya** basis data sekali pakai `relay_test` atau job `identity` di CI. Uji health katalog dengan HTTP fixture tidak membuktikan bahwa katalog telah terhubung ke lifecycle Wings nyata.
+
+**Hasil katalog:** [GitHub Actions 45352026287](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45352026287) lulus ketiga job. Integrasi MySQL mencakup migrasi ulang tanpa kehilangan draft, penolakan sesi non-admin dan API key admin, token node terenkripsi dan tidak terserialisasi, ekspor byte-identik, penolakan alokasi lintas node/duplikat, dan audit. Job Wings tetap menguji lifecycle fixture secara terpisah, bukan provisioning draft dari katalog.
