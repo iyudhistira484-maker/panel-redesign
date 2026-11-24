@@ -500,7 +500,7 @@ async function main() {
 }
 void main().catch((error) => {
   console.error(
-    `::error::${error instanceof Error ? error.message : "Wings integration failed"}`,
+    `::error::${error instanceof Error ? `${error.message} ${error.stack?.split("\n").find((line) => line.includes("live-contract.ts:")) ?? ""}`.replaceAll("\n", "%0A") : "Wings integration failed"}`,
   );
   process.exitCode = 1;
 });
