@@ -89,10 +89,12 @@ if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then
     export "RELAY_ADOPTION_${key}_UUID=$(cat /proc/sys/kernel/random/uuid)"
   done
   db_password=$(openssl rand -hex 24)
-  export RELAY_LEGACY_SNAPSHOT_URL="mysql://relay_snapshot:$db_password@127.0.0.1:13306/panel_snapshot_ci"
+  snapshot_password=$(openssl rand -hex 24)
+  export RELAY_LEGACY_SNAPSHOT_URL="mysql://relay_snapshot:$snapshot_password@127.0.0.1:13306/panel_snapshot_ci"
   export RELAY_LEGACY_SNAPSHOT_CI_PASSWORD="$db_password"
+  export RELAY_LEGACY_SNAPSHOT_READER_PASSWORD="$snapshot_password"
   app_key="base64:$(openssl rand -base64 32)"
-  printf '::add-mask::%s\n' "$db_password" "$app_key"
+  printf '::add-mask::%s\n' "$db_password" "$app_key" "$snapshot_password"
   docker run -d --name relay-adoption-db -p 127.0.0.1:13306:3306 \
     -e MYSQL_ROOT_PASSWORD="$db_password" -e MYSQL_DATABASE=panel_adoption_fixture \
     -e MYSQL_USER=panel_fixture -e MYSQL_PASSWORD="$db_password" mariadb:10.11 >/dev/null
