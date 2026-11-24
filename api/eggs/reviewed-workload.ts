@@ -4,8 +4,7 @@ import type { ContractWorkload } from "../wings/remote";
 
 const image = "~relay-wings-contract-http:ci";
 const shared = {
-  startup:
-    'echo RELAY_HTTP_START; exec /bin/busybox-extras httpd -f -p "$SERVER_PORT" -h /home/container/site',
+  startup: `echo RELAY_HTTP_START; /bin/busybox-extras httpd -f -p "$SERVER_PORT" -h /home/container/site & child=$!; trap 'kill "$child" 2>/dev/null || :; exit 0' TERM INT; wait "$child"`,
   config: {
     stop: "^SIGTERM",
     startup: '{"done":"RELAY_HTTP_START"}',
