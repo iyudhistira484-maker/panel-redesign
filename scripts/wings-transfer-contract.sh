@@ -60,10 +60,10 @@ YAML
 write_config source "$RELAY_TRANSFER_SOURCE_TOKEN" 18180 12122 '4192d1ec-21d8-4082-b86c-0771b74678ff'
 write_config target "$RELAY_TRANSFER_TARGET_TOKEN" 18181 12123 '33113cc5-78fb-4cd0-881b-326c3888b38b'
 # Inner daemon has a private socket, so source and destination can each own the same server UUID.
-docker run -d --privileged --name "$engine" \
+docker run -d --privileged --cgroupns=host --name "$engine" \
   -v "$work/engine:/relay-engine" -v "$work/target-data:$work/target-data" \
   --entrypoint dockerd docker:28.5.2-dind \
-  --host unix:///relay-engine/docker.sock --storage-driver=vfs --bip=172.26.10.1/24 >/dev/null
+  --host unix:///relay-engine/docker.sock --storage-driver=vfs --exec-opt native.cgroupdriver=cgroupfs --cgroup-parent=/relay-transfer-ci --bip=172.26.10.1/24 >/dev/null
 inner="unix://$work/engine/docker.sock"
 for i in {1..30}; do if sudo -n docker -H "$inner" info >/dev/null 2>&1; then break; fi; sleep 1; done
 if ! sudo -n docker -H "$inner" info >/dev/null 2>&1; then
@@ -82,7 +82,7 @@ RUN apk add --no-cache busybox-extras
 ENTRYPOINT ["/bin/sh", "-c", "exec /bin/sh -c \"$STARTUP\""]
 DOCKERFILE
 docker save relay-wings-contract-http:ci | sudo -n docker -H "$inner" load >/dev/null
-RELAY_TRANSFER_FIXTURE_ROOT="$work/target-data" ./node_modules/.bin/tsx api/wings/live-transfer.ts &
+RELAY_TRANSFER_CHECK_DESTINATION_RUNTIME=1 RELAY_TRANSFER_FIXTURE_ROOT="$work/target-data" ./node_modules/.bin/tsx api/wings/live-transfer.ts &
 pid=$!
 run_wings() {
   local role=$1 name=$2 socket=$3
