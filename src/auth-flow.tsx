@@ -3,8 +3,11 @@ import {
   ClipboardList,
   CornerDownRight,
   Server,
+  Pause,
+  Play,
   ShieldCheck,
 } from "lucide-react";
+import { useState } from "react";
 import type { Key } from "./i18n";
 
 const paths = [
@@ -21,11 +24,23 @@ const steps = [
 ] as const;
 
 export function AuthFlow({ t }: { t: (key: Key) => string }) {
+  const [paused, setPaused] = useState(false);
+  const MotionIcon = paused ? Play : Pause;
   return (
-    <div className="auth-flow" aria-hidden="true">
+    <div className="auth-flow" data-paused={paused}>
       <div className="auth-flow-heading">
         <span>{t("flowTitle")}</span>
-        <span>{t("flowDemo")}</span>
+        <div className="auth-flow-tools">
+          <span>{t("flowDemo")}</span>
+          <button
+            type="button"
+            className="auth-flow-toggle"
+            onClick={() => setPaused(!paused)}
+          >
+            <MotionIcon size={14} aria-hidden="true" />
+            {t(paused ? "flowPlay" : "flowPause")}
+          </button>
+        </div>
       </div>
       <svg aria-hidden="true" viewBox="0 46 650 196" fill="none">
         {paths.map((d) => (
@@ -34,11 +49,24 @@ export function AuthFlow({ t }: { t: (key: Key) => string }) {
         {paths.map((d) => (
           <path className="auth-signal" pathLength="1" d={d} key={d} />
         ))}
-        {steps.map(({ key, x, y, w, Icon }) => (
-          <g key={key} transform={`translate(${x} ${y})`}>
+        {steps.map(({ key, x, y, w, Icon }, index) => (
+          <g
+            className="auth-stage"
+            data-stage={[0, 1, 2, 2, 3][index]}
+            key={key}
+            transform={`translate(${x} ${y})`}
+          >
             <rect className="auth-step" width={w} height="44" rx="6" />
-            <Icon x={12} y={14} width={16} height={16} strokeWidth={1.5} />
-            <text x="36" y="26">
+            <rect
+              className="auth-icon-tile"
+              x="8"
+              y="9"
+              width="26"
+              height="26"
+              rx="4"
+            />
+            <Icon x={13} y={14} width={16} height={16} strokeWidth={1.5} />
+            <text x="41" y="26">
               {t(key)}
             </text>
           </g>
