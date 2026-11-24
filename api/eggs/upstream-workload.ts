@@ -12,12 +12,17 @@ if (
 )
   throw new Error("Unreviewed upstream egg bytes");
 const egg = JSON.parse(mumbleEgg);
-export function upstreamWorkload(...args: Parameters<typeof lifecycleFixture>) {
-  const base = lifecycleFixture(...args);
-  const port = args[1]?.port ?? 25610;
-  const value = egg.variables[0].default_value;
-  if (!/^[0-9]{1,5}$/.test(value))
-    throw new Error("Unsupported MAX_USERS default");
+export const mumbleMaxUsersPattern = "^[0-9]{1,5}(?![\\s\\S])";
+export function upstreamWorkload(
+  installed: Parameters<typeof lifecycleFixture>[0],
+  server?: Parameters<typeof lifecycleFixture>[1],
+  maxUsers?: string | null,
+) {
+  const base = lifecycleFixture(installed, server);
+  const port = server?.port ?? 25610;
+  const value = maxUsers ?? egg.variables[0].default_value;
+  if (!new RegExp(mumbleMaxUsersPattern).test(value))
+    throw new Error("Unsupported MAX_USERS");
   const ini = JSON.parse(egg.config.files)["murmur.ini"] as {
     parser: string;
     find: Record<string, string>;

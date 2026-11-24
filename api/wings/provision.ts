@@ -53,8 +53,9 @@ type ServerRow = {
   nodeId: string;
   phase: Phase | null;
   fixtureMode: FixtureMode | null;
+  mumbleMaxUsers: string | null;
 };
-const select = `SELECT s.id AS uuid,s.owner_id AS ownerId,s.name,s.fixture_mode AS fixtureMode,a.port,s.egg_id AS eggId,e.document,n.origin,n.token_id AS tokenId,n.token_cipher AS cipher,n.id AS nodeId,p.phase
+const select = `SELECT s.id AS uuid,s.owner_id AS ownerId,s.name,s.fixture_mode AS fixtureMode,s.mumble_max_users AS mumbleMaxUsers,a.port,s.egg_id AS eggId,e.document,n.origin,n.token_id AS tokenId,n.token_cipher AS cipher,n.id AS nodeId,p.phase
  FROM servers s JOIN nodes n ON n.id=s.node_id JOIN allocations a ON a.id=s.allocation_id JOIN eggs e ON e.id=s.egg_id LEFT JOIN wings_provisions p ON p.server_id=s.id`;
 export class ProvisionError extends Error {
   constructor(
@@ -129,7 +130,7 @@ export function createProvisioner(
     if (s.document.equals(approvedDocuments[0]))
       return lifecycleFixture(installed, s);
     if (s.document.equals(Buffer.from(mumbleEgg)))
-      return upstreamWorkload(installed, s);
+      return upstreamWorkload(installed, s, s.mumbleMaxUsers);
     const reviewed = reviewedWorkload(s.document, s, installed, s.fixtureMode);
     if (!reviewed) throw new ProvisionError(422, "egg_not_approved");
     return reviewed;

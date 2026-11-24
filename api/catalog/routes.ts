@@ -1,3 +1,4 @@
+import { mumbleEgg, mumbleMaxUsersPattern } from "../eggs/upstream-workload";
 import {
   fixtureModes,
   reviewedHttpEggs,
@@ -308,6 +309,7 @@ export async function registerCatalog(
       eggId: string;
       allocationId: string;
       fixtureMode?: FixtureMode;
+      mumbleMaxUsers?: string;
     };
   }>(
     "/servers",
@@ -328,36 +330,54 @@ export async function registerCatalog(
             eggId: id,
             allocationId: id,
             fixtureMode: { type: "string", enum: fixtureModes },
+            mumbleMaxUsers: {
+              type: "string",
+              pattern: mumbleMaxUsersPattern,
+              maxLength: 5,
+            },
           },
         },
       },
     },
     async (req, reply) => {
-      const { name, nodeId, ownerId, eggId, allocationId, fixtureMode } =
-        req.body;
+      const {
+        name,
+        nodeId,
+        ownerId,
+        eggId,
+        allocationId,
+        fixtureMode,
+        mumbleMaxUsers,
+      } = req.body;
       const result = await write(
         req,
         "catalog.server_draft_created",
         async (db, uuid) => {
           if (!(await lockFreeAllocation(db, nodeId, allocationId)))
             throw new CatalogError(409, "allocation_unavailable");
-          if (fixtureMode !== undefined) {
+          if (fixtureMode !== undefined || mumbleMaxUsers !== undefined) {
             const [egg] = await rows<{ document: Buffer }>(
               db,
               "SELECT document FROM eggs WHERE id=?",
               [eggId],
             );
             if (
-              !provisioner ||
-              !egg ||
-              !reviewedHttpEggs.some((text) =>
-                egg.document.equals(Buffer.from(text)),
-              )
+              fixtureMode !== undefined &&
+              (!provisioner ||
+                !egg ||
+                !reviewedHttpEggs.some((text) =>
+                  egg.document.equals(Buffer.from(text)),
+                ))
             )
               throw new CatalogError(422, "fixture_mode_not_supported");
+            if (
+              mumbleMaxUsers !== undefined &&
+              (!provisioner || !egg?.document.equals(Buffer.from(mumbleEgg)))
+            )
+              throw new CatalogError(422, "mumble_max_users_not_supported");
           }
           await db.execute(
-            "INSERT INTO servers (id,name,node_id,owner_id,egg_id,allocation_id,fixture_mode) VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO servers (id,name,node_id,owner_id,egg_id,allocation_id,fixture_mode,mumble_max_users) VALUES (?,?,?,?,?,?,?,?)",
             [
               uuid,
               name,
@@ -366,6 +386,7 @@ export async function registerCatalog(
               eggId,
               allocationId,
               fixtureMode ?? null,
+              mumbleMaxUsers ?? null,
             ],
           );
         },

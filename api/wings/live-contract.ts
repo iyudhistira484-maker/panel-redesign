@@ -444,7 +444,14 @@ async function main() {
         .statusCode,
       422,
     );
-    const voice = await add("servers", draft);
+    for (const value of ["100000", "+25", "25\n", "1e2"]) {
+      assert.equal(
+        (await admin("POST", "servers", { ...draft, mumbleMaxUsers: value }))
+          .statusCode,
+        400,
+      );
+    }
+    const voice = await add("servers", { ...draft, mumbleMaxUsers: "37" });
     const provisionVoice = await admin("POST", `servers/${voice}/provision`, {
       confirm: true,
     });
@@ -476,6 +483,12 @@ async function main() {
         (await client.state(voice)) === "running"
       );
     });
+    const { stdout: ini } = await docker(
+      "docker",
+      ["exec", voice, "cat", "/home/container/murmur.ini"],
+      { timeout: 4000 },
+    );
+    assert.match(ini, /^users\s*=\s*37$/m);
     assert.equal(
       (
         await admin("POST", `servers/${voice}/power`, {
