@@ -182,6 +182,12 @@ async function main() {
     };
     const power = (action: "start" | "stop", confirm = true) =>
       admin("POST", `servers/${uuid}/power`, { action, confirm });
+    const consoleSnapshot = async () => {
+      const result = await admin("GET", `servers/${uuid}/console`);
+      assert.equal(result.statusCode, 200, result.body);
+      return result.json<{ lines: string[]; truncated: boolean }>();
+    };
+    assert.deepEqual(await consoleSnapshot(), { lines: [], truncated: false });
     assert.equal((await runtime()).state, "offline");
     assert.equal((await power("start", false)).statusCode, 400);
     assert.equal((await power("start")).statusCode, 202);
@@ -189,6 +195,12 @@ async function main() {
       "running state via admin API",
       async () => (await runtime()).state === "running",
     );
+    const replay = await consoleSnapshot();
+    assert.ok(
+      replay.lines.includes("RELAY_CONTRACT_READY"),
+      "actual Wings console marker",
+    );
+    assert.ok(replay.lines.every((line) => line === "RELAY_CONTRACT_READY"));
     assert.equal(
       (await admin("POST", `servers/${uuid}/delete`, { confirm: true }))
         .statusCode,

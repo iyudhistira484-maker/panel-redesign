@@ -222,6 +222,21 @@ export function createProvisioner(
         throw error;
       }
     },
+    async console(id: string, actor: Actor) {
+      const server = await authorized(pool, id, actor);
+      if (server.phase !== "installed")
+        throw new ProvisionError(409, "server_not_installed");
+      try {
+        return await socket.console(id, actor.id);
+      } catch (error) {
+        if (error instanceof SocketError)
+          throw new ProvisionError(
+            error.reason === "capacity" ? 429 : 502,
+            "wings_console_unavailable",
+          );
+        throw error;
+      }
+    },
     async runtime(id: string, actor: Actor) {
       const server = await authorized(pool, id, actor);
       if (server.phase !== "installed")

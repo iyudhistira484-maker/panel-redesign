@@ -1,7 +1,9 @@
+import { stripVTControlCharacters } from "node:util";
 import { createHmac, randomUUID } from "node:crypto";
 import WebSocket from "ws";
 import { UUID_V4, validateNode, type WingsNode } from "./client";
 
+export type FixtureConsole = { lines: string[]; truncated: boolean };
 export type SocketStats = {
   memoryBytes: number;
   memoryLimitBytes: number;
@@ -69,6 +71,11 @@ function decodeStats(input: string): SocketStats {
     txBytes: num(network.tx_bytes),
   };
 }
+function frameText(args: unknown): string {
+  if (!Array.isArray(args) || typeof args[0] !== "string")
+    throw new SocketError("payload");
+  return args[0];
+}
 export class WingsSocket {
   readonly #node: WingsNode;
   readonly #origin: string;
@@ -79,7 +86,44 @@ export class WingsSocket {
       throw new Error("Invalid socket origin");
     this.#origin = origin;
   }
-  async stats(server: string, user: string): Promise<SocketStats> {
+  stats(server: string, user: string): Promise<SocketStats> {
+    return this.#request(server, user, {
+      event: "send stats",
+      accept: (event, args) =>
+        event === "stats" ? decodeStats(frameText(args)) : undefined,
+    });
+  }
+  console(server: string, user: string): Promise<FixtureConsole> {
+    const lines: string[] = [];
+    let truncated = false;
+    return this.#request<FixtureConsole>(server, user, {
+      event: "send logs",
+      idleMs: 350,
+      snapshot: () => ({ lines, truncated }),
+      accept: (event, args) => {
+        if (event !== "console output") return undefined;
+        const safe = stripVTControlCharacters(frameText(args)).trim();
+        // It is not safe to claim general secret masking. This fixture may publish only its known marker.
+        if (safe !== "RELAY_CONTRACT_READY") return undefined;
+        if (lines.length === 20) {
+          truncated = true;
+          return { lines, truncated };
+        }
+        lines.push(safe);
+        return undefined;
+      },
+    });
+  }
+  async #request<T>(
+    server: string,
+    user: string,
+    request: {
+      event: "send logs" | "send stats";
+      accept: (event: string, args: unknown) => T | undefined;
+      idleMs?: number;
+      snapshot?: () => T;
+    },
+  ): Promise<T> {
     if (this.#active >= 4) throw new SocketError("capacity");
     const capability = signReadCapability(
       this.#node,
@@ -89,7 +133,7 @@ export class WingsSocket {
     );
     this.#active++;
     try {
-      return await new Promise<SocketStats>((resolve, reject) => {
+      return await new Promise<T>((resolve, reject) => {
         const url = new URL(`/api/servers/${server}/ws`, this.#node.origin);
         url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
         const socket = new WebSocket(url, {
@@ -102,14 +146,22 @@ export class WingsSocket {
         let authenticated = false,
           done = false,
           frames = 0;
+        let idle: ReturnType<typeof setTimeout> | undefined;
         const timer = setTimeout(
           () => finish(new SocketError("timeout")),
           5000,
         );
-        function finish(result: SocketStats | SocketError) {
+        function resetIdle() {
+          if (!request.snapshot || !request.idleMs) return;
+          clearTimeout(idle);
+          const snapshot = request.snapshot;
+          idle = setTimeout(() => finish(snapshot()), request.idleMs);
+        }
+        function finish(result: T | SocketError) {
           if (done) return;
           done = true;
           clearTimeout(timer);
+          clearTimeout(idle);
           socket.terminate();
           if (result instanceof SocketError) reject(result);
           else resolve(result);
@@ -149,20 +201,21 @@ export class WingsSocket {
             if (frame.event === "auth success" && !authenticated) {
               authenticated = true;
               socket.send(
-                JSON.stringify({ event: "send stats", args: [] }),
+                JSON.stringify({ event: request.event, args: [] }),
                 (err) => {
                   if (err) finish(new SocketError("transport"));
                 },
               );
+              resetIdle();
               return;
             }
-            if (frame.event === "stats" && authenticated) {
-              if (
-                !Array.isArray(frame.args) ||
-                typeof frame.args[0] !== "string"
-              )
-                throw new SocketError("payload");
-              finish(decodeStats(frame.args[0]));
+            if (authenticated) {
+              const output = request.accept(frame.event, frame.args);
+              if (output !== undefined) {
+                finish(output);
+                return;
+              }
+              if (frame.event === "console output") resetIdle();
             }
           } catch {
             finish(new SocketError("payload"));

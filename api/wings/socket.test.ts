@@ -91,3 +91,48 @@ test("stats request follows authentication and returns only expected numeric fie
     await new Promise<void>((resolve) => hub.close(() => resolve()));
   }
 });
+
+test("console fixture drops unknown output and bounds its allowed marker history", async () => {
+  const hub = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+  await new Promise<void>((resolve, reject) => {
+    hub.once("listening", resolve);
+    hub.once("error", reject);
+  });
+  const address = hub.address();
+  assert.ok(address && typeof address !== "string");
+  hub.on("connection", (socket) => {
+    socket.on("message", (raw) => {
+      const frame = JSON.parse(raw.toString());
+      if (frame.event === "auth")
+        socket.send(JSON.stringify({ event: "auth success" }));
+      if (frame.event === "send logs") {
+        socket.send(
+          JSON.stringify({
+            event: "console output",
+            args: ["token=example-private-value"],
+          }),
+        );
+        for (let i = 0; i < 22; i++)
+          socket.send(
+            JSON.stringify({
+              event: "console output",
+              args: ["\u001b[32mRELAY_CONTRACT_READY\u001b[0m\r\n"],
+            }),
+          );
+      }
+    });
+  });
+  try {
+    const socket = new WingsSocket(
+      { ...node, origin: `http://127.0.0.1:${address.port}` },
+      origin,
+    );
+    const result = await socket.console(randomUUID(), randomUUID());
+    assert.deepEqual(result, {
+      lines: Array.from({ length: 20 }, () => "RELAY_CONTRACT_READY"),
+      truncated: true,
+    });
+  } finally {
+    await new Promise<void>((resolve) => hub.close(() => resolve()));
+  }
+});
