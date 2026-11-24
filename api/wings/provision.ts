@@ -26,7 +26,12 @@ export type Phase =
   | "installing"
   | "installed"
   | "install_failed"
-  | "uncertain";
+  | "uncertain"
+  | "reinstalling"
+  | "reinstall_uncertain"
+  | "deleting"
+  | "delete_uncertain"
+  | "deleted";
 type ServerRow = {
   uuid: string;
   name: string;
@@ -78,14 +83,16 @@ export function createProvisioner(
     server: ServerRow,
     result: { successful: boolean; reinstall: boolean },
   ) {
-    if (result.reinstall) return;
+    const eligiblePhases = result.reinstall
+      ? ["reinstalling", "reinstall_uncertain"]
+      : ["dispatching", "installing", "uncertain"];
     await transaction(pool, async (db) => {
       const current = await load(db, server.uuid, true);
       if (
         !current ||
         !eligible(current) ||
         !current.phase ||
-        !["dispatching", "installing", "uncertain"].includes(current.phase)
+        !eligiblePhases.includes(current.phase)
       )
         return;
       const phase = result.successful ? "installed" : "install_failed";
@@ -104,7 +111,11 @@ export function createProvisioner(
   const provider: WorkloadProvider = {
     lookup: async (id) => {
       const s = await load(pool, id);
-      return s?.phase && eligible(s) ? workload(s) : undefined;
+      return s?.phase &&
+        !["deleting", "delete_uncertain", "deleted"].includes(s.phase) &&
+        eligible(s)
+        ? workload(s)
+        : undefined;
     },
     list: async (page, perPage) => {
       // Only the configured test node is served. The catalog enforces unique origin/token ID.
@@ -180,6 +191,17 @@ export function createProvisioner(
       };
     }
   }
+  const sending = new Set<string>();
+  async function exclusive<T>(id: string, run: () => Promise<T>) {
+    if (sending.has(id))
+      throw new ProvisionError(409, "lifecycle_dispatch_in_progress");
+    sending.add(id);
+    try {
+      return await run();
+    } finally {
+      sending.delete(id);
+    }
+  }
   return {
     provider,
     async runtime(id: string, actor: Actor) {
@@ -189,33 +211,97 @@ export function createProvisioner(
       return observe(id);
     },
     async power(id: string, action: "start" | "stop", actor: Actor) {
-      await transaction(pool, async (db) => {
-        const server = await authorized(db, id, actor, true);
-        if (server.phase !== "installed")
-          throw new ProvisionError(409, "server_not_installed");
-        await db.execute(
-          "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,?,?)",
-          [actor.id, `wings.power_${action}_requested`, id],
-        );
+      return exclusive(id, async () => {
+        await transaction(pool, async (db) => {
+          const server = await authorized(db, id, actor, true);
+          if (server.phase !== "installed")
+            throw new ProvisionError(409, "server_not_installed");
+          await db.execute(
+            "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,?,?)",
+            [actor.id, `wings.power_${action}_requested`, id],
+          );
+        });
+        try {
+          await client.power(id, action);
+        } catch {
+          await pool.execute(
+            "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,?,?)",
+            [actor.id, `wings.power_${action}_uncertain`, id],
+          );
+          throw new ProvisionError(502, "power_outcome_unknown");
+        }
+        return { accepted: true };
       });
-      try {
-        await client.power(id, action);
-      } catch {
-        await pool.execute(
-          "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,?,?)",
-          [actor.id, `wings.power_${action}_uncertain`, id],
-        );
-        throw new ProvisionError(502, "power_outcome_unknown");
-      }
-      return { accepted: true };
+    },
+    async destructive(
+      id: string,
+      action: "reinstall" | "delete",
+      actor: Actor,
+    ) {
+      return exclusive(id, async () => {
+        const before = await authorized(pool, id, actor);
+        if (before.phase !== "installed")
+          throw new ProvisionError(409, "server_not_installed");
+        const runtime = await observe(id);
+        if (runtime.presence !== "present" || runtime.state !== "offline")
+          throw new ProvisionError(409, "server_must_be_offline");
+        const pending = action === "reinstall" ? "reinstalling" : "deleting";
+        await transaction(pool, async (db) => {
+          const current = await authorized(db, id, actor, true);
+          if (current.phase !== "installed")
+            throw new ProvisionError(409, "server_not_installed");
+          await db.execute(
+            "UPDATE wings_provisions SET phase=? WHERE server_id=?",
+            [pending, id],
+          );
+          await db.execute(
+            "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,?,?)",
+            [actor.id, `wings.${action}_requested`, id],
+          );
+        });
+        let outcome: Phase = pending;
+        try {
+          if (action === "reinstall") await client.reinstall(id);
+          else {
+            await client.remove(id);
+            outcome = "deleted";
+          }
+        } catch {
+          outcome =
+            action === "reinstall" ? "reinstall_uncertain" : "delete_uncertain";
+        }
+        // Preserve a terminal reinstall callback even if it beats the HTTP result.
+        if (outcome !== pending)
+          await transaction(pool, async (db) => {
+            const current = await load(db, id, true);
+            if (current?.phase !== pending) return;
+            await db.execute(
+              "UPDATE wings_provisions SET phase=? WHERE server_id=?",
+              [outcome, id],
+            );
+            await db.execute(
+              "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,?,?)",
+              [actor.id, `wings.${outcome}`, id],
+            );
+          });
+        return { phase: (await load(pool, id))?.phase ?? outcome };
+      });
     },
     async reconcile(id: string, actor: Actor) {
       const s = await authorized(pool, id, actor);
       if (
         !s.phase ||
-        !(["dispatching", "installing", "uncertain"] as const).some(
-          (phase) => phase === s.phase,
-        )
+        !(
+          [
+            "dispatching",
+            "installing",
+            "uncertain",
+            "reinstalling",
+            "reinstall_uncertain",
+            "deleting",
+            "delete_uncertain",
+          ] as const
+        ).some((phase) => phase === s.phase)
       )
         throw new ProvisionError(409, "reconcile_not_applicable");
       const observation = await observe(id);

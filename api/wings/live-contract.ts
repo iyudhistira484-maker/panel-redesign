@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createApp } from "../app";
-import { stagingPool } from "../db";
+import { rows, stagingPool } from "../db";
 import { migrate } from "../migrate";
 import { passwordHash } from "../security";
 import { WingsClient, type WingsNode } from "./client";
@@ -170,15 +170,51 @@ async function main() {
       "running state via admin API",
       async () => (await runtime()).state === "running",
     );
+    assert.equal(
+      (await admin("POST", `servers/${uuid}/delete`, { confirm: true }))
+        .statusCode,
+      409,
+    );
+    assert.equal(
+      (await admin("POST", `servers/${uuid}/reinstall`, { confirm: true }))
+        .statusCode,
+      409,
+    );
     assert.equal((await power("stop")).statusCode, 202);
     await until(
       "offline state via admin API",
       async () => (await runtime()).state === "offline",
     );
-    await client.remove(uuid);
-    assert.equal((await runtime()).presence, "absent");
+    const action = (name: "reinstall" | "delete", confirm = true) =>
+      admin("POST", `servers/${uuid}/${name}`, { confirm });
+    assert.equal((await action("reinstall", false)).statusCode, 400);
+    const reinstall = await action("reinstall");
+    assert.equal(reinstall.statusCode, 202, reinstall.body);
+    await until("persisted reinstall callback", async () => {
+      const current = await phase();
+      assert.notEqual(current, "install_failed");
+      return current === "installed";
+    });
+    assert.deepEqual(
+      await rows<{ total: number }>(
+        pool,
+        "SELECT COUNT(*) AS total FROM audit_log WHERE subject_id=? AND event='wings.installed'",
+        [uuid],
+      ),
+      [{ total: 2 }],
+    );
+    assert.equal((await runtime()).state, "offline");
+    assert.equal((await action("delete", false)).statusCode, 400);
+    const deletion = await action("delete");
+    assert.equal(deletion.statusCode, 202, deletion.body);
+    assert.equal(await phase(), "deleted");
+    assert.equal((await action("delete")).statusCode, 409);
+    await assert.rejects(client.state(uuid), { reason: "not_found" });
+    assert.equal((await remote(`servers/${uuid}`)).statusCode, 404);
+    const after = await remote("servers?page=0&per_page=50");
+    assert.deepEqual(after.json().data, []);
     console.log(
-      "Catalog and real Wings verified: guarded dispatch, persistent installation, start, stop and disposable cleanup",
+      "Real Wings verified via admin: create, install, start, stop, reinstall and delete",
     );
   } finally {
     await app.close();

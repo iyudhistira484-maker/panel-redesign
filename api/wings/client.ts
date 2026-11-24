@@ -122,6 +122,14 @@ export class WingsClient {
         throw new WingsUnavailable("payload");
     }
   }
+  async reinstall(id: string) {
+    const result = await this.#send(
+      `${this.#server(id)}/reinstall`,
+      202,
+      "POST",
+    );
+    await result.body?.cancel();
+  }
   async remove(id: string) {
     const response = await this.#send(this.#server(id), 204, "DELETE");
     await response.body?.cancel();

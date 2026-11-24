@@ -355,6 +355,18 @@ export async function registerCatalog(
       (req) => provisioner.reconcile(req.params.id, admin(req)),
     );
 
+    for (const action of ["reinstall", "delete"] as const) {
+      app.post<{ Params: { id: string } }>(
+        `/servers/:id/${action}`,
+        { schema: confirmation, config: limit },
+        async (req, reply) =>
+          reply
+            .code(202)
+            .send(
+              await provisioner.destructive(req.params.id, action, admin(req)),
+            ),
+      );
+    }
     app.post<{ Params: { id: string }; Body: { confirm: boolean } }>(
       "/servers/:id/provision",
       {

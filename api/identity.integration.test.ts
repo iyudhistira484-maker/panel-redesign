@@ -277,6 +277,18 @@ test(
         409,
       );
       assert.equal(creates, 1);
+      ok(
+        await postAdmin(`servers/${approvedId}/delete`, { confirm: true }, a),
+        403,
+      );
+      ok(
+        await postAdmin(`servers/${approvedId}/delete`, { confirm: true }),
+        409,
+      );
+      ok(
+        await postAdmin(`servers/${approvedId}/reinstall`, { confirm: true }),
+        409,
+      );
       const callback = `/api/remote/servers/${approvedId}/install`;
       ok(
         await app.inject({
