@@ -60,24 +60,25 @@ write_config target "$RELAY_TRANSFER_TARGET_TOKEN" 18181 12123 '33113cc5-78fb-4c
 # Inner daemon has a private socket, so source and destination can each own the same server UUID.
 docker run -d --privileged --name "$engine" \
   -v "$work/engine:/relay-engine" -v "$work/target-data:$work/target-data" \
-  -e DOCKER_TLS_CERTDIR= docker:28.5.2-dind \
-  dockerd --host unix:///relay-engine/docker.sock --storage-driver=vfs --bip=172.26.10.1/24 >/dev/null
+  --entrypoint dockerd docker:28.5.2-dind \
+  --host unix:///relay-engine/docker.sock --storage-driver=vfs --bip=172.26.10.1/24 >/dev/null
 inner="unix://$work/engine/docker.sock"
-for i in {1..30}; do if docker -H "$inner" info >/dev/null 2>&1; then break; fi; sleep 1; done
-if ! docker -H "$inner" info >/dev/null 2>&1; then
+for i in {1..30}; do if sudo -n docker -H "$inner" info >/dev/null 2>&1; then break; fi; sleep 1; done
+if ! sudo -n docker -H "$inner" info >/dev/null 2>&1; then
   echo '::error::Disposable destination Docker engine did not become ready'
-  docker logs "$engine" 2>&1 | grep -Ei 'fatal|failed|error' | tail -4 || true
+  diagnostics=$(docker logs "$engine" 2>&1 | grep -Ei 'fatal|failed|error' | tail -4 | cut -c1-260 || true)
+  while IFS= read -r message; do [[ -z "$message" ]] || printf '::warning::%s\n' "$message"; done <<< "$diagnostics"
   exit 1
 fi
 docker pull debian:12-slim >/dev/null
 docker network create --internal "$net" >/dev/null
-docker -H "$inner" network create --internal "$net" >/dev/null
+sudo -n docker -H "$inner" network create --internal "$net" >/dev/null
 # Copy a pinned fixture image into the destination engine rather than sharing a runtime container.
 cat <<'DOCKERFILE' | docker build --tag relay-wings-contract-workload:ci - >/dev/null
 FROM alpine:3.22.2
 ENTRYPOINT ["/bin/sh", "/home/container/relay-start.sh"]
 DOCKERFILE
-docker save relay-wings-contract-workload:ci | docker -H "$inner" load >/dev/null
+docker save relay-wings-contract-workload:ci | sudo -n docker -H "$inner" load >/dev/null
 ./node_modules/.bin/tsx api/wings/live-transfer.ts &
 pid=$!
 run_wings() {
@@ -94,7 +95,7 @@ run_wings target "$dst" "$work/engine/docker.sock"
 if ! wait "$pid"; then
   for name in "$src" "$dst"; do
     docker inspect --format '{{.Name}}: {{.State.Status}} (exit {{.State.ExitCode}})' "$name"
-    diagnostics=$(docker logs "$name" 2>&1 | sed -E "s/${RELAY_TRANSFER_SOURCE_TOKEN}|${RELAY_TRANSFER_TARGET_TOKEN}/[redacted]/g; s/\x1b\[[0-9;]*m//g" | grep -Ei 'fatal|error|failed' | tail -3 | cut -c1-280 || true)
+    diagnostics=$(docker logs "$name" 2>&1 | sed -E "s/${RELAY_TRANSFER_SOURCE_TOKEN}|${RELAY_TRANSFER_TARGET_TOKEN}/[redacted]/g; s/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/[jwt-redacted]/g; s/\x1b\[[0-9;]*m//g" | grep -Ei 'fatal|error|failed' | tail -3 | cut -c1-280 || true)
     while IFS= read -r message; do [[ -z "$message" ]] || printf '::warning::%s\n' "$message"; done <<< "$diagnostics"
   done
   exit 1

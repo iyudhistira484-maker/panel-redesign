@@ -109,3 +109,11 @@ Harness Docker juga me-restart **container Wings** sementara container workload 
 Berkas berubah: `api/wings/socket.ts`, `api/wings/socket.test.ts`, `api/wings/provision.ts`, `api/catalog/routes.ts`, `api/identity.integration.test.ts`, dan `api/wings/live-contract.ts`. Jalankan `npm run test:wings` untuk unit/socket fixture; job `wings-bootstrap` menjalankan daemon dan MySQL sebenarnya.
 
 **Hasil:** [GitHub Actions 45362872328](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45362872328) lulus ketiga job. Real Wings mengembalikan marker saat workload berjalan dan snapshot kosong sebelum start. Workload tetap `running`, dengan ID Docker dan waktu start yang sama setelah restart daemon; jumlah instalasi tidak berubah saat rediscovery. Enam tes lokal Wings lulus, termasuk penghapusan baris yang tidak diizinkan dan batas 20 baris.
+
+## Kontrak transfer dua daemon
+
+Harness `api/wings/live-transfer.ts` dan `scripts/wings-transfer-contract.sh` menjalankan dua Wings versi 1.13.5 dengan Docker Engine, direktori data, alokasi, dan kredensial berbeda. Engine tujuan berjalan secara nested dengan socket Unix privat, hanya pada runner GitHub sekali pakai; jangan jalankan di host bersama. Node memakai loopback, fixture tidak memuat data atau kredensial produksi, dan workload tidak punya egress dari network Docker internal.
+
+Adaptor `api/wings/client.ts` mengirim permintaan transfer ke path tetap pada sumber; `api/wings/transfer-token.ts` membuat JWT singkat dengan secret tujuan, `scope=transfer`, dan UUID fixture di `sub`. Callback scoped di `api/wings/remote.ts` hanya dipasang eksplisit oleh harness. Kriteria uji: tujuan menolak JWT yang ditandatangani sumber, callback dengan kredensial sumber ditolak pada rute tujuan, tujuan melaporkan sukses untuk UUID yang diharapkan, dan checksum file fixture pada tujuan sama dengan sumber. Sumber tidak dihapus sebelum pemeriksaan. `npm run test:wings` menjalankan unit test termasuk konstruksi permintaan; job `wings-transfer` menjalankan daemon nyata.
+
+Ini **bukan** endpoint transfer pengguna: belum ada reservasi alokasi tujuan, pembaruan kepemilikan server di MySQL, cancel/retry, atau pemulihan setelah timeout. Selesainya transfer fixture tidak membuktikan bahwa node dari Panel lama bisa langsung diadopsi.
