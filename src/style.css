@@ -1119,3 +1119,13 @@ dialog h2 {
     stroke: var(--muted);
   }
 }
+
+.recovery-form {
+  display: grid;
+  gap: 12px;
+  max-width: 380px;
+  margin-block: 20px;
+}
+.recovery-form button {
+  justify-self: start;
+}

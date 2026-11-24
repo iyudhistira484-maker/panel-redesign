@@ -1,3 +1,4 @@
+import { PasswordRecovery } from "./reset-password";
 import { AuthFlow } from "./auth-flow";
 import { useEffect, useId, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -65,12 +66,14 @@ const pages = [
   "activity",
   "settings",
   "authView",
+  "forgot-password",
+  "reset-password",
   "emptyView",
   "errorView",
 ] as const;
 type Page = (typeof pages)[number];
 function getPage(): Page {
-  const p = location.hash.slice(1) as Page;
+  const p = location.hash.slice(1).split("?", 1)[0] as Page;
   return pages.includes(p) ? p : location.hash ? "errorView" : "overview";
 }
 function App() {
@@ -397,23 +400,38 @@ function App() {
     </>
   );
   const secondary =
-    page === "authView" ? (
+    page === "authView" ||
+    page === "forgot-password" ||
+    page === "reset-password" ? (
       <section className="auth-layout">
         <div>
           {brand}
-          <h1>{t("auth")}</h1>
-          <p>{t("authDesc")}</p>
-          <fieldset disabled>
-            <label htmlFor={`${contentId}-email`}>
-              {t("email")}
-              <TextInput id={`${contentId}-email`} type="email" />
-            </label>
-            <label htmlFor={`${contentId}-password`}>
-              {t("password")}
-              <TextInput id={`${contentId}-password`} type="password" />
-            </label>
-            <Button variant="primary">{t("auth")}</Button>
-          </fieldset>
+          {page === "authView" ? (
+            <>
+              <h1>{t("auth")}</h1>
+              <p>{t("authDesc")}</p>
+              <fieldset disabled>
+                <label htmlFor={`${contentId}-email`}>
+                  {t("email")}
+                  <TextInput id={`${contentId}-email`} type="email" />
+                </label>
+                <label htmlFor={`${contentId}-password`}>
+                  {t("password")}
+                  <TextInput id={`${contentId}-password`} type="password" />
+                </label>
+                <Button variant="primary">{t("auth")}</Button>
+              </fieldset>
+              <a className="button ghost" href="#forgot-password">
+                {locale === "id" ? "Lupa kata sandi" : "Forgot password"}
+              </a>
+            </>
+          ) : (
+            <PasswordRecovery
+              key={page}
+              mode={page === "forgot-password" ? "forgot" : "reset"}
+              locale={locale}
+            />
+          )}
         </div>
         <div className="auth-art decorated">
           <DotGrid />
@@ -537,7 +555,13 @@ function App() {
             <div className="breadcrumbs">
               <span>{config.name}</span>
               <ChevronRight size={14} />
-              <strong>{t(page)}</strong>
+              <strong>
+                {t(
+                  page === "forgot-password" || page === "reset-password"
+                    ? "authView"
+                    : page,
+                )}
+              </strong>
             </div>
             {language}
             <span className="avatar" aria-hidden="true">
