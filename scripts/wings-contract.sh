@@ -8,11 +8,12 @@ network=relay-wings-contract-net
 harness_pid=''
 remote_port=13200
 harness=api/wings/live-contract.ts
-if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == adoption ]]; then
+if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == adoption || "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then
   remote_port=13202
   harness=api/wings/live-adoption.ts
 fi
 cleanup() {
+  if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then docker rm -f relay-adoption-panel relay-adoption-db >/dev/null 2>&1 || true; fi
   docker rm -f "$name" >/dev/null 2>&1 || true
   docker network rm "$network" >/dev/null 2>&1 || true
   if [[ -n "$harness_pid" ]]; then kill "$harness_pid" 2>/dev/null || true; fi
@@ -67,6 +68,41 @@ cat <<'DOCKERFILE' | docker build --tag relay-wings-contract-workload:ci -
 FROM alpine:3.22.2
 ENTRYPOINT ["/bin/sh", "/home/container/relay-start.sh"]
 DOCKERFILE
+if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then
+  for key in SERVER EGG OWNER NEST; do
+    export "RELAY_ADOPTION_${key}_UUID=$(cat /proc/sys/kernel/random/uuid)"
+  done
+  db_password=$(openssl rand -hex 24)
+  app_key="base64:$(openssl rand -base64 32)"
+  printf '::add-mask::%s\n' "$db_password" "$app_key"
+  docker run -d --name relay-adoption-db -p 127.0.0.1:13306:3306 \
+    -e MYSQL_ROOT_PASSWORD="$db_password" -e MYSQL_DATABASE=panel_adoption_fixture \
+    -e MYSQL_USER=panel_fixture -e MYSQL_PASSWORD="$db_password" mariadb:10.11 >/dev/null
+  for i in {1..45}; do
+    if docker exec relay-adoption-db healthcheck.sh --connect --innodb_initialized >/dev/null 2>&1; then break; fi
+    sleep 1
+  done
+  docker exec relay-adoption-db healthcheck.sh --connect --innodb_initialized >/dev/null
+  docker run -d --name relay-adoption-panel --network host --entrypoint /bin/ash \
+    -v "$PWD/scripts/legacy-adoption-fixture.php:/tmp/relay-fixture.php:ro" \
+    -e APP_ENV=production -e APP_KEY="$app_key" -e APP_URL=http://127.0.0.1:13202 \
+    -e DB_HOST=127.0.0.1 -e DB_PORT=13306 -e DB_DATABASE=panel_adoption_fixture \
+    -e DB_USERNAME=panel_fixture -e DB_PASSWORD="$db_password" \
+    -e CACHE_DRIVER=file -e SESSION_DRIVER=file -e QUEUE_CONNECTION=sync \
+    -e PTERODACTYL_SEND_INSTALL_NOTIFICATION=false -e RELAY_LEGACY_FIXTURE=1 \
+    -e RELAY_WINGS_TEST_TOKEN -e RELAY_WINGS_TEST_TOKEN_ID \
+    -e RELAY_ADOPTION_SERVER_UUID -e RELAY_ADOPTION_EGG_UUID -e RELAY_ADOPTION_OWNER_UUID -e RELAY_ADOPTION_NEST_UUID \
+    ghcr.io/pterodactyl/panel:v1.15.2 -ec 'cd /app; php artisan migrate --force; php /tmp/relay-fixture.php; exec php -S 127.0.0.1:13202 -t public' >/dev/null
+  for i in {1..45}; do
+    if curl -s -o /dev/null http://127.0.0.1:13202/api/remote/servers; then break; fi
+    sleep 1
+  done
+  if ! curl -s -o /dev/null http://127.0.0.1:13202/api/remote/servers; then
+    echo '::error::Legacy Panel fixture did not start'
+    docker logs relay-adoption-panel 2>&1 | tail -12
+    exit 1
+  fi
+fi
 RELAY_ADOPTION_FIXTURE_CONFIG="$work/config/config.yml" ./node_modules/.bin/tsx "$harness" &
 harness_pid=$!
 docker run --detach --name "$name" --network host \

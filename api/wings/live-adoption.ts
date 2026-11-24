@@ -42,10 +42,20 @@ async function main() {
   const pool = stagingPool(),
     pepper = randomBytes(32),
     key = randomBytes(32);
-  const [uuid, egg, owner, nest, nodeId, allocation] = Array.from(
-    { length: 6 },
-    () => randomUUID(),
-  );
+  const actual = process.env.RELAY_BOOTSTRAP_SCENARIO === "legacy-panel";
+  const legacyId = (name: string) => {
+    const value = actual
+      ? process.env[`RELAY_ADOPTION_${name}_UUID`]
+      : randomUUID();
+    assert.match(value ?? "", /^[0-9a-f-]{36}$/);
+    return value as string;
+  };
+  const uuid = legacyId("SERVER"),
+    egg = legacyId("EGG"),
+    owner = legacyId("OWNER"),
+    nest = legacyId("NEST");
+  const nodeId = "3ab63670-f83b-4a2c-adeb-5b2852859319",
+    allocation = randomUUID();
   const name = "Existing staging workload";
   let installed = 0,
     ready = false,
@@ -88,6 +98,22 @@ async function main() {
     deliverReset: async () => {},
   });
   const docker = promisify(execFile);
+  const legacyStatus = async () =>
+    JSON.parse(
+      (
+        await docker(
+          "docker",
+          [
+            "exec",
+            "relay-adoption-panel",
+            "php",
+            "/tmp/relay-fixture.php",
+            "status",
+          ],
+          { timeout: 5000 },
+        )
+      ).stdout,
+    ) as { status: string | null; installed_at: string | null };
   const inspect = async () =>
     (
       await docker(
@@ -113,13 +139,21 @@ async function main() {
       .digest("hex");
   try {
     await migrate(pool, "up");
-    await legacy.listen({ host: "127.0.0.1", port: 13202 });
+    if (!actual) await legacy.listen({ host: "127.0.0.1", port: 13202 });
     await relay.listen({ host: "127.0.0.1", port: 13200 });
     await until("source Wings health", async () =>
       Boolean(await client.health()),
     );
     await client.create(uuid);
-    await until("legacy fixture installation", async () => ready);
+    await until("legacy fixture installation", async () =>
+      actual
+        ? Boolean(
+            (await legacyStatus()).installed_at &&
+              (await legacyStatus()).status === null,
+          )
+        : ready,
+    );
+    const legacyBefore = actual ? await legacyStatus() : undefined;
     await client.power(uuid, "start");
     await until(
       "source running",
@@ -192,10 +226,11 @@ async function main() {
     );
     await copyFile(`${config}.backup`, config);
     await restart();
-    assert.ok(legacyCalls > calls);
+    if (actual) assert.deepEqual(await legacyStatus(), legacyBefore);
+    else assert.ok(legacyCalls > calls);
     assert.equal(await inspect(), before);
     assert.equal(await checksum(), hash);
-    assert.equal(installed, 1);
+    if (!actual) assert.equal(installed, 1);
     await client.power(uuid, "stop");
     await until(
       "fixture stop",
