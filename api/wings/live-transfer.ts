@@ -1,4 +1,7 @@
-import { registerCatalog } from "../catalog/routes";
+import { createApp } from "../app";
+import type { FixtureTransfer } from "../catalog/routes";
+import type { Pool } from "mysql2/promise";
+import { passwordHash } from "../security";
 import { fixtureTransferService } from "./transfer-service";
 import { createServer, request, type ClientRequest } from "node:http";
 import { execFile } from "node:child_process";
@@ -17,6 +20,39 @@ import { signTransferCapability } from "./transfer-token";
 const digest = (value: string) =>
   createHash("sha256").update(value).digest("hex");
 const issuer = "http://127.0.0.1:13201";
+const panelOrigin = "https://transfer.relay.example.test";
+const browserHeaders = { origin: panelOrigin, "x-relay-request": "1" };
+const panel = (
+  pool: Pool,
+  source: WingsNode,
+  fixtureTransfer: FixtureTransfer,
+) =>
+  createApp({
+    pool,
+    origin: panelOrigin,
+    key: randomBytes(32),
+    pepper: randomBytes(32),
+    catalogNodeKey: randomBytes(32),
+    enableDisposableProvisioning: true,
+    wingsTestNode: source,
+    allowedCatalogNodeOrigins: [source.origin],
+    fixtureTransfer,
+    deliverReset: async () => {},
+  });
+async function login(app: Awaited<ReturnType<typeof panel>>, password: string) {
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/v1/auth/login",
+    headers: browserHeaders,
+    payload: { email: "transfer@example.test", password },
+  });
+  assert.equal(response.statusCode, 200);
+  const cookie = response.cookies.find(
+    (cookie) => cookie.name === "__Host-relay_session",
+  );
+  assert.ok(cookie?.secure && cookie.httpOnly);
+  return { ...browserHeaders, cookie: `${cookie.name}=${cookie.value}` };
+}
 async function eventually(label: string, fn: () => boolean | Promise<boolean>) {
   for (let i = 0; i < 45; i++) {
     if (await fn()) return;
@@ -78,35 +114,31 @@ async function main() {
         [entry.server_id],
       );
       assert.ok(server);
-      const app = Fastify({ logger: false });
+      const password = process.env.RELAY_TRANSFER_FIXTURE_PASSWORD;
+      assert.ok(password);
+      const app = await panel(pool, source, {
+        server: entry.server_id,
+        source: entry.source_node_id,
+        target: entry.target_node_id,
+        allocation: entry.target_allocation_id,
+        dispatch: transfer.dispatch,
+        finalize: transfer.finalize,
+      });
       try {
-        await app.register(
-          (instance) =>
-            registerCatalog(instance, {
-              pool,
-              pepper: randomBytes(32),
-              authenticate: async (req) =>
-                req.headers["x-fixture-admin"] === "1"
-                  ? { id: server.owner_id, admin: true, channel: "session" }
-                  : null,
-              fixtureTransfer: {
-                server: entry.server_id,
-                source: entry.source_node_id,
-                target: entry.target_node_id,
-                allocation: entry.target_allocation_id,
-                dispatch: transfer.dispatch,
-                finalize: transfer.finalize,
-              },
-            }),
-          { prefix: "/api/v1/admin" },
-        );
         const url = `/api/v1/admin/servers/${entry.server_id}/transfer/finalize`;
         const payload = { confirm: true, transferId: id };
         assert.equal(
-          (await app.inject({ method: "POST", url, payload })).statusCode,
+          (
+            await app.inject({
+              method: "POST",
+              url,
+              headers: browserHeaders,
+              payload,
+            })
+          ).statusCode,
           401,
         );
-        const headers = { "x-fixture-admin": "1" };
+        const headers = await login(app, password);
         assert.equal(
           (
             await app.inject({
@@ -124,7 +156,7 @@ async function main() {
         assert.equal(
           (await app.inject({ method: "POST", url, headers, payload }))
             .statusCode,
-          409,
+          403,
         );
         await pool.execute("UPDATE users SET is_admin=1 WHERE id=?", [
           server.owner_id,
@@ -278,7 +310,7 @@ async function main() {
       ),
     { prefix: "/target/api/remote" },
   );
-  const adminProof = randomBytes(32).toString("hex");
+  const password = randomBytes(32).toString("hex");
   const uploadNode = interrupted
     ? { ...target, origin: "http://127.0.0.1:18182" }
     : target;
@@ -288,30 +320,20 @@ async function main() {
     { id: targetId, node: uploadNode },
     issuer,
   );
-  await app.register(
-    (instance) =>
-      registerCatalog(instance, {
-        pool,
-        pepper: randomBytes(32),
-        authenticate: async (req) =>
-          req.headers.authorization === `Bearer ${adminProof}`
-            ? { id: owner, admin: true, channel: "session" }
-            : null,
-        fixtureTransfer: {
-          server: fixture.uuid,
-          source: sourceId,
-          target: targetId,
-          allocation: targetAllocation,
-          dispatch: transfer.dispatch,
-        },
-      }),
-    { prefix: "/api/v1/admin" },
-  );
+  const fixtureTransfer = {
+    server: fixture.uuid,
+    source: sourceId,
+    target: targetId,
+    allocation: targetAllocation,
+    dispatch: transfer.dispatch,
+    finalize: transfer.finalize,
+  };
+  const adminApp = await panel(pool, source, fixtureTransfer);
   try {
     await migrate(pool, "up");
     await pool.execute(
-      "INSERT INTO users (id,email,display_name,password_hash,is_admin) VALUES (?,'transfer@example.test','Fixture','disabled',1)",
-      [owner],
+      "INSERT INTO users (id,email,display_name,password_hash,is_admin) VALUES (?,'transfer@example.test','Fixture',?,1)",
+      [owner, await passwordHash(password)],
     );
     await pool.execute("INSERT INTO nests (id,name) VALUES (?,'Fixture')", [
       nest,
@@ -386,19 +408,26 @@ async function main() {
         sink.listen(18182, "127.0.0.1", resolve);
       });
     const url = `/api/v1/admin/servers/${fixture.uuid}/transfer`;
-    const headers = { authorization: `Bearer ${adminProof}` };
+    const headers = await login(adminApp, password);
     const payload = {
       confirm: true,
       nodeId: targetId,
       allocationId: targetAllocation,
     };
     assert.equal(
-      (await app.inject({ method: "POST", url, payload })).statusCode,
+      (
+        await adminApp.inject({
+          method: "POST",
+          url,
+          headers: browserHeaders,
+          payload,
+        })
+      ).statusCode,
       401,
     );
     assert.equal(
       (
-        await app.inject({
+        await adminApp.inject({
           method: "POST",
           url,
           headers,
@@ -407,7 +436,7 @@ async function main() {
       ).statusCode,
       404,
     );
-    const response = await app.inject({
+    const response = await adminApp.inject({
       method: "POST",
       url,
       headers,
@@ -417,7 +446,8 @@ async function main() {
     transferId = response.json<{ id: string; phase: string }>().id;
     assert.ok(transferId);
     assert.equal(
-      (await app.inject({ method: "POST", url, headers, payload })).statusCode,
+      (await adminApp.inject({ method: "POST", url, headers, payload }))
+        .statusCode,
       409,
     );
     assert.deepEqual(
@@ -486,8 +516,32 @@ async function main() {
       );
       const recoveredPool = stagingPool();
       try {
+        await adminApp.close();
+        const recoveredApp = await panel(
+          recoveredPool,
+          source,
+          fixtureTransfer,
+        );
+        try {
+          const recoveryHeaders = await login(recoveredApp, password);
+          const status = await recoveredApp.inject({
+            url,
+            headers: recoveryHeaders,
+          });
+          assert.equal(status.statusCode, 200);
+          assert.equal(status.json().phase, "reserved");
+          const response = await recoveredApp.inject({
+            method: "POST",
+            url: `${url}/reconcile`,
+            headers: recoveryHeaders,
+            payload: { confirm: true },
+          });
+          assert.equal(response.statusCode, 200);
+          assert.equal(response.json().phase, "uncertain");
+        } finally {
+          await recoveredApp.close();
+        }
         const recovered = transferLedger(recoveredPool);
-        assert.equal(await recovered.expireUnconfirmedDispatches(), 1);
         assert.equal(
           await recovered.claim(transferId, digest(original)),
           false,
@@ -556,11 +610,15 @@ async function main() {
       return;
     }
     assert.equal(completion, true);
+    await adminApp.close();
     await app.close();
     await promisify(execFile)(
       "./node_modules/.bin/tsx",
       ["api/wings/live-transfer.ts", "recover", transferId],
-      { timeout: 15000 },
+      {
+        timeout: 20000,
+        env: { ...process.env, RELAY_TRANSFER_FIXTURE_PASSWORD: password },
+      },
     );
     assert.deepEqual(
       await rows(pool, "SELECT node_id,allocation_id FROM servers WHERE id=?", [
@@ -574,6 +632,7 @@ async function main() {
       "Wings-to-Wings transfer verified on independent Docker engines; archive matched and source preserved before cleanup",
     );
   } finally {
+    await adminApp.close();
     await app.close();
     upstream?.destroy();
     sink.closeAllConnections();
