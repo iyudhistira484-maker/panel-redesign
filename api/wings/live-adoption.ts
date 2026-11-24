@@ -1,3 +1,4 @@
+import { applyLegacyFixture } from "../import/legacy-fixture-apply";
 import { legacyPreflight } from "../import/legacy-preflight";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -156,6 +157,7 @@ async function main() {
         : ready,
     );
     const legacyBefore = actual ? await legacyStatus() : undefined;
+    let manifest: unknown;
     if (actual) {
       const { stdout } = await docker(
         "docker",
@@ -168,7 +170,8 @@ async function main() {
         ],
         { timeout: 5000, maxBuffer: 65536 },
       );
-      const report = legacyPreflight(JSON.parse(stdout));
+      manifest = JSON.parse(stdout);
+      const report = legacyPreflight(manifest);
       assert.deepEqual(report.counts, {
         servers: 1,
         users: 1,
@@ -188,42 +191,95 @@ async function main() {
     );
     const before = await inspect(),
       hash = await checksum();
-    await pool.execute(
-      "INSERT INTO users (id,email,display_name,password_hash) VALUES (?,'adoption@example.test','Fixture','disabled')",
-      [owner],
-    );
-    await pool.execute(
-      "INSERT INTO nests (id,name) VALUES (?,'Adoption fixture')",
-      [nest],
-    );
-    await pool.execute(
-      "INSERT INTO eggs (id,nest_id,name,version,document) VALUES (?,?,'Fixture','PTDL_v2',?)",
-      [egg, nest, Buffer.from(disposableEgg)],
-    );
-    await pool.execute(
-      "INSERT INTO nodes (id,name,origin,token_id,token_cipher) VALUES (?,'Existing node',?,?,?)",
-      [
-        nodeId,
-        node.origin,
-        node.tokenId,
-        cryptoContext(key, pepper, "node-token").seal(
-          Buffer.from(node.token),
+    if (actual) {
+      const credentials = { node, key, pepper, allocationId: allocation };
+      const conflictingNode = randomUUID();
+      await pool.execute(
+        "INSERT INTO nodes (id,name,origin,token_id,token_cipher) VALUES (?,'Conflict fixture',?,'conflict-fixture',?)",
+        [conflictingNode, node.origin, Buffer.from("unused")],
+      );
+      await assert.rejects(applyLegacyFixture(pool, manifest, credentials), {
+        code: "ER_DUP_ENTRY",
+      });
+      for (const table of [
+        "users",
+        "nests",
+        "eggs",
+        "allocations",
+        "servers",
+        "wings_provisions",
+      ])
+        assert.deepEqual(
+          await rows(pool, `SELECT COUNT(*) AS total FROM ${table}`),
+          [{ total: 0 }],
+        );
+      await pool.execute("DELETE FROM nodes WHERE id=?", [conflictingNode]);
+      assert.equal(
+        (await applyLegacyFixture(pool, manifest, credentials)).applied,
+        true,
+      );
+      assert.equal(
+        (await applyLegacyFixture(pool, manifest, credentials)).applied,
+        false,
+      );
+      await assert.rejects(
+        applyLegacyFixture(pool, manifest, {
+          ...credentials,
+          allocationId: randomUUID(),
+        }),
+        /conflicts with import/,
+      );
+      for (const table of [
+        "users",
+        "nests",
+        "eggs",
+        "nodes",
+        "allocations",
+        "servers",
+        "wings_provisions",
+      ])
+        assert.deepEqual(
+          await rows(pool, `SELECT COUNT(*) AS total FROM ${table}`),
+          [{ total: 1 }],
+        );
+    } else {
+      await pool.execute(
+        "INSERT INTO users (id,email,display_name,password_hash) VALUES (?,'adoption@example.test','Fixture','disabled')",
+        [owner],
+      );
+      await pool.execute(
+        "INSERT INTO nests (id,name) VALUES (?,'Adoption fixture')",
+        [nest],
+      );
+      await pool.execute(
+        "INSERT INTO eggs (id,nest_id,name,version,document) VALUES (?,?,'Fixture','PTDL_v2',?)",
+        [egg, nest, Buffer.from(disposableEgg)],
+      );
+      await pool.execute(
+        "INSERT INTO nodes (id,name,origin,token_id,token_cipher) VALUES (?,'Existing node',?,?,?)",
+        [
           nodeId,
-        ),
-      ],
-    );
-    await pool.execute(
-      "INSERT INTO allocations (id,node_id,ip,port) VALUES (?,?,'127.0.0.1',25610)",
-      [allocation, nodeId],
-    );
-    await pool.execute(
-      "INSERT INTO servers (id,name,node_id,owner_id,egg_id,allocation_id) VALUES (?,?,?,?,?,?)",
-      [uuid, name, nodeId, owner, egg, allocation],
-    );
-    await pool.execute(
-      "INSERT INTO wings_provisions (server_id,phase) VALUES (?,'installed')",
-      [uuid],
-    );
+          node.origin,
+          node.tokenId,
+          cryptoContext(key, pepper, "node-token").seal(
+            Buffer.from(node.token),
+            nodeId,
+          ),
+        ],
+      );
+      await pool.execute(
+        "INSERT INTO allocations (id,node_id,ip,port) VALUES (?,?,'127.0.0.1',25610)",
+        [allocation, nodeId],
+      );
+      await pool.execute(
+        "INSERT INTO servers (id,name,node_id,owner_id,egg_id,allocation_id) VALUES (?,?,?,?,?,?)",
+        [uuid, name, nodeId, owner, egg, allocation],
+      );
+      await pool.execute(
+        "INSERT INTO wings_provisions (server_id,phase) VALUES (?,'installed')",
+        [uuid],
+      );
+    }
     const original = await readFile(config, "utf8");
     assert.equal(original.split("remote: http://127.0.0.1:13202").length, 2);
     await copyFile(config, `${config}.backup`);
