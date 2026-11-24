@@ -228,3 +228,9 @@ Pada skenario `legacy-panel`, katalog Relay kini dibentuk dari UUID dan relasi m
 Ini apply khusus fixture, bukan importer dump umum: token uji disediakan terpisah, alokasi Relay dipetakan eksplisit, egg runtime tetap fixture yang diizinkan, dan kata sandi/izin/data pengguna lama tidak dimigrasikan.
 
 [CI 45383391767](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45383391767) lulus sembilan job, termasuk konflik, rollback transaksi, replay idempoten, dan cutover/rollback Wings dari Panel asli. Jalankan `wings-bootstrap (legacy-panel)` untuk mengulang; jangan jalankan apply pada VPS.
+
+### Preflight cakupan izin subuser
+
+Manifest kini mencakup `subusers` dan hanya mengeluarkan ID relasi serta daftar izin. Preflight memetakan setiap grant ke UUID user/server yang tepat, menolak referensi yatim, grant kepada pemilik, pasangan duplikat, dan izin di luar daftar terpusat. Tes lokal memakai grant berisi data sintetis dan memastikan wildcard ditolak. Skenario Panel nyata memeriksa ekspor saat tabel subuser kosong. Apply fixture menolak manifest berisi grant, sehingga belum ada perubahan izin atau implementasi pengelolaan subuser Tahap 6.
+
+[CI 45384418879](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45384418879) lulus sembilan job. Gunakan `npm run test:identity` untuk mengulang tes preflight secara lokal.
