@@ -717,6 +717,21 @@ async function main() {
       ]),
       [{ node_id: targetId, allocation_id: targetAllocation }],
     );
+    assert.equal(await from.state(fixture.uuid), "offline");
+    assert.equal(
+      digest(await from.readFixtureFile(fixture.uuid, profile.path)),
+      digest(original),
+    );
+    await to.power(fixture.uuid, "start");
+    await eventually(
+      "transferred HTTP workload running",
+      async () => (await to.state(fixture.uuid)) === "running",
+    );
+    await to.power(fixture.uuid, "stop");
+    await eventually(
+      "transferred HTTP workload offline",
+      async () => (await to.state(fixture.uuid)) === "offline",
+    );
     await to.remove(fixture.uuid);
     await from.remove(fixture.uuid);
     console.log(
