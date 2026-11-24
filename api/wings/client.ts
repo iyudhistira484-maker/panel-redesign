@@ -142,10 +142,14 @@ export class WingsClient {
     );
     await result.body?.cancel();
   }
-  async readFixtureFile(id: string, name: "relay-start.sh") {
-    if (name !== "relay-start.sh") throw new Error("Unsupported fixture file");
+  async readFixtureFile(
+    id: string,
+    name: "relay-start.sh" | "site/index.html",
+  ) {
+    if (name !== "relay-start.sh" && name !== "site/index.html")
+      throw new Error("Unsupported fixture file");
     const result = await this.#send(
-      `${this.#server(id)}/files/contents?file=relay-start.sh`,
+      `${this.#server(id)}/files/contents?file=${encodeURIComponent(name)}`,
       200,
     );
     const data = await this.#read(result, 8192);

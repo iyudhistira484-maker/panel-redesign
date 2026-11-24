@@ -1,7 +1,8 @@
 import { createApp } from "../app";
 import type { FixtureTransfer } from "../catalog/routes";
 import type { Pool } from "mysql2/promise";
-import { disposableEgg } from "./provision";
+import { reviewedHttpEggs } from "../eggs/reviewed-workload";
+import { transferProfile } from "./transfer-profile";
 import { cryptoContext, passwordHash } from "../security";
 import { fixtureTransferService } from "./transfer-service";
 import { createServer, request, type ClientRequest } from "node:http";
@@ -15,7 +16,7 @@ import { transferLedger } from "../catalog/transfer";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import { WingsClient, type WingsNode } from "./client";
-import { lifecycleFixture } from "./lifecycle-fixture";
+
 import { registerRemote } from "./remote";
 import { signTransferCapability } from "./transfer-token";
 
@@ -139,15 +140,24 @@ async function main() {
     egg,
   ] = Array.from({ length: 7 }, () => randomUUID());
   let transferId: string | undefined;
-  const fixture = lifecycleFixture((result) => {
-    installed = result.successful;
-  });
-  const destination = lifecycleFixture(() => {}, {
-    uuid: fixture.uuid,
-    port: 25611,
-    name: "Transfer destination fixture",
-    eggId: "498aa323-143b-4ab2-ad9e-f3b711450fd0",
-  });
+  const document = Buffer.from(reviewedHttpEggs[1]);
+  const profile = transferProfile(document);
+  assert.ok(profile);
+  const selected = profile.workload(
+    (result) => {
+      installed = result.successful;
+    },
+    { uuid: randomUUID(), name: "HTTP transfer", eggId: egg, port: 25610 },
+    "beta",
+  );
+  assert.ok(selected);
+  const fixture = selected;
+  const destination = profile.workload(
+    () => {},
+    { uuid: fixture.uuid, name: "HTTP transfer", eggId: egg, port: 25611 },
+    "beta",
+  );
+  assert.ok(destination);
   const app = Fastify({
     logger: false,
     ajv: { customOptions: { coerceTypes: false, removeAdditional: false } },
@@ -349,7 +359,7 @@ async function main() {
     ]);
     await pool.execute(
       "INSERT INTO eggs (id,nest_id,name,version,document) VALUES (?,?,'Fixture','PTDL_v2',?)",
-      [egg, nest, Buffer.from(disposableEgg)],
+      [egg, nest, document],
     );
     for (const [id, n, a, port] of [
       [sourceId, source, sourceAllocation, 25610],
@@ -374,7 +384,7 @@ async function main() {
       );
     }
     await pool.execute(
-      "INSERT INTO servers (id,name,node_id,owner_id,egg_id,allocation_id) VALUES (?,'Fixture',?,?,?,?)",
+      "INSERT INTO servers (id,name,node_id,owner_id,egg_id,allocation_id,fixture_mode) VALUES (?,'Fixture',?,?,?,?,'beta')",
       [fixture.uuid, sourceId, owner, egg, sourceAllocation],
     );
     await app.listen({ port: 13201, host: "127.0.0.1" });
@@ -396,8 +406,8 @@ async function main() {
     await eventually("source installation", () => installed !== undefined);
     assert.equal(installed, true);
     assert.equal(await from.state(fixture.uuid), "offline");
-    const original = await from.readFixtureFile(fixture.uuid, "relay-start.sh");
-    assert.ok(original.includes("RELAY_CONTRACT_READY"));
+    const original = await from.readFixtureFile(fixture.uuid, profile.path);
+    assert.ok(original.includes(profile.marker));
     const callbackPath = `/api/remote/servers/${fixture.uuid}/transfer/success`;
     const forged = await (receiver ?? app).inject({
       method: "POST",
@@ -554,7 +564,7 @@ async function main() {
         assert.equal(reportDropped, true);
         assert.equal(await to.state(fixture.uuid), "offline");
         assert.equal(
-          digest(await to.readFixtureFile(fixture.uuid, "relay-start.sh")),
+          digest(await to.readFixtureFile(fixture.uuid, profile.path)),
           digest(original),
         );
       }
@@ -654,7 +664,7 @@ async function main() {
         });
       }
       assert.equal(
-        digest(await from.readFixtureFile(fixture.uuid, "relay-start.sh")),
+        digest(await from.readFixtureFile(fixture.uuid, profile.path)),
         digest(original),
       );
       // Dispose both copies only after checking that reconciliation preserved them.

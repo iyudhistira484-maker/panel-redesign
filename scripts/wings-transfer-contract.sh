@@ -76,11 +76,12 @@ docker pull debian:12-slim >/dev/null
 docker network create --internal "$net" >/dev/null
 sudo -n docker -H "$inner" network create --internal "$net" >/dev/null
 # Copy a pinned fixture image into the destination engine rather than sharing a runtime container.
-cat <<'DOCKERFILE' | docker build --tag relay-wings-contract-workload:ci - >/dev/null
+cat <<'DOCKERFILE' | docker build --tag relay-wings-contract-http:ci - >/dev/null
 FROM alpine:3.22.2
-ENTRYPOINT ["/bin/sh", "/home/container/relay-start.sh"]
+RUN apk add --no-cache busybox-extras
+ENTRYPOINT ["/bin/sh", "-c", "exec /bin/sh -c \"$STARTUP\""]
 DOCKERFILE
-docker save relay-wings-contract-workload:ci | sudo -n docker -H "$inner" load >/dev/null
+docker save relay-wings-contract-http:ci | sudo -n docker -H "$inner" load >/dev/null
 RELAY_TRANSFER_FIXTURE_ROOT="$work/target-data" ./node_modules/.bin/tsx api/wings/live-transfer.ts &
 pid=$!
 run_wings() {

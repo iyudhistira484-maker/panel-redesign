@@ -4,8 +4,8 @@ import { transferLedger } from "../catalog/transfer";
 import { rows } from "../db";
 import { cryptoContext } from "../security";
 import { validateNode, type WingsNode } from "./client";
-import { lifecycleFixture } from "./lifecycle-fixture";
-import { disposableEgg } from "./provision";
+import { transferDocuments, transferProfile } from "./transfer-profile";
+import type { FixtureMode } from "../eggs/reviewed-workload";
 import type { WorkloadProvider } from "./remote";
 
 export type FixtureReceiver = {
@@ -35,17 +35,19 @@ export function createFixtureReceiver(
       eggId: string;
       port: number;
       cipher: Buffer;
+      document: Buffer;
+      mode: FixtureMode | null;
     }>(
       pool,
-      `SELECT s.name,s.egg_id AS eggId,a.port,n.token_cipher AS cipher FROM servers s
+      `SELECT e.document,s.fixture_mode AS mode,s.name,s.egg_id AS eggId,a.port,n.token_cipher AS cipher FROM servers s
     JOIN eggs e ON e.id=s.egg_id JOIN allocations a ON a.id=? AND a.node_id=? JOIN nodes n ON n.id=a.node_id
-    WHERE s.id=? AND s.node_id=? AND e.document=? AND a.ip='127.0.0.1' AND n.origin=? AND n.token_id=?`,
+    WHERE s.id=? AND s.node_id=? AND e.document IN (?,?) AND a.ip='127.0.0.1' AND n.origin=? AND n.token_id=?`,
       [
         fixture.allocation,
         fixture.target,
         id,
         entry.source_node_id,
-        Buffer.from(disposableEgg),
+        ...transferDocuments,
         node.origin,
         node.tokenId,
       ],
@@ -61,14 +63,18 @@ export function createFixtureReceiver(
       list: base.list,
       lookup: async (id) => {
         const pending = await scoped(id);
-        return pending
-          ? lifecycleFixture(() => {}, {
+        if (pending)
+          return transferProfile(pending.document)?.workload(
+            () => {},
+            {
               uuid: id,
               port: pending.port,
               name: pending.name,
               eggId: pending.eggId,
-            })
-          : base.lookup(id);
+            },
+            pending.mode,
+          );
+        return base.lookup(id);
       },
     } satisfies WorkloadProvider,
     onTransfer: async (id: string, successful: boolean) =>

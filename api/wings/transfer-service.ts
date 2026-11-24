@@ -1,3 +1,5 @@
+import { rows } from "../db";
+import { transferProfile } from "./transfer-profile";
 import { createHash } from "node:crypto";
 import type { Pool } from "mysql2/promise";
 import { transferLedger } from "../catalog/transfer";
@@ -20,6 +22,14 @@ export function fixtureTransferService(
     to = new WingsClient(target.node);
   const matches = (entry: { source_node_id: string; target_node_id: string }) =>
     entry.source_node_id === source.id && entry.target_node_id === target.id;
+  async function profile(id: string) {
+    const [egg] = await rows<{ document: Buffer }>(
+      pool,
+      "SELECT e.document FROM eggs e JOIN servers s ON s.egg_id=e.id WHERE s.id=?",
+      [id],
+    );
+    return egg && transferProfile(egg.document);
+  }
   return {
     async dispatch(id: string) {
       const entry = await ledger.pending(id);
@@ -29,11 +39,10 @@ export function fixtureTransferService(
         (await from.state(entry.server_id)) !== "offline"
       )
         return false;
-      const file = await from.readFixtureFile(
-        entry.server_id,
-        "relay-start.sh",
-      );
-      if (!file.includes("RELAY_CONTRACT_READY")) return false;
+      const workload = await profile(entry.server_id);
+      if (!workload) return false;
+      const file = await from.readFixtureFile(entry.server_id, workload.path);
+      if (!file.includes(workload.marker)) return false;
       const capability = signTransferCapability(
         target.node,
         issuer,
@@ -57,13 +66,15 @@ export function fixtureTransferService(
         (await to.state(entry.server_id)) !== "offline"
       )
         return false;
+      const workload = await profile(entry.server_id);
+      if (!workload) return false;
       const destination = await to.readFixtureFile(
         entry.server_id,
-        "relay-start.sh",
+        workload.path,
       );
       const original = await from.readFixtureFile(
         entry.server_id,
-        "relay-start.sh",
+        workload.path,
       );
       if (
         digest(destination) !== entry.fixture_digest ||
