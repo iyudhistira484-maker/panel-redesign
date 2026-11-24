@@ -1,4 +1,4 @@
-import { mumbleEgg } from "../eggs/upstream-workload";
+import { giteaEgg, mumbleEgg } from "../eggs/upstream-workload";
 import { reviewedHttpEggs } from "../eggs/reviewed-workload";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -509,6 +509,80 @@ async function main() {
     );
     assert.equal(
       (await admin("POST", `servers/${voice}/delete`, { confirm: true }))
+        .statusCode,
+      202,
+    );
+    testClientAddress = "127.0.0.3";
+    const gitEgg = await add("eggs", { nestId, document: giteaEgg });
+    assert.equal(
+      (await admin("GET", `eggs/${gitEgg}/document`)).body,
+      giteaEgg,
+    );
+    const gitPort = 25615;
+    const gitAllocation = await add("allocations", {
+      nodeId,
+      ip: "127.0.0.1",
+      port: gitPort,
+    });
+    const gitDraft = {
+      name: "Upstream Gitea",
+      nodeId,
+      eggId: gitEgg,
+      allocationId: gitAllocation,
+      ownerId: id,
+    };
+    assert.equal(
+      (await admin("POST", "servers", { ...gitDraft, mumbleMaxUsers: "37" }))
+        .statusCode,
+      422,
+    );
+    const gitServer = await add("servers", gitDraft);
+    const gitProvision = await admin("POST", `servers/${gitServer}/provision`, {
+      confirm: true,
+    });
+    assert.equal(gitProvision.statusCode, 202, gitProvision.body);
+    await until(
+      "upstream Gitea install",
+      async () => {
+        const [record] = await rows<{ phase: string }>(
+          pool,
+          "SELECT phase FROM wings_provisions WHERE server_id=?",
+          [gitServer],
+        );
+        assert.notEqual(record?.phase, "install_failed");
+        return record?.phase === "installed";
+      },
+      160,
+    );
+    assert.equal(
+      (
+        await admin("POST", `servers/${gitServer}/power`, {
+          confirm: true,
+          action: "start",
+        })
+      ).statusCode,
+      202,
+    );
+    await until(
+      "upstream Gitea listening",
+      async () => (await client.state(gitServer)) === "running",
+      120,
+    );
+    assert.equal(
+      (
+        await admin("POST", `servers/${gitServer}/power`, {
+          confirm: true,
+          action: "stop",
+        })
+      ).statusCode,
+      202,
+    );
+    await until(
+      "upstream Gitea offline",
+      async () => (await client.state(gitServer)) === "offline",
+    );
+    assert.equal(
+      (await admin("POST", `servers/${gitServer}/delete`, { confirm: true }))
         .statusCode,
       202,
     );

@@ -76,3 +76,78 @@ export function upstreamWorkload(
     },
   };
 }
+
+export const giteaEgg = readFileSync(
+  new URL("./upstream/egg-gitea.ptdl", import.meta.url),
+  "utf8",
+);
+if (
+  createHash("sha256").update(giteaEgg).digest("hex") !==
+  "4383426b6d93ff4d53d7ecd148ea82b1d75d2b6458f8786b16e3d611f2f222a5"
+)
+  throw new Error("Unreviewed Gitea egg bytes");
+const gitea = JSON.parse(giteaEgg);
+export function giteaWorkload(
+  installed: Parameters<typeof lifecycleFixture>[0],
+  server: NonNullable<Parameters<typeof lifecycleFixture>[1]>,
+) {
+  const base = lifecycleFixture(installed, server);
+  const environment = {
+    ...(base.configuration.settings.environment as Record<string, string>),
+    VERSION: "1.25.5",
+    DISABLE_SSH: "true",
+    SSH_PORT: "2020",
+  };
+  const rules = JSON.parse(gitea.config.files)["custom/app.ini"].find as Record<
+    string,
+    string
+  >;
+  return {
+    ...base,
+    configuration: {
+      settings: {
+        ...base.configuration.settings,
+        environment,
+        invocation: gitea.startup,
+        container: {
+          image: Object.values(gitea.docker_images)[0],
+          requires_rebuild: false,
+        },
+        build: {
+          ...(base.configuration.settings.build as Record<string, unknown>),
+          memory_limit: 256,
+          disk_space: 512,
+        },
+      },
+      process_configuration: {
+        ...base.configuration.process_configuration,
+        startup: {
+          done: [JSON.parse(gitea.config.startup).done],
+          user_interaction: [],
+          strip_ansi: false,
+        },
+        stop: { type: "signal", value: "SIGINT" },
+        configs: [
+          {
+            file: "custom/app.ini",
+            parser: "file",
+            replace: Object.entries(rules).map(([match, value]) => ({
+              match,
+              replace_with: value
+                .replace(
+                  "{{server.build.env.DISABLE_SSH}}",
+                  environment.DISABLE_SSH,
+                )
+                .replace("{{server.build.env.SSH_PORT}}", environment.SSH_PORT),
+            })),
+          },
+        ],
+      },
+    },
+    install: {
+      script: gitea.scripts.installation.script,
+      entrypoint: gitea.scripts.installation.entrypoint,
+      container_image: gitea.scripts.installation.container,
+    },
+  };
+}
