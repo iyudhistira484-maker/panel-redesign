@@ -4,7 +4,7 @@ permissions:
   contents: read
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -17,10 +17,16 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm run budget
-      - run: npx playwright install --with-deps chromium
+      - name: Use runner Chromium or install Playwright browser
+        run: |
+          if command -v google-chrome >/dev/null; then
+            echo "RELAY_CHROMIUM_PATH=$(command -v google-chrome)" >> "$GITHUB_ENV"
+          else
+            npx playwright install --with-deps chromium
+          fi
       - run: npm test
   identity:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     services:
       mysql:
