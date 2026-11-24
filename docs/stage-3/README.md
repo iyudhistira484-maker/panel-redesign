@@ -188,3 +188,11 @@ Matriks `wings-transfer` memakai route ini untuk memulai keempat skenario dengan
 `createApp()` kini dapat menerima konfigurasi fixture transfer secara eksplisit hanya bersama `enableDisposableProvisioning`. Entrypoint server biasa tidak menyuplai konfigurasi tersebut. Tes aplikasi menggunakan cookie sesi asli dan MySQL: tanpa sesi, non-admin, origin yang salah, dan tanpa `X-Relay-Request` semuanya ditolak sebelum fungsi dispatch dipanggil. Admin valid mencapai adaptor uji; ketika adaptor menolak sebelum klaim, reservasi berakhir `cancelled`. Tes ini memakai adaptor mock agar terisolasi; matriks Wings terpisah tetap menguji pengiriman arsip sungguhan.
 
 [CI 45377186553](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45377186553) lulus tujuh job. Ulangi tes sesi dengan `RELAY_RUN_MYSQL_TESTS=1 npm run test:identity` hanya pada `relay_test` sekali pakai.
+
+### Finalisasi transfer fixture melalui API admin
+
+`POST /api/v1/admin/servers/{id}/transfer/finalize` dengan `{"confirm":true,"transferId":"<uuid>"}` tersedia hanya saat konfigurasi fixture juga menyediakan layanan finalisasi. Route menolak laporan yang tidak cocok dengan UUID server, node sumber/tujuan, dan alokasi yang diizinkan. Layanan memverifikasi tujuan dan checksum fixture sebelum commit. Role admin dicek ulang di transaksi yang sama dengan perpindahan katalog dan audit `catalog.transfer_completed`. Tidak ada penghapusan sumber, percobaan ulang, atau finalisasi transfer `uncertain`.
+
+Skenario `reported` menutup listener callback dan menguji API pada proses baru dengan MySQL dan dua Wings asli. Autentikasi finalisasi di harness memakai identitas fixture; server biasa tetap tidak mengaktifkan dispatch/finalisasi. Ini bukan worker otomatis atau fitur transfer umum.
+
+[CI 45377616408](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45377616408) lulus tujuh job. `wings-transfer (reported)` memeriksa permintaan tanpa autentikasi, UUID transfer tidak dikenal, role sudah dicabut, finalisasi sukses, pengulangan ditolak, dan audit tunggal. Lint dan build lokal lulus.
