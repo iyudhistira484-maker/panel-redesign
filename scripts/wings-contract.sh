@@ -86,7 +86,7 @@ if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then
   docker run -d --name relay-adoption-panel --network host --entrypoint /bin/ash \
     -v "$PWD/scripts/legacy-adoption-fixture.php:/tmp/relay-fixture.php:ro" \
     -e APP_ENV=production -e APP_KEY="$app_key" -e APP_URL=http://127.0.0.1:13202 \
-    -e DB_HOST=127.0.0.1 -e DB_PORT=13306 -e DB_DATABASE=panel_adoption_fixture \
+    -e APP_DEBUG=false -e DB_CONNECTION=mysql -e DB_HOST=127.0.0.1 -e DB_PORT=13306 -e DB_DATABASE=panel_adoption_fixture \
     -e DB_USERNAME=panel_fixture -e DB_PASSWORD="$db_password" \
     -e CACHE_DRIVER=file -e SESSION_DRIVER=file -e QUEUE_CONNECTION=sync \
     -e PTERODACTYL_SEND_INSTALL_NOTIFICATION=false -e RELAY_LEGACY_FIXTURE=1 \
@@ -95,11 +95,13 @@ if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then
     ghcr.io/pterodactyl/panel:v1.15.2 -ec 'cd /app; php artisan migrate --force; php /tmp/relay-fixture.php; exec php -S 127.0.0.1:13202 -t public' >/dev/null
   for i in {1..45}; do
     if curl -s -o /dev/null http://127.0.0.1:13202/api/remote/servers; then break; fi
+    if [[ $(docker inspect -f '{{.State.Running}}' relay-adoption-panel) != true ]]; then break; fi
     sleep 1
   done
   if ! curl -s -o /dev/null http://127.0.0.1:13202/api/remote/servers; then
     echo '::error::Legacy Panel fixture did not start'
-    docker logs relay-adoption-panel 2>&1 | tail -12
+    diagnostics=$(docker logs relay-adoption-panel 2>&1 | sed -E "s/$db_password|$RELAY_WINGS_TEST_TOKEN/[redacted]/g" | grep -Ei 'error|exception|fatal|failed|not found|denied|SQLSTATE' | tail -5 | cut -c1-230 || true)
+    while IFS= read -r message; do [[ -z "$message" ]] || printf '::warning::%s\n' "$message"; done <<< "$diagnostics"
     exit 1
   fi
 fi
