@@ -63,3 +63,17 @@ Migrasi `003_provision` menyimpan fase dispatch terpisah dari draft. Mode ini **
 Berkas utama: `api/wings/provision.ts`, `api/wings/remote.ts`, `api/catalog/routes.ts`, `api/app.ts`, `api/server.ts`, migrasi `003_provision`, dan pengujian di `api/wings/live-contract.ts` serta `api/identity.integration.test.ts`. Jalankan `npm run test:wings` dan `npm run test:identity` untuk uji lokal; job `wings-bootstrap` memakai MySQL dan daemon dalam runner Docker sekali pakai. Start/stop/delete pada harness masih memanggil adaptor daemon, bukan endpoint admin publik. Tahap 3 belum ditutup.
 
 **Hasil provisioning terintegrasi:** [GitHub Actions 45354124135](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45354124135) lulus. Job Docker membuat draft lewat sesi admin, mengirim dua permintaan provisioning serentak (satu `202`, satu `409`), lalu memperoleh status `installed` dari daemon nyata dan menguji start/stop/delete melalui adaptor. Job MySQL terpisah menguji bahwa dispatch yang tidak pasti tidak dikirim ulang, callback tanpa token ditolak, dan callback gagal dari node yang sah tersimpan sebagai `install_failed`. Network Docker internal tersendiri menghindari benturan subnet default Wings dengan layanan MySQL runner.
+
+## Kontrol runtime dan pemeriksaan dispatch
+
+Rute berikut ditambahkan ke `/api/v1/admin`, hanya dalam mode fixture sekali pakai. Semuanya memerlukan sesi admin; request mutasi juga mengikuti pemeriksaan origin/CSRF dari Tahap 2.
+
+| Rute | Perilaku |
+|---|---|
+| `GET /servers/{id}/runtime` | Membaca state Wings untuk fixture terinstal. Memeriksa UUID respons dan membedakan `present`, `absent` (HTTP 404), dan `unreachable`. |
+| `POST /servers/{id}/power` | Dengan `{ "action": "start" atau "stop", "confirm": true }`. Audit dicatat sebelum pengiriman. HTTP `202` berarti daemon menerima perintah, bukan state sudah berubah. Kegagalan pengiriman tidak diulang otomatis. |
+| `POST /servers/{id}/reconcile` | Dengan `{ "confirm": true }`; observasi untuk `dispatching`, `installing`, dan `uncertain`. Mencatat hasil di audit tanpa mengirim `create` ulang atau menandai instalasi sukses. |
+
+Pemeriksaan kehadiran daemon tidak bisa memastikan hasil instalasi. Jika callback hilang, status tetap sesuai catatan terakhir; belum ada mekanisme reset/force retry otomatis. API delete/reinstall/transfer serta integrasi websocket masih terpisah dari rute admin. `api/wings/{client,provision,live-contract}.ts`, `api/catalog/routes.ts`, dan `api/identity.integration.test.ts` memuat perubahan dan tes. Jalankan `npm run test:wings` dan periksa job `identity` serta `wings-bootstrap` untuk MySQL dan daemon nyata.
+
+**Hasil kontrol runtime:** [GitHub Actions 45355558549](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45355558549) lulus ketiga job. Harness start dan stop sekarang melalui API admin, dengan polling state melalui rute runtime dan verifikasi daemon asli. Uji MySQL memverifikasi bahwa pengguna biasa ditolak, konfirmasi wajib, dan rekonsiliasi outage tidak membuat dispatch kedua atau mengubah `uncertain` menjadi sukses. Penghapusan harness masih langsung melalui adaptor untuk cleanup lingkungan uji.
