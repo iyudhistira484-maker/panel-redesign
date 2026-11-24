@@ -1,5 +1,5 @@
-import { parseEgg } from "./codec";
-import { lifecycleFixture } from "../wings/lifecycle-fixture";
+import { compileReviewedProfile } from "./runtime-profile";
+import type { lifecycleFixture } from "../wings/lifecycle-fixture";
 import type { ContractWorkload } from "../wings/remote";
 
 export const fixtureModes = ["alpha", "beta"] as const;
@@ -85,61 +85,13 @@ export function reviewedWorkload(
     document.equals(Buffer.from(text)),
   );
   if (!allowed) return undefined;
-  const decoded = parseEgg(allowed);
-  // Only the exact bytes above can reach this mapping.
-  const egg = JSON.parse(decoded.source) as typeof shared;
-  const value = mode ?? egg.variables[0].default_value;
-  if (!fixtureModes.some((allowed) => allowed === value)) return undefined;
-  const [path, file] = Object.entries(
-    JSON.parse(egg.config.files) as Record<
-      string,
-      { parser: string; find: { mode: string } }
-    >,
-  )[0];
-  const replacement = file.find.mode.replace(
-    "{{server.build.env.RELAY_SITE_MODE}}",
-    value,
-  );
-  const installation = egg.scripts.installation;
-  const base = lifecycleFixture(onInstall, server);
-  return {
-    ...base,
-    configuration: {
-      settings: {
-        ...base.configuration.settings,
-        invocation: egg.startup,
-        environment: {
-          ...(base.configuration.settings.environment as Record<
-            string,
-            string
-          >),
-          RELAY_SITE_MODE: value,
-        },
-        container: {
-          image: Object.values(decoded.images)[0],
-          requires_rebuild: false,
-        },
-      },
-      process_configuration: {
-        startup: {
-          done: [JSON.parse(egg.config.startup).done],
-          user_interaction: [],
-          strip_ansi: false,
-        },
-        stop: { type: "signal", value: egg.config.stop.slice(1) },
-        configs: [
-          {
-            file: path,
-            parser: file.parser,
-            replace: [{ match: "mode", replace_with: replacement }],
-          },
-        ],
-      },
-    },
-    install: {
-      container_image: installation.container,
-      entrypoint: installation.entrypoint,
-      script: installation.script,
-    },
-  } satisfies ContractWorkload;
+  if (mode != null && !fixtureModes.some((entry) => entry === mode))
+    return undefined;
+  return compileReviewedProfile(
+    allowed,
+    onInstall,
+    server,
+    mode == null ? {} : { RELAY_SITE_MODE: mode },
+    { memory_limit: 128, disk_space: 64 },
+  ) satisfies ContractWorkload;
 }
