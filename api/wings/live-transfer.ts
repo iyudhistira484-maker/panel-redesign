@@ -1,3 +1,4 @@
+import { createServer } from "node:http";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import assert from "node:assert/strict";
@@ -81,7 +82,21 @@ async function main() {
     return;
   }
   let installed: boolean | undefined;
+  const interrupted = process.env.RELAY_TRANSFER_SCENARIO === "sender-killed";
   const dropReport = process.env.RELAY_TRANSFER_SCENARIO === "missing-report";
+  let uploadStarted = false;
+  const sink = createServer((req, res) => {
+    if (req.method !== "POST" || req.url !== "/api/transfers") {
+      res.writeHead(404).end();
+      return;
+    }
+    // Hold the transfer open after its first body chunk: no acknowledgement or destination write.
+    req.once("data", (chunk: Buffer) => {
+      uploadStarted = chunk.length > 0;
+      req.pause();
+    });
+    req.on("error", () => {});
+  });
   let reportDropped = false;
   let completion: boolean | undefined;
   let failure = false;
@@ -112,16 +127,31 @@ async function main() {
   });
   await app.register(
     (instance) =>
-      registerRemote(instance, source, fixture, undefined, async (id, ok) => {
-        if (
-          id !== fixture.uuid ||
-          ok ||
-          !(await ledger.placement(id, targetId))
-        )
-          return false;
-        failure = true;
-        return true;
-      }),
+      registerRemote(
+        instance,
+        source,
+        fixture,
+        {
+          lookup: async (id) => (id === fixture.uuid ? fixture : undefined),
+          list: async () =>
+            installed === true
+              ? {
+                  data: [{ uuid: fixture.uuid, ...fixture.configuration }],
+                  total: 1,
+                }
+              : { data: [], total: 0 },
+        },
+        async (id, ok) => {
+          if (
+            id !== fixture.uuid ||
+            ok ||
+            !(await ledger.placement(id, targetId))
+          )
+            return false;
+          failure = true;
+          return true;
+        },
+      ),
     { prefix: "/source/api/remote" },
   );
   await app.register(
@@ -229,25 +259,46 @@ async function main() {
     assert.ok(!rejected.ok);
     await rejected.body?.cancel();
     assert.equal(completion, undefined);
+    const uploadNode = interrupted
+      ? { ...target, origin: "http://127.0.0.1:18182" }
+      : target;
+    if (interrupted)
+      await new Promise<void>((resolve, reject) => {
+        sink.once("error", reject);
+        sink.listen(18182, "127.0.0.1", resolve);
+      });
     await from.transferTo(
       fixture.uuid,
-      target,
-      signTransferCapability(target, issuer, fixture.uuid),
+      uploadNode,
+      signTransferCapability(uploadNode, issuer, fixture.uuid),
     );
-    await eventually(
-      "destination callback",
-      () => failure || reportDropped || completion !== undefined,
-    );
-    assert.equal(failure, false);
-    if (dropReport) {
-      assert.equal(reportDropped, true);
-      assert.equal(completion, undefined);
-      await app.close();
-      assert.equal(await to.state(fixture.uuid), "offline");
-      assert.equal(
-        digest(await to.readFixtureFile(fixture.uuid, "relay-start.sh")),
-        digest(original),
+    if (interrupted) {
+      await eventually("first upload chunk", () => uploadStarted);
+      await promisify(execFile)(
+        "docker",
+        ["kill", "--signal", "KILL", "relay-transfer-source"],
+        { timeout: 10000 },
       );
+      assert.equal(completion, undefined);
+    } else {
+      await eventually(
+        "destination callback",
+        () => failure || reportDropped || completion !== undefined,
+      );
+      assert.equal(failure, false);
+    }
+    if (dropReport || interrupted) {
+      assert.equal(completion, undefined);
+      if (interrupted) {
+        await assert.rejects(to.state(fixture.uuid), { reason: "not_found" });
+      } else {
+        assert.equal(reportDropped, true);
+        assert.equal(await to.state(fixture.uuid), "offline");
+        assert.equal(
+          digest(await to.readFixtureFile(fixture.uuid, "relay-start.sh")),
+          digest(original),
+        );
+      }
       await pool.execute(
         "UPDATE wings_transfers SET dispatched_at=UTC_TIMESTAMP(3)-INTERVAL 6 MINUTE WHERE id=?",
         [transferId],
@@ -294,12 +345,26 @@ async function main() {
       } finally {
         await recoveredPool.end();
       }
+      if (interrupted) {
+        await promisify(execFile)(
+          "docker",
+          ["start", "relay-transfer-source"],
+          { timeout: 10000 },
+        );
+        await eventually("source rediscovery", async () => {
+          try {
+            return (await from.state(fixture.uuid)) === "offline";
+          } catch {
+            return false;
+          }
+        });
+      }
       assert.equal(
         digest(await from.readFixtureFile(fixture.uuid, "relay-start.sh")),
         digest(original),
       );
       // Dispose both copies only after checking that reconciliation preserved them.
-      await to.remove(fixture.uuid);
+      if (!interrupted) await to.remove(fixture.uuid);
       await from.remove(fixture.uuid);
       console.log(
         "Missing destination report quarantined; source and reservation preserved before fixture teardown",
@@ -326,6 +391,8 @@ async function main() {
     );
   } finally {
     await app.close();
+    sink.closeAllConnections();
+    sink.close();
     await pool.end();
   }
 }
