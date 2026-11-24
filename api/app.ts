@@ -2,7 +2,7 @@ import {
   createFixtureReceiver,
   type FixtureReceiver,
 } from "./wings/transfer-receiver";
-import { createProvisioner } from "./wings/provision";
+import { createProvisioner, ProvisionError } from "./wings/provision";
 import { registerCatalog, type FixtureTransfer } from "./catalog/routes";
 import { registerRemote } from "./wings/remote";
 import { UUID_V4, type WingsNode } from "./wings/client";
@@ -845,6 +845,48 @@ export async function createApp({
       return result.filter((entry) => entry.id !== null);
     },
   );
+  if (provisioner)
+    app.post<{
+      Params: { id: string };
+      Body: { action: "start" | "stop"; confirm: true };
+    }>(
+      "/api/v1/servers/:id/power",
+      {
+        config: { rateLimit: { max: 15, timeWindow: "1 minute" } },
+        schema: {
+          body: object({
+            action: { type: "string", enum: ["start", "stop"] },
+            confirm: { type: "boolean", const: true },
+          }),
+        },
+      },
+      async (req, reply) => {
+        const principal = await actor(
+          req.cookies[sessionCookie],
+          req.headers.authorization,
+        );
+        if (!principal || principal.channel !== "session")
+          return reply.code(401).send({ error: "unauthenticated" });
+        if (!UUID_V4.test(req.params.id))
+          return reply.code(404).send({ error: "server_not_found" });
+        try {
+          return reply
+            .code(202)
+            .send(
+              await provisioner.power(
+                req.params.id,
+                req.body.action,
+                principal,
+                "user",
+              ),
+            );
+        } catch (error) {
+          if (error instanceof ProvisionError)
+            return reply.code(error.status).send({ error: error.code });
+          throw error;
+        }
+      },
+    );
   if (wingsTestNode)
     await app.register(
       async (instance) =>

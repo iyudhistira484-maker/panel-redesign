@@ -478,6 +478,7 @@ async function main() {
       ]),
       [],
     );
+    let verifyPower: (() => Promise<void>) | undefined;
     if (actual) {
       const headers = {
         origin: "https://relay.example.test",
@@ -542,8 +543,53 @@ async function main() {
       assert.ok(second);
       assert.equal((await activity(second, collaborator)).statusCode, 404);
       assert.equal((await activity(uuid)).statusCode, 401);
-      await pool.execute("DELETE FROM server_grants WHERE server_id=?", [uuid]);
-      assert.equal((await activity(uuid, collaborator)).statusCode, 404);
+      verifyPower = async () => {
+        const power = (
+          id: string,
+          action: "start" | "stop",
+          session = collaborator,
+        ) =>
+          relay.inject({
+            method: "POST",
+            url: `/api/v1/servers/${id}/power`,
+            headers: { ...headers, ...session },
+            payload: { confirm: true, action },
+          });
+        const powerEvents = () =>
+          rows(
+            pool,
+            "SELECT event, subject_id FROM audit_log WHERE event IN ('wings.power_start_requested','wings.power_stop_requested') ORDER BY id",
+          );
+        assert.equal((await power(uuid, "stop")).statusCode, 404);
+        assert.equal((await power(second, "stop")).statusCode, 404);
+        assert.equal((await power(second, "start")).statusCode, 404);
+        assert.equal((await power(uuid, "start", outsider)).statusCode, 404);
+        assert.deepEqual(await powerEvents(), []);
+        await clientFor(uuid).power(uuid, "stop");
+        await until(
+          "pre-start offline",
+          async () => (await clientFor(uuid).state(uuid)) === "offline",
+        );
+        assert.equal((await power(uuid, "start")).statusCode, 202);
+        await until(
+          "subuser power running",
+          async () => (await clientFor(uuid).state(uuid)) === "running",
+        );
+        await pool.execute("DELETE FROM server_grants WHERE server_id=?", [
+          uuid,
+        ]);
+        assert.equal((await activity(uuid, collaborator)).statusCode, 404);
+        await clientFor(uuid).power(uuid, "stop");
+        await until(
+          "post-revocation offline",
+          async () => (await clientFor(uuid).state(uuid)) === "offline",
+        );
+        assert.equal((await power(uuid, "start")).statusCode, 404);
+        assert.equal(await clientFor(uuid).state(uuid), "offline");
+        assert.deepEqual(await powerEvents(), [
+          { event: "wings.power_start_requested", subject_id: uuid },
+        ]);
+      };
     }
     await copyFile(`${config}.backup`, config);
     if (actual && secondConfig)
@@ -557,6 +603,7 @@ async function main() {
     else assert.ok(legacyCalls > calls);
     assert.deepEqual(await Promise.all(workloadIds.map(inspect)), before);
     assert.deepEqual(await Promise.all(workloadIds.map(checksum)), hash);
+    await verifyPower?.();
     if (!actual) assert.equal(installed, 1);
     for (const id of workloadIds) {
       await clientFor(id).power(id, "stop");
