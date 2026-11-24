@@ -182,3 +182,9 @@ Kontrak dijalankan melalui matriks `wings-transfer`. Layanan belum dipasang ke e
 Matriks `wings-transfer` memakai route ini untuk memulai keempat skenario dengan MySQL dan Wings asli. Harness menyuntikkan identitas admin fixture; ini bukan uji sesi/cookie/CSRF end-to-end untuk route dispatch. `createApp()` tidak mengaktifkan route dispatch; endpoint ini belum tersedia di deployment panel biasa. Finalisasi masih dijalankan oleh proses pemulihan harness, bukan worker aplikasi.
 
 [CI 45376735070](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45376735070) lulus tujuh job. Keempat skenario memverifikasi 401 tanpa autentikasi, 404 untuk node di luar fixture, 202 untuk dispatch valid, 409 untuk pengulangan, dan satu entri audit reservasi. Lint dan build lokal lulus.
+
+### Uji sesi dan CSRF pada endpoint dispatch fixture
+
+`createApp()` kini dapat menerima konfigurasi fixture transfer secara eksplisit hanya bersama `enableDisposableProvisioning`. Entrypoint server biasa tidak menyuplai konfigurasi tersebut. Tes aplikasi menggunakan cookie sesi asli dan MySQL: tanpa sesi, non-admin, origin yang salah, dan tanpa `X-Relay-Request` semuanya ditolak sebelum fungsi dispatch dipanggil. Admin valid mencapai adaptor uji; ketika adaptor menolak sebelum klaim, reservasi berakhir `cancelled`. Tes ini memakai adaptor mock agar terisolasi; matriks Wings terpisah tetap menguji pengiriman arsip sungguhan.
+
+[CI 45377186553](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45377186553) lulus tujuh job. Ulangi tes sesi dengan `RELAY_RUN_MYSQL_TESTS=1 npm run test:identity` hanya pada `relay_test` sekali pakai.
