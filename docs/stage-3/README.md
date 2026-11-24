@@ -196,3 +196,9 @@ Matriks `wings-transfer` memakai route ini untuk memulai keempat skenario dengan
 Skenario `reported` menutup listener callback dan menguji API pada proses baru dengan MySQL dan dua Wings asli. Autentikasi finalisasi di harness memakai identitas fixture; server biasa tetap tidak mengaktifkan dispatch/finalisasi. Ini bukan worker otomatis atau fitur transfer umum.
 
 [CI 45377616408](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45377616408) lulus tujuh job. `wings-transfer (reported)` memeriksa permintaan tanpa autentikasi, UUID transfer tidak dikenal, role sudah dicabut, finalisasi sukses, pengulangan ditolak, dan audit tunggal. Lint dan build lokal lulus.
+
+### Simulasi cutover dan rollback remote Wings
+
+`wings-bootstrap (adoption)` membuat workload pada Wings nyata yang awalnya memakai controller sumber terpisah berbasis kontrak remote Panel v1.15.2. Setelah workload berjalan, harness membuat data fixture di MySQL Relay dengan UUID, alokasi, dan kredensial node yang sama. Harness menyalin konfigurasi dan hanya mengganti `remote`, me-restart daemon Wings tanpa memasang ulang atau menghentikan container workload, lalu memulihkan file konfigurasi asal untuk rollback. Di kedua arah UUID, ID Docker, `StartedAt`, dan checksum file startup tetap sama. Tidak ada instalasi kedua. **Controller sumber adalah simulasi, bukan aplikasi PHP Pterodactyl Panel;** penempatan MySQL dibuat oleh harness, bukan importer dump. Uji ini bukan rehearsal salinan produksi atau bukti kompatibilitas semua egg.
+
+[CI 45378095696](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45378095696) lulus delapan job. Untuk mengulang gunakan job `wings-bootstrap (adoption)` pada runner sekali pakai. Jangan menjalankan skrip ini pada VPS yang memiliki Wings produksi.
