@@ -280,3 +280,7 @@ Untuk pengulangan dari database kosong, jalankan workflow push `wings-transfer (
 Transfer fixture, verifikasi restart, adopsi dua node dari Panel v1.15.2, dan runtime egg HTTP v1/v2 adalah bukti staging, bukan paritas fitur umum. Tahap 3 tetap terbuka: importer belum membaca dump Panel umum atau memigrasikan akun/secret/grant; engine egg belum menangani egg komunitas, parser, mounts, image eksternal, dan aturan variabel secara umum; transfer masih hanya satu fixture loopback dan tidak mendukung rekonsiliasi semua hasil ambigu atau cleanup sumber oleh aplikasi. Tidak ada persetujuan Tahap 4 atau langkah produksi.
 
 [CI 45401636979](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45401636979) lulus sembilan job, termasuk kedua skenario proses mandiri. Lokal: lint, build, dan sembilan tes Wings lulus (`npm run test:wings`).
+
+## Keputusan cakupan
+
+Relay tetap mengejar [target pengganti Pterodactyl Panel dan gate penutupan Tahap 3](replacement-gate.md), bukan instalasi baru saja.
