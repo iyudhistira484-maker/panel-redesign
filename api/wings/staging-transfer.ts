@@ -14,6 +14,7 @@ type Settings = {
   target: string;
   allocation: string;
   issuer: string;
+  additional?: { server: string; allocation: string }[];
 };
 export function parseStagingTransfer(
   env: NodeJS.ProcessEnv,
@@ -47,7 +48,23 @@ export function parseStagingTransfer(
   const issuer = env.RELAY_ORIGIN ?? "";
   if (!issuer.startsWith("https://") || new URL(issuer).origin !== issuer)
     throw new Error("Invalid staging issuer");
-  return { role, server, source, target, allocation, issuer };
+  const extraServer = env.RELAY_FIXTURE_TRANSFER_SECOND_SERVER;
+  const extraAllocation = env.RELAY_FIXTURE_TRANSFER_SECOND_ALLOCATION;
+  if (
+    (extraServer || extraAllocation) &&
+    (!extraServer ||
+      !extraAllocation ||
+      !UUID_V4.test(extraServer) ||
+      !UUID_V4.test(extraAllocation) ||
+      extraServer === server ||
+      extraAllocation === allocation)
+  )
+    throw new Error("Invalid second transfer binding");
+  const additional =
+    extraServer && extraAllocation
+      ? [{ server: extraServer, allocation: extraAllocation }]
+      : undefined;
+  return { role, server, source, target, allocation, issuer, additional };
 }
 export async function loadStagingTransfer(
   pool: Pool,
@@ -94,25 +111,28 @@ export async function loadStagingTransfer(
     active.token !== local.token
   )
     throw new Error("Fixture node credential mismatch");
-  const [fixture] = await rows(
-    pool,
-    "SELECT s.id FROM servers s JOIN allocations a ON a.id=? AND a.node_id=? JOIN eggs e ON e.id=s.egg_id WHERE s.id=? AND s.node_id IN (?,?) AND a.ip='127.0.0.1' AND e.document IN (?,?,?)",
-    [
-      settings.allocation,
-      settings.target,
-      settings.server,
-      settings.source,
-      settings.target,
-      ...transferDocuments,
-    ],
-  );
-  if (!fixture) throw new Error("Fixture placement missing");
+  for (const binding of [settings, ...(settings.additional ?? [])]) {
+    const [fixture] = await rows(
+      pool,
+      "SELECT s.id FROM servers s JOIN allocations a ON a.id=? AND a.node_id=? JOIN eggs e ON e.id=s.egg_id WHERE s.id=? AND s.node_id IN (?,?) AND a.ip='127.0.0.1' AND e.document IN (?,?,?)",
+      [
+        binding.allocation,
+        settings.target,
+        binding.server,
+        settings.source,
+        settings.target,
+        ...transferDocuments,
+      ],
+    );
+    if (!fixture) throw new Error("Fixture placement missing");
+  }
   if (settings.role === "destination")
     return {
       fixtureReceiver: {
         server: settings.server,
         target: settings.target,
         allocation: settings.allocation,
+        additional: settings.additional,
       },
     };
   const service = fixtureTransferService(pool, source, target, settings.issuer);
@@ -122,6 +142,7 @@ export async function loadStagingTransfer(
       source: settings.source,
       target: settings.target,
       allocation: settings.allocation,
+      additional: settings.additional,
       ...service,
     },
   };

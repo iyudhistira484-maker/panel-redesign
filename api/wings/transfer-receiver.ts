@@ -12,6 +12,7 @@ export type FixtureReceiver = {
   server: string;
   target: string;
   allocation: string;
+  additional?: readonly { server: string; allocation: string }[];
 };
 export function createFixtureReceiver(
   pool: Pool,
@@ -26,9 +27,12 @@ export function createFixtureReceiver(
   const ledger = transferLedger(pool);
   const expected = Buffer.from(node.token);
   async function scoped(id: string) {
-    if (id !== fixture.server) return undefined;
+    const binding = [fixture, ...(fixture.additional ?? [])].find(
+      (row) => row.server === id,
+    );
+    if (!binding) return undefined;
     const entry = await ledger.placement(id, fixture.target);
-    if (!entry || entry.target_allocation_id !== fixture.allocation)
+    if (!entry || entry.target_allocation_id !== binding.allocation)
       return undefined;
     const [result] = await rows<{
       name: string;
@@ -44,7 +48,7 @@ export function createFixtureReceiver(
     JOIN eggs e ON e.id=s.egg_id JOIN allocations a ON a.id=? AND a.node_id=? JOIN nodes n ON n.id=a.node_id
     WHERE s.id=? AND s.node_id=? AND e.document IN (?,?,?) AND a.ip='127.0.0.1' AND n.origin=? AND n.token_id=?`,
       [
-        fixture.allocation,
+        binding.allocation,
         fixture.target,
         id,
         entry.source_node_id,

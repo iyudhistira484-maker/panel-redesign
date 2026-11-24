@@ -105,7 +105,7 @@ INI
   docker pull "$image" >/dev/null
   docker save "$image" | sudo -n docker -H "$inner" load >/dev/null
 fi
-RELAY_TRANSFER_CHECK_DESTINATION_RUNTIME=1 RELAY_TRANSFER_FIXTURE_ROOT="$work/target-data" ./node_modules/.bin/tsx api/wings/live-transfer.ts &
+RELAY_TRANSFER_CHECK_DESTINATION_RUNTIME=1 RELAY_TRANSFER_SOURCE_ROOT="$work/source-data" RELAY_TRANSFER_FIXTURE_ROOT="$work/target-data" ./node_modules/.bin/tsx api/wings/live-transfer.ts &
 pid=$!
 run_wings() {
   local role=$1 name=$2 socket=$3

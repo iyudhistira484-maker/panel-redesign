@@ -102,6 +102,7 @@ async function main() {
   const dropReport = ["missing-report", "mumble-missing-report"].includes(
     process.env.RELAY_TRANSFER_SCENARIO ?? "",
   );
+  const pair = process.env.RELAY_TRANSFER_SCENARIO === "same-pair";
   const partial = process.env.RELAY_TRANSFER_SCENARIO === "partial-target";
   let targetFetched = false;
   let upstream: ClientRequest | undefined;
@@ -177,6 +178,27 @@ async function main() {
     mumble ? "37" : null,
   );
   assert.ok(destination);
+  let siblingInstalled: boolean | undefined;
+  let siblingDropped = false;
+  const siblingId = randomUUID(),
+    siblingFrom = randomUUID(),
+    siblingTo = randomUUID();
+  const siblingSource = pair
+    ? profile.workload(
+        (result) => {
+          siblingInstalled = result.successful;
+        },
+        { uuid: siblingId, name: "Sibling transfer", eggId: egg, port: 25612 },
+        "alpha",
+      )
+    : undefined;
+  const siblingDestination = pair
+    ? profile.workload(
+        () => {},
+        { uuid: siblingId, name: "Sibling transfer", eggId: egg, port: 25613 },
+        "alpha",
+      )
+    : undefined;
   const app = Fastify({
     logger: false,
     ajv: { customOptions: { coerceTypes: false, removeAdditional: false } },
@@ -188,7 +210,12 @@ async function main() {
         source,
         fixture,
         {
-          lookup: async (id) => (id === fixture.uuid ? fixture : undefined),
+          lookup: async (id) =>
+            id === fixture.uuid
+              ? fixture
+              : id === siblingId
+                ? siblingSource
+                : undefined,
           list: async () =>
             installed === true
               ? {
@@ -218,6 +245,14 @@ async function main() {
         undefined,
         {
           lookup: async (id) => {
+            if (
+              pair &&
+              id === siblingId &&
+              (await ledger.placement(id, targetId))
+            )
+              return siblingDestination;
+            if (pair && id === fixture.uuid && completion === true)
+              return destination;
             if (id !== fixture.uuid || !(await ledger.placement(id, targetId)))
               return undefined;
             targetFetched = true;
@@ -226,6 +261,25 @@ async function main() {
           list: async () => ({ data: [], total: 0 }),
         },
         async (id, ok) => {
+          if (
+            pair &&
+            id === siblingId &&
+            ok &&
+            (await ledger.placement(id, targetId))
+          ) {
+            siblingDropped = true;
+            return false;
+          }
+          if (pair && id === fixture.uuid && ok && receiver) {
+            const result = await receiver.inject({
+              method: "POST",
+              url: `/api/remote/servers/${id}/transfer/success`,
+              headers: {
+                authorization: `Bearer ${target.tokenId}.${target.token}`,
+              },
+            });
+            return result.statusCode === 204;
+          }
           if (id !== fixture.uuid || !(await ledger.placement(id, targetId)))
             return false;
           if (ok && dropReport) {
@@ -285,6 +339,12 @@ async function main() {
           RELAY_WINGS_TEST_TOKEN_ID: node.tokenId,
           RELAY_WINGS_TEST_TOKEN: node.token,
           RELAY_FIXTURE_TRANSFER_ROLE: role,
+          ...(pair
+            ? {
+                RELAY_FIXTURE_TRANSFER_SECOND_SERVER: siblingId,
+                RELAY_FIXTURE_TRANSFER_SECOND_ALLOCATION: siblingTo,
+              }
+            : {}),
           RELAY_FIXTURE_TRANSFER_SERVER: fixture.uuid,
           RELAY_FIXTURE_TRANSFER_SOURCE: sourceId,
           RELAY_FIXTURE_TRANSFER_TARGET: targetId,
@@ -414,6 +474,16 @@ async function main() {
         mumble ? "37" : null,
       ],
     );
+    if (pair) {
+      await pool.execute(
+        "INSERT INTO allocations (id,node_id,ip,port) VALUES (?,?,'127.0.0.1',25612),(?,?,'127.0.0.1',25613)",
+        [siblingFrom, sourceId, siblingTo, targetId],
+      );
+      await pool.execute(
+        "INSERT INTO servers (id,name,node_id,owner_id,egg_id,allocation_id,fixture_mode) VALUES (?,'Sibling',?,?,?,?,'alpha')",
+        [siblingId, sourceId, owner, egg, siblingFrom],
+      );
+    }
     await app.listen({ port: 13201, host: "127.0.0.1" });
     if (standalone)
       receiver = await startInstance("destination", target, 13202);
@@ -447,6 +517,28 @@ async function main() {
       await eventually(
         "existing Mumble offline",
         async () => (await from.state(fixture.uuid)) === "offline",
+      );
+    }
+    let siblingDigest: string | undefined;
+    if (pair) {
+      assert.ok(siblingSource && siblingDestination);
+      await from.create(siblingId);
+      await eventually(
+        "sibling installed",
+        () => siblingInstalled !== undefined,
+      );
+      assert.equal(siblingInstalled, true);
+      const sourceRoot = process.env.RELAY_TRANSFER_SOURCE_ROOT;
+      assert.ok(sourceRoot);
+      await promisify(execFile)(
+        "sudo",
+        ["-n", "touch", `${sourceRoot}/volumes/${siblingId}/.sibling-only`],
+        { timeout: 5000 },
+      );
+      siblingDigest = await from.transferTreeDigest(siblingId);
+      await pool.execute(
+        "INSERT INTO wings_provisions (server_id,phase) VALUES (?,'installed')",
+        [siblingId],
       );
     }
     const original = await from.readFixtureFile(fixture.uuid, profile.path);
@@ -522,12 +614,28 @@ async function main() {
       ).statusCode,
       404,
     );
-    const response = await request.inject({
-      method: "POST",
-      url,
-      headers,
-      payload,
-    });
+    const siblingUrl = `/api/v1/admin/servers/${siblingId}/transfer`;
+    const [response, siblingResponse] = await Promise.all([
+      request.inject({
+        method: "POST",
+        url,
+        headers,
+        payload,
+      }),
+      pair
+        ? request.inject({
+            method: "POST",
+            url: siblingUrl,
+            headers,
+            payload: { ...payload, allocationId: siblingTo },
+          })
+        : undefined,
+    ]);
+    const siblingTransfer = siblingResponse?.json<{ id: string }>().id;
+    if (pair) {
+      assert.equal(siblingResponse?.statusCode, 202);
+      assert.ok(siblingTransfer);
+    }
     assert.equal(response.statusCode, 202);
     transferId = response.json<{ id: string; phase: string }>().id;
     assert.ok(transferId);
@@ -720,11 +828,56 @@ async function main() {
     }
     assert.equal(completion, true);
     await adminApp.close();
-    await app.close();
+    if (!pair) await app.close();
     assert.ok(sourceApp);
     await sourceApp.close();
     sourceApp = await startInstance("source", source, 13203);
     const recoveredHeaders = await networkLogin(sourceApp);
+    if (pair) {
+      assert.ok(siblingTransfer && siblingDigest);
+      await eventually(
+        "sibling destination report dropped",
+        () => siblingDropped,
+      );
+      assert.equal(await to.transferTreeDigest(siblingId), siblingDigest);
+      await pool.execute(
+        "UPDATE wings_transfers SET dispatched_at=UTC_TIMESTAMP(3)-INTERVAL 6 MINUTE WHERE id=?",
+        [siblingTransfer],
+      );
+      const quarantine = await sourceApp.inject({
+        method: "POST",
+        url: `${siblingUrl}/reconcile`,
+        headers: recoveredHeaders,
+        payload: { confirm: true },
+      });
+      assert.equal(quarantine.statusCode, 200);
+      assert.equal(quarantine.json<{ phase: string }>().phase, "uncertain");
+      assert.equal(await ledger.claim(siblingTransfer, siblingDigest), false);
+      assert.deepEqual(
+        await rows(
+          pool,
+          "SELECT phase,active_allocation,fixture_digest,destination_reported_at FROM wings_transfers WHERE id=?",
+          [siblingTransfer],
+        ),
+        [
+          {
+            phase: "uncertain",
+            active_allocation: siblingTo,
+            fixture_digest: siblingDigest,
+            destination_reported_at: null,
+          },
+        ],
+      );
+      assert.deepEqual(
+        await rows(
+          pool,
+          "SELECT node_id,allocation_id FROM servers WHERE id=?",
+          [siblingId],
+        ),
+        [{ node_id: sourceId, allocation_id: siblingFrom }],
+      );
+      assert.equal(await from.transferTreeDigest(siblingId), siblingDigest);
+    }
     const finish = {
       method: "POST",
       url: `${url}/finalize`,
@@ -800,6 +953,10 @@ async function main() {
         "transferred workload offline",
         async () => (await to.state(fixture.uuid)) === "offline",
       );
+    }
+    if (pair) {
+      await to.remove(siblingId);
+      await from.remove(siblingId);
     }
     await to.remove(fixture.uuid);
     await from.remove(fixture.uuid);

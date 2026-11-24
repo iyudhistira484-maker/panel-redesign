@@ -26,6 +26,7 @@ export type FixtureTransfer = {
   source: string;
   target: string;
   allocation: string;
+  additional?: readonly { server: string; allocation: string }[];
   dispatch: (id: string) => Promise<boolean>;
   finalize?: (id: string, actorId: string) => Promise<boolean>;
 };
@@ -433,6 +434,11 @@ export async function registerCatalog(
       return { phase: "uncertain" };
     },
   );
+  const binding = (server: string) =>
+    fixtureTransfer &&
+    [fixtureTransfer, ...(fixtureTransfer.additional ?? [])].find(
+      (row) => row.server === server,
+    );
   if (fixtureTransfer) {
     const ledger = transferLedger(pool);
     app.post<{
@@ -453,10 +459,11 @@ export async function registerCatalog(
       },
       async (req, reply) => {
         const { nodeId, allocationId } = req.body;
+        const placement = binding(req.params.id);
         if (
-          req.params.id !== fixtureTransfer.server ||
+          !placement ||
           nodeId !== fixtureTransfer.target ||
-          allocationId !== fixtureTransfer.allocation
+          allocationId !== placement.allocation
         )
           throw new CatalogError(404, "transfer_fixture_not_found");
         let transferId: string | undefined;
@@ -510,7 +517,8 @@ export async function registerCatalog(
       async (req) => {
         const actor = principals.get(req);
         if (!actor) throw new CatalogError(403, "forbidden");
-        if (req.params.id !== fixtureTransfer.server)
+        const placement = binding(req.params.id);
+        if (!placement)
           throw new CatalogError(404, "transfer_fixture_not_found");
         const entry = await ledger.reported(req.body.transferId);
         if (
@@ -518,7 +526,7 @@ export async function registerCatalog(
           entry.server_id !== req.params.id ||
           entry.source_node_id !== fixtureTransfer.source ||
           entry.target_node_id !== fixtureTransfer.target ||
-          entry.target_allocation_id !== fixtureTransfer.allocation ||
+          entry.target_allocation_id !== placement.allocation ||
           !(await finalize(entry.id, actor.id))
         )
           throw new CatalogError(409, "transfer_not_finalizable");
