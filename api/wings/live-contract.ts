@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { WingsSocket } from "./socket";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -210,6 +212,50 @@ async function main() {
       (await admin("POST", `servers/${uuid}/reinstall`, { confirm: true }))
         .statusCode,
       409,
+    );
+    // The engine preserves the already-running workload. Restart only the Wings control container.
+    const docker = promisify(execFile);
+    const inspect = async () => {
+      const result = await docker(
+        "docker",
+        [
+          "inspect",
+          "--type",
+          "container",
+          "--format",
+          "{{.Id}} {{.State.StartedAt}}",
+          uuid,
+        ],
+        { timeout: 5000 },
+      );
+      return result.stdout.trim();
+    };
+    const original = await inspect();
+    await docker(
+      "docker",
+      ["restart", "--time", "10", "relay-wings-contract"],
+      { timeout: 20000 },
+    );
+    await until("Wings to rediscover already-running workload", async () => {
+      try {
+        return (await client.state(uuid)) === "running";
+      } catch {
+        return false;
+      }
+    });
+    assert.equal(
+      await inspect(),
+      original,
+      "Wings restart must not recreate or restart the workload container",
+    );
+    assert.equal(await phase(), "installed");
+    assert.deepEqual(
+      await rows<{ total: number }>(
+        pool,
+        "SELECT COUNT(*) AS total FROM audit_log WHERE subject_id=? AND event='wings.installed'",
+        [uuid],
+      ),
+      [{ total: 1 }],
     );
     assert.equal((await power("stop")).statusCode, 202);
     await until(
