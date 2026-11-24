@@ -1,12 +1,27 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import { validateNode, type WingsNode } from "./client";
+import { UUID_V4, validateNode, type WingsNode } from "./client";
 
 function digest(value: string) {
   return createHash("sha256").update(value).digest();
 }
-/** Only an empty, disposable node can participate in this stage of qualification. */
-export async function registerRemote(app: FastifyInstance, rawNode: WingsNode) {
+export type ContractWorkload = {
+  uuid: string;
+  configuration: {
+    settings: Record<string, unknown>;
+    process_configuration: Record<string, unknown>;
+  };
+  install: { container_image: string; entrypoint: string; script: string };
+  installed: (result: { successful: boolean; reinstall: boolean }) => void;
+};
+/** Optional fixture is only supplied by the disposable Docker harness, never by the app. */
+export async function registerRemote(
+  app: FastifyInstance,
+  rawNode: WingsNode,
+  fixture?: ContractWorkload,
+) {
+  if (fixture && !UUID_V4.test(fixture.uuid))
+    throw new Error("Invalid test fixture UUID");
   const node = validateNode(rawNode);
   const expected = digest(`Bearer ${node.tokenId}.${node.token}`);
   app.addHook("onRequest", async (req, reply) => {
@@ -40,5 +55,44 @@ export async function registerRemote(app: FastifyInstance, rawNode: WingsNode) {
     }),
   );
   app.post("/servers/reset", async (_req, reply) => reply.code(204).send());
-  // No workload is registered. All per-server and other callbacks deliberately remain unavailable.
+  if (!fixture) return;
+  // The daemon starts empty. Register the sole fixture for the explicit create request,
+  // not for discovery: otherwise Wings would pre-register it at boot.
+  app.get<{ Params: { uuid: string } }>("/servers/:uuid", async (req, reply) =>
+    req.params.uuid === fixture.uuid
+      ? fixture.configuration
+      : reply.code(404).send({ error: "server_not_found" }),
+  );
+  app.get<{ Params: { uuid: string } }>(
+    "/servers/:uuid/install",
+    async (req, reply) =>
+      req.params.uuid === fixture.uuid
+        ? fixture.install
+        : reply.code(404).send({ error: "server_not_found" }),
+  );
+  app.post<{
+    Params: { uuid: string };
+    Body: { successful: boolean; reinstall: boolean };
+  }>(
+    "/servers/:uuid/install",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["successful", "reinstall"],
+          additionalProperties: false,
+          properties: {
+            successful: { type: "boolean" },
+            reinstall: { type: "boolean" },
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      if (req.params.uuid !== fixture.uuid)
+        return reply.code(404).send({ error: "server_not_found" });
+      fixture.installed(req.body);
+      return reply.code(204).send();
+    },
+  );
 }

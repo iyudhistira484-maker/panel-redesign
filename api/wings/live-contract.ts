@@ -1,8 +1,19 @@
+import { lifecycleFixture } from "./lifecycle-fixture";
 import assert from "node:assert/strict";
 import Fastify from "fastify";
 import { registerRemote } from "./remote";
 import { WingsClient, WingsUnavailable, type WingsNode } from "./client";
 
+async function until(
+  label: string,
+  condition: () => boolean | Promise<boolean>,
+) {
+  for (let attempt = 0; attempt < 45; attempt++) {
+    if (await condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  throw new Error(`::error::Wings did not reach ${label}`);
+}
 async function main() {
   if (process.env.RELAY_DISPOSABLE_WINGS_CI !== "1")
     throw new Error("Disposable CI only");
@@ -11,13 +22,17 @@ async function main() {
     tokenId: process.env.RELAY_WINGS_TEST_TOKEN_ID ?? "",
     token: process.env.RELAY_WINGS_TEST_TOKEN ?? "",
   };
+  let installResult: { successful: boolean; reinstall: boolean } | undefined;
+  const fixture = lifecycleFixture((result) => {
+    installResult = result;
+  });
   const app = Fastify({ logger: false });
   const successes = new Set<string>();
   app.addHook("onResponse", async (request, reply) => {
     if (reply.statusCode < 300 && request.routeOptions.url)
       successes.add(request.routeOptions.url);
   });
-  await app.register((instance) => registerRemote(instance, node), {
+  await app.register((instance) => registerRemote(instance, node, fixture), {
     prefix: "/api/remote",
   });
   await app.listen({ host: "127.0.0.1", port: 13200 });
@@ -44,6 +59,25 @@ async function main() {
         await anonymous.body?.cancel();
         console.log(
           `Wings ${health.version}: authenticated system info, bootstrap list and reset verified`,
+        );
+        await client.create(fixture.uuid);
+        await until("installation callback", () => installResult !== undefined);
+        assert.deepEqual(installResult, { successful: true, reinstall: false });
+        assert.equal(await client.state(fixture.uuid), "offline");
+        await client.power(fixture.uuid, "start");
+        await until(
+          "running state",
+          async () => (await client.state(fixture.uuid)) === "running",
+        );
+        await client.power(fixture.uuid, "stop");
+        await until(
+          "offline state",
+          async () => (await client.state(fixture.uuid)) === "offline",
+        );
+        await client.remove(fixture.uuid);
+        await assert.rejects(client.state(fixture.uuid), { reason: "http" });
+        console.log(
+          "Disposable workload: create, install, start, stop and delete verified",
         );
         return;
       }

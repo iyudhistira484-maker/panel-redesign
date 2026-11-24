@@ -37,7 +37,7 @@ Base `/api/remote`, authorization `Bearer <token_id>.<token>`; resolve node by I
 
 | Method and path | Purpose |
 |---|---|
-| GET `/servers` | Paginated node server configurations (`data`, pagination `meta`) |
+| GET `/servers` | Paginated node server configurations (`data`, pagination `meta`); pinned daemon sends `page=0` for its first request, normalize to page 1 |
 | GET `/servers/{uuid}` | Server settings and egg process configuration; validate environment, resource limits, allocations, mounts, image and startup fields |
 | POST `/servers/reset` | Reconcile transient state on daemon boot; constrain updates to that node |
 | GET `/servers/{uuid}/install` | Installation script, container, entrypoint |

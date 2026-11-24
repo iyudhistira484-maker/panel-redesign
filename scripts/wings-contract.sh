@@ -8,7 +8,7 @@ harness_pid=''
 cleanup() {
   docker rm -f "$name" >/dev/null 2>&1 || true
   if [[ -n "$harness_pid" ]]; then kill "$harness_pid" 2>/dev/null || true; fi
-  rm -rf "$work"
+  sudo rm -rf -- "$work"
 }
 trap cleanup EXIT
 curl -fsSL --retry 2 'https://github.com/pterodactyl/wings/releases/download/v1.13.5/wings_linux_amd64' -o "$work/wings"
@@ -18,7 +18,7 @@ export RELAY_WINGS_TEST_TOKEN_ID=relaytestnode
 RELAY_WINGS_TEST_TOKEN=$(openssl rand -hex 32)
 export RELAY_WINGS_TEST_TOKEN
 printf '::add-mask::%s\n' "$RELAY_WINGS_TEST_TOKEN"
-mkdir "$work/config"
+mkdir "$work/config" "$work/data"
 chmod 0700 "$work/config"
 cat > "$work/config/config.yml" <<YAML
 uuid: 3ab63670-f83b-4a2c-adeb-5b2852859319
@@ -32,6 +32,11 @@ api:
   ssl:
     enabled: false
 system:
+  root_directory: $work/data
+  data: $work/data/volumes
+  archive_directory: $work/data/archives
+  backup_directory: $work/data/backups
+  tmp_directory: $work/data/tmp
   timezone: UTC
   sftp:
     bind_address: 127.0.0.1
@@ -40,12 +45,17 @@ allowed_mounts: []
 YAML
 chmod 0600 "$work/config/config.yml"
 docker pull debian:12-slim
+cat <<'DOCKERFILE' | docker build --tag relay-wings-contract-workload:ci -
+FROM alpine:3.22.2
+ENTRYPOINT ["/bin/sh", "/home/container/relay-start.sh"]
+DOCKERFILE
 ./node_modules/.bin/tsx api/wings/live-contract.ts &
 harness_pid=$!
 docker run --detach --name "$name" --network host \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$work/wings:/usr/local/bin/wings:ro" \
   -v "$work/config:/etc/pterodactyl" \
+  -v "$work/data:$work/data" \
   debian:12-slim /usr/local/bin/wings --config /etc/pterodactyl/config.yml >/dev/null
 if ! wait "$harness_pid"; then
   state=$(docker inspect --format '{{.State.Status}} (exit {{.State.ExitCode}})' "$name")
