@@ -1,3 +1,4 @@
+import { fixtureTransferService } from "./transfer-service";
 import { createServer, request, type ClientRequest } from "node:http";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -49,33 +50,27 @@ async function main() {
     process.env.RELAY_TRANSFER_TARGET_TOKEN,
   );
   if (process.argv[2] === "recover") {
-    const [, , , id, expected] = process.argv;
-    assert.match(expected ?? "", /^[a-f0-9]{64}$/);
+    const id = process.argv[3];
     const pool = stagingPool();
     try {
-      const ledger = transferLedger(pool);
-      const entry = await ledger.reported(id);
-      assert.ok(entry);
-      assert.equal(await ledger.claim(id), false);
-      const to = new WingsClient(target),
-        from = new WingsClient(source);
-      assert.equal(await to.state(entry.server_id), "offline");
-      assert.equal(
-        digest(await to.readFixtureFile(entry.server_id, "relay-start.sh")),
-        expected,
+      const resolve = async (node: WingsNode) => {
+        const [record] = await rows<{ id: string }>(
+          pool,
+          "SELECT id FROM nodes WHERE origin=? AND token_id=?",
+          [node.origin, node.tokenId],
+        );
+        assert.ok(record);
+        return { id: record.id, node };
+      };
+      const transfer = fixtureTransferService(
+        pool,
+        await resolve(source),
+        await resolve(target),
+        issuer,
       );
-      assert.equal(
-        digest(await from.readFixtureFile(entry.server_id, "relay-start.sh")),
-        expected,
-      );
-      assert.equal(
-        await ledger.settle(id, {
-          kind: "verified_destination",
-          node: entry.target_node_id,
-          server: entry.server_id,
-        }),
-        true,
-      );
+      assert.equal(await transfer.dispatch(id), false);
+      assert.equal(await transfer.finalize(id), true);
+      assert.equal(await transfer.finalize(id), false);
     } finally {
       await pool.end();
     }
@@ -270,8 +265,6 @@ async function main() {
     );
     transferId = await ledger.reserve(fixture.uuid, targetId, targetAllocation);
     assert.ok(transferId);
-    assert.equal(await ledger.claim(transferId), true);
-    assert.equal(await transferLedger(pool).claim(transferId), false);
     const sourceToken = signTransferCapability(source, issuer, fixture.uuid);
     const rejected = await fetch(`${target.origin}/api/transfers`, {
       method: "POST",
@@ -289,11 +282,14 @@ async function main() {
         sink.once("error", reject);
         sink.listen(18182, "127.0.0.1", resolve);
       });
-    await from.transferTo(
-      fixture.uuid,
-      uploadNode,
-      signTransferCapability(uploadNode, issuer, fixture.uuid),
+    const transfer = fixtureTransferService(
+      pool,
+      { id: sourceId, node: source },
+      { id: targetId, node: uploadNode },
+      issuer,
     );
+    assert.equal(await transfer.dispatch(transferId), true);
+    assert.equal(await transfer.dispatch(transferId), false);
     if (interrupted) {
       await eventually(
         "first upload chunk",
@@ -354,7 +350,10 @@ async function main() {
       try {
         const recovered = transferLedger(recoveredPool);
         assert.equal(await recovered.expireUnconfirmedDispatches(), 1);
-        assert.equal(await recovered.claim(transferId), false);
+        assert.equal(
+          await recovered.claim(transferId, digest(original)),
+          false,
+        );
         assert.equal(
           await recovered.reportDestination(fixture.uuid, targetId),
           false,
@@ -422,7 +421,7 @@ async function main() {
     await app.close();
     await promisify(execFile)(
       "./node_modules/.bin/tsx",
-      ["api/wings/live-transfer.ts", "recover", transferId, digest(original)],
+      ["api/wings/live-transfer.ts", "recover", transferId],
       { timeout: 15000 },
     );
     assert.deepEqual(

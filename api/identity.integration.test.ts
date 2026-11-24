@@ -527,7 +527,12 @@ test(
       );
       assert.ok(move);
       assert.deepEqual(
-        (await Promise.all([ledger.claim(move), ledger.claim(move)])).sort(),
+        (
+          await Promise.all([
+            ledger.claim(move, "a".repeat(64)),
+            ledger.claim(move, "a".repeat(64)),
+          ])
+        ).sort(),
         [false, true],
       );
       assert.equal(
@@ -571,7 +576,7 @@ test(
       );
       const reverse = await ledger.reserve(serverId, nodeId, allocationId);
       assert.ok(reverse);
-      assert.equal(await ledger.claim(reverse), true);
+      assert.equal(await ledger.claim(reverse, "a".repeat(64)), true);
       const endpoint = `servers/${serverId}/transfer`;
       ok(await getAdmin(endpoint), 401);
       ok(await getAdmin(endpoint, b), 403);
@@ -614,7 +619,7 @@ test(
         ),
         [{ actor_id: admin }],
       );
-      assert.equal(await ledger.claim(reverse), false);
+      assert.equal(await ledger.claim(reverse, "a".repeat(64)), false);
       assert.equal(await ledger.reportDestination(serverId, nodeId), false);
       assert.equal(
         await ledger.settle(reverse, { kind: "not_dispatched" }),

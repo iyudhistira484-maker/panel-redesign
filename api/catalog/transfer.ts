@@ -56,6 +56,7 @@ type Transfer = {
   source_allocation_id: string;
   target_node_id: string;
   target_allocation_id: string;
+  fixture_digest: string | null;
   dispatched_at: string | null;
   destination_reported_at: string | null;
   phase: "reserved" | "uncertain" | "completed" | "cancelled";
@@ -100,10 +101,11 @@ export function transferLedger(pool: Pool) {
         return id;
       });
     },
-    async claim(id: string) {
+    async claim(id: string, digest: string) {
+      if (!/^[a-f0-9]{64}$/.test(digest)) return false;
       const [result] = await pool.execute<import("mysql2").ResultSetHeader>(
-        "UPDATE wings_transfers SET dispatched_at=UTC_TIMESTAMP(3) WHERE id=? AND phase='reserved' AND dispatched_at IS NULL",
-        [id],
+        "UPDATE wings_transfers SET dispatched_at=UTC_TIMESTAMP(3),fixture_digest=? WHERE id=? AND phase='reserved' AND dispatched_at IS NULL",
+        [digest, id],
       );
       return result.affectedRows === 1;
     },
@@ -126,6 +128,14 @@ export function transferLedger(pool: Pool) {
         pool,
         "SELECT * FROM wings_transfers WHERE active_server=? AND target_node_id=? AND phase='reserved' AND dispatched_at IS NOT NULL",
         [server, node],
+      );
+      return entry;
+    },
+    async pending(id: string) {
+      const [entry] = await rows<Transfer>(
+        pool,
+        "SELECT * FROM wings_transfers WHERE id=? AND phase='reserved' AND dispatched_at IS NULL",
+        [id],
       );
       return entry;
     },
