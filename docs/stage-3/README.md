@@ -291,4 +291,12 @@ Relay tetap mengejar [target pengganti Pterodactyl Panel dan gate penutupan Taha
 
 Untuk dry-run pada salinan uji yang sudah direstore, set `RELAY_ENV=staging` dan `RELAY_LEGACY_SNAPSHOT_URL` ke database loopback `panel_snapshot_*` memakai akun khusus dengan grants seperti di `scripts/legacy-snapshot-ci.sh`, lalu jalankan `npm run legacy:preflight`. CLI hanya menampilkan jumlah baris; tidak menyalin email, hash password, token, atau kunci. Pembacaan dibatasi 10.000 baris per tabel. Restore SQL bukan bagian dari CLI. Jangan restore dump tak tepercaya atau gunakan database produksi.
 
-Ini membuktikan jalur baca snapshot nyata, bukan migrasi umum. Apply masih mengizinkan fixture dua server dengan satu pemilik dan tanpa subuser; pemindahan akun dan izin tetap belum lulus. Gate egg dan transfer workload umum juga tetap terbuka.
+Ini membuktikan jalur baca snapshot nyata, bukan migrasi umum. Apply masih terbatas pada fixture dua server; lihat latihan akun dan subuser di bawah untuk cakupan terbaru. Gate egg dan transfer workload umum juga tetap terbuka.
+
+### Latihan impor akun dan subuser
+
+Snapshot CI memuat satu pemilik, satu kolaborator yang memiliki `activity.read` dan `control.start` hanya di server pertama, dan satu akun tanpa akses. Importer fixture menulis ketiga identitas non-admin dengan kredensial dinonaktifkan, serta satu grant, dalam transaksi yang sama dengan adopsi katalog. Tidak ada password, 2FA, atau token Panel yang dipindahkan. Dry-run tetap hanya membaca snapshot. Relay menolak replay jika identitas atau grant yang tersimpan telah berubah, alih-alih menimpanya.
+
+Pengujian memuat grant dari MySQL dan meneruskannya ke kebijakan Relay untuk mengecek izin yang diizinkan dan penolakan tindakan lain, server lain, atau pengguna lain. Ini belum membuktikan otorisasi melalui endpoint pengguna atau proses aktivasi akun. Keduanya tetap diperlukan sebelum menyebut migrasi akun dan subuser siap secara umum.
+
+Bukti: [CI 45406521401](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45406521401), sembilan job lulus.
