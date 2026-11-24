@@ -316,3 +316,7 @@ Bukti: [CI 45409988349](https://github.com/iyudhistira484-maker/panel-redesign/a
 ### Aktivasi lewat SMTP staging
 
 [CI 45414845291](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45414845291) lulus sembilan job. Skenario `legacy-panel` sekarang menggunakan pengirim SMTP yang sama dengan entrypoint staging dan Mailpit v1.27.11 sekali pakai di loopback. Pengujian mengambil tautan dari isi email yang benar-benar diterima untuk masing-masing dari tiga akun hasil impor, memakai token sekali, memastikan replay ditolak, lalu login dan mengulang pemeriksaan batas akses hingga Wings. Token tetap berada di fragmen tautan dan tidak dicetak. Ini menggantikan transport in-memory pada latihan ini, bukan validasi SMTP produksi atau UI reset.
+
+### Egg PTDL v2 dengan parser properties
+
+[CI 45415410123](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45415410123) lulus sembilan job. Job `wings-bootstrap (lifecycle)` sekarang menjalankan egg HTTP ketiga dengan skrip instalasi berbeda dan parser Wings `properties`. Tes mengimpor dan mengekspor dokumen tanpa mengubah byte, menginstal, menjalankan workload, membaca marker lewat HTTP, memeriksa `mode=beta` dan `keep=true` pada `server.properties`, lalu menghentikan dan menghapus workload. Dua egg JSON sebelumnya tetap diuji. Eksekusi masih terbatas pada allowlist byte eksak; tes mutasi memastikan dokumen yang berbeda tidak lolos. Ini menambah cakupan parser, bukan dukungan umum untuk egg komunitas.
