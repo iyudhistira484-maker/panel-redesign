@@ -70,8 +70,86 @@ async function main() {
         issuer,
       );
       assert.equal(await transfer.dispatch(id), false);
-      assert.equal(await transfer.finalize(id), true);
-      assert.equal(await transfer.finalize(id), false);
+      const entry = await transferLedger(pool).reported(id);
+      assert.ok(entry);
+      const [server] = await rows<{ owner_id: string }>(
+        pool,
+        "SELECT owner_id FROM servers WHERE id=?",
+        [entry.server_id],
+      );
+      assert.ok(server);
+      const app = Fastify({ logger: false });
+      try {
+        await app.register(
+          (instance) =>
+            registerCatalog(instance, {
+              pool,
+              pepper: randomBytes(32),
+              authenticate: async (req) =>
+                req.headers["x-fixture-admin"] === "1"
+                  ? { id: server.owner_id, admin: true, channel: "session" }
+                  : null,
+              fixtureTransfer: {
+                server: entry.server_id,
+                source: entry.source_node_id,
+                target: entry.target_node_id,
+                allocation: entry.target_allocation_id,
+                dispatch: transfer.dispatch,
+                finalize: transfer.finalize,
+              },
+            }),
+          { prefix: "/api/v1/admin" },
+        );
+        const url = `/api/v1/admin/servers/${entry.server_id}/transfer/finalize`;
+        const payload = { confirm: true, transferId: id };
+        assert.equal(
+          (await app.inject({ method: "POST", url, payload })).statusCode,
+          401,
+        );
+        const headers = { "x-fixture-admin": "1" };
+        assert.equal(
+          (
+            await app.inject({
+              method: "POST",
+              url,
+              headers,
+              payload: { ...payload, transferId: randomUUID() },
+            })
+          ).statusCode,
+          409,
+        );
+        await pool.execute("UPDATE users SET is_admin=0 WHERE id=?", [
+          server.owner_id,
+        ]);
+        assert.equal(
+          (await app.inject({ method: "POST", url, headers, payload }))
+            .statusCode,
+          409,
+        );
+        await pool.execute("UPDATE users SET is_admin=1 WHERE id=?", [
+          server.owner_id,
+        ]);
+        assert.equal(
+          (await app.inject({ method: "POST", url, headers, payload }))
+            .statusCode,
+          200,
+        );
+        assert.equal(
+          (await app.inject({ method: "POST", url, headers, payload }))
+            .statusCode,
+          409,
+        );
+        assert.deepEqual(
+          await rows(
+            pool,
+            "SELECT actor_id FROM audit_log WHERE event='catalog.transfer_completed' AND subject_id=?",
+            [entry.server_id],
+          ),
+          [{ actor_id: server.owner_id }],
+        );
+      } finally {
+        await app.close();
+      }
     } finally {
       await pool.end();
     }

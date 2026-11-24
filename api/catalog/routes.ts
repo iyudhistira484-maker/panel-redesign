@@ -21,6 +21,7 @@ export type FixtureTransfer = {
   target: string;
   allocation: string;
   dispatch: (id: string) => Promise<boolean>;
+  finalize?: (id: string, actorId: string) => Promise<boolean>;
 };
 
 type Options = {
@@ -422,6 +423,43 @@ export async function registerCatalog(
         }
         await ledger.settle(transferId, { kind: "not_dispatched" });
         throw new CatalogError(409, "transfer_not_dispatchable");
+      },
+    );
+  }
+  if (fixtureTransfer?.finalize) {
+    const finalize = fixtureTransfer.finalize;
+    const ledger = transferLedger(pool);
+    app.post<{
+      Params: { id: string };
+      Body: { confirm: true; transferId: string };
+    }>(
+      "/servers/:id/transfer/finalize",
+      {
+        schema: {
+          ...byId,
+          body: schema({
+            confirm: { type: "boolean", const: true },
+            transferId: id,
+          }),
+        },
+        config: { rateLimit: { max: 5, timeWindow: "1 minute" } },
+      },
+      async (req) => {
+        const actor = principals.get(req);
+        if (!actor) throw new CatalogError(403, "forbidden");
+        if (req.params.id !== fixtureTransfer.server)
+          throw new CatalogError(404, "transfer_fixture_not_found");
+        const entry = await ledger.reported(req.body.transferId);
+        if (
+          !entry ||
+          entry.server_id !== req.params.id ||
+          entry.source_node_id !== fixtureTransfer.source ||
+          entry.target_node_id !== fixtureTransfer.target ||
+          entry.target_allocation_id !== fixtureTransfer.allocation ||
+          !(await finalize(entry.id, actor.id))
+        )
+          throw new CatalogError(409, "transfer_not_finalizable");
+        return { phase: "completed" };
       },
     );
   }

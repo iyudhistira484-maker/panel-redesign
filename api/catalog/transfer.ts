@@ -155,9 +155,24 @@ export function transferLedger(pool: Pool) {
       result:
         | { kind: "not_dispatched" }
         | { kind: "ambiguous" }
-        | { kind: "verified_destination"; node: string; server: string },
+        | {
+            kind: "verified_destination";
+            node: string;
+            server: string;
+            actorId?: string;
+          },
     ) {
       return transaction(pool, async (db) => {
+        const actorId =
+          result.kind === "verified_destination" ? result.actorId : undefined;
+        if (actorId) {
+          const [actor] = await rows<{ is_admin: number }>(
+            db,
+            "SELECT is_admin FROM users WHERE id=? FOR UPDATE",
+            [actorId],
+          );
+          if (!actor?.is_admin) return false;
+        }
         const [entry] = await rows<Transfer>(
           db,
           "SELECT * FROM wings_transfers WHERE id=? FOR UPDATE",
@@ -217,6 +232,11 @@ export function transferLedger(pool: Pool) {
           result.kind === "not_dispatched" ? "cancelled" : "completed",
           id,
         ]);
+        if (actorId)
+          await db.execute(
+            "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'catalog.transfer_completed',?)",
+            [actorId, entry.server_id],
+          );
         return true;
       });
     },

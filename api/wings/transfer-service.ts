@@ -48,7 +48,7 @@ export function fixtureTransferService(
         throw error;
       }
     },
-    async finalize(id: string) {
+    async finalize(id: string, actorId: string) {
       const entry = await ledger.reported(id);
       if (
         !entry ||
@@ -73,6 +73,7 @@ export function fixtureTransferService(
       return ledger.settle(id, {
         kind: "verified_destination",
         node: target.id,
+        actorId,
         server: entry.server_id,
       });
     },
