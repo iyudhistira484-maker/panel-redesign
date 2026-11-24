@@ -1,3 +1,4 @@
+import { mumbleEgg } from "../eggs/upstream-workload";
 import { reviewedHttpEggs } from "../eggs/reviewed-workload";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -416,6 +417,79 @@ async function main() {
         202,
       );
     }
+    const mumbleId = await add("eggs", { nestId, document: mumbleEgg });
+    assert.equal(
+      (await admin("GET", `eggs/${mumbleId}/document`)).body,
+      mumbleEgg,
+    );
+    const voicePort = 25614;
+    const voiceAllocation = await add("allocations", {
+      nodeId,
+      ip: "127.0.0.1",
+      port: voicePort,
+    });
+    const draft = {
+      name: "Upstream Mumble",
+      nodeId,
+      eggId: mumbleId,
+      allocationId: voiceAllocation,
+      ownerId: id,
+    };
+    assert.equal(
+      (await admin("POST", "servers", { ...draft, fixtureMode: "beta" }))
+        .statusCode,
+      422,
+    );
+    const voice = await add("servers", draft);
+    const provisionVoice = await admin("POST", `servers/${voice}/provision`, {
+      confirm: true,
+    });
+    assert.equal(provisionVoice.statusCode, 202, provisionVoice.body);
+    await until("upstream Mumble install", async () => {
+      const [record] = await rows<{ phase: string }>(
+        pool,
+        "SELECT phase FROM wings_provisions WHERE server_id=?",
+        [voice],
+      );
+      assert.notEqual(record?.phase, "install_failed");
+      return record?.phase === "installed";
+    });
+    assert.equal(
+      (
+        await admin("POST", `servers/${voice}/power`, {
+          confirm: true,
+          action: "start",
+        })
+      ).statusCode,
+      202,
+    );
+    await until("upstream Mumble listening", async () => {
+      const { stdout, stderr } = await docker("docker", ["logs", voice], {
+        timeout: 2000,
+      }).catch(() => ({ stdout: "", stderr: "" }));
+      return (
+        (stdout + stderr).includes("Server listening on") &&
+        (await client.state(voice)) === "running"
+      );
+    });
+    assert.equal(
+      (
+        await admin("POST", `servers/${voice}/power`, {
+          confirm: true,
+          action: "stop",
+        })
+      ).statusCode,
+      202,
+    );
+    await until(
+      "upstream Mumble offline",
+      async () => (await client.state(voice)) === "offline",
+    );
+    assert.equal(
+      (await admin("POST", `servers/${voice}/delete`, { confirm: true }))
+        .statusCode,
+      202,
+    );
     console.log(
       "Real Wings verified via admin: create, install, start, stop, reinstall and delete",
     );

@@ -1,3 +1,4 @@
+import { mumbleEgg, upstreamWorkload } from "../eggs/upstream-workload";
 import {
   reviewedHttpEggs,
   reviewedWorkload,
@@ -88,8 +89,8 @@ export function createProvisioner(
         [id],
       )
     )[0];
-  const approvedDocuments = [disposableEgg, ...reviewedHttpEggs].map((text) =>
-    Buffer.from(text),
+  const approvedDocuments = [disposableEgg, ...reviewedHttpEggs, mumbleEgg].map(
+    (text) => Buffer.from(text),
   );
   const eligible = (s: ServerRow) =>
     fromNode(s) &&
@@ -127,6 +128,8 @@ export function createProvisioner(
     ) => installStatus(s, result);
     if (s.document.equals(approvedDocuments[0]))
       return lifecycleFixture(installed, s);
+    if (s.document.equals(Buffer.from(mumbleEgg)))
+      return upstreamWorkload(installed, s);
     const reviewed = reviewedWorkload(s.document, s, installed, s.fixtureMode);
     if (!reviewed) throw new ProvisionError(422, "egg_not_approved");
     return reviewed;
