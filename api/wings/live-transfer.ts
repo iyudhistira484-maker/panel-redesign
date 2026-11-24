@@ -1,4 +1,4 @@
-import { createServer } from "node:http";
+import { createServer, request, type ClientRequest } from "node:http";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import assert from "node:assert/strict";
@@ -82,8 +82,13 @@ async function main() {
     return;
   }
   let installed: boolean | undefined;
-  const interrupted = process.env.RELAY_TRANSFER_SCENARIO === "sender-killed";
+  const interrupted = ["sender-killed", "partial-target"].includes(
+    process.env.RELAY_TRANSFER_SCENARIO ?? "",
+  );
   const dropReport = process.env.RELAY_TRANSFER_SCENARIO === "missing-report";
+  const partial = process.env.RELAY_TRANSFER_SCENARIO === "partial-target";
+  let targetFetched = false;
+  let upstream: ClientRequest | undefined;
   let uploadStarted = false;
   const sink = createServer((req, res) => {
     if (req.method !== "POST" || req.url !== "/api/transfers") {
@@ -94,6 +99,21 @@ async function main() {
     req.once("data", (chunk: Buffer) => {
       uploadStarted = chunk.length > 0;
       req.pause();
+      if (partial) {
+        upstream = request(
+          `${target.origin}/api/transfers`,
+          {
+            method: "POST",
+            headers: {
+              "content-type": req.headers["content-type"],
+              authorization: req.headers.authorization,
+            },
+          },
+          (response) => response.resume(),
+        );
+        upstream.on("error", () => {});
+        upstream.write(chunk);
+      }
     });
     req.on("error", () => {});
   });
@@ -161,10 +181,12 @@ async function main() {
         target,
         undefined,
         {
-          lookup: async (id) =>
-            id === fixture.uuid && (await ledger.placement(id, targetId))
-              ? destination
-              : undefined,
+          lookup: async (id) => {
+            if (id !== fixture.uuid || !(await ledger.placement(id, targetId)))
+              return undefined;
+            targetFetched = true;
+            return destination;
+          },
           list: async () => ({ data: [], total: 0 }),
         },
         async (id, ok) => {
@@ -273,13 +295,38 @@ async function main() {
       signTransferCapability(uploadNode, issuer, fixture.uuid),
     );
     if (interrupted) {
-      await eventually("first upload chunk", () => uploadStarted);
+      await eventually(
+        "first upload chunk",
+        () => uploadStarted && (!partial || targetFetched),
+      );
       await promisify(execFile)(
         "docker",
         ["kill", "--signal", "KILL", "relay-transfer-source"],
         { timeout: 10000 },
       );
-      assert.equal(completion, undefined);
+      if (partial) {
+        upstream?.destroy();
+        await eventually(
+          "destination failure callback",
+          () => completion !== undefined,
+        );
+        assert.equal(completion, false);
+        const path = process.env.RELAY_TRANSFER_FIXTURE_ROOT;
+        assert.ok(path?.startsWith("/tmp/tmp."));
+        const { stdout } = await promisify(execFile)(
+          "sudo",
+          ["-n", "stat", "--format=%F", "--", `${path}/volumes`],
+          { timeout: 5000 },
+        );
+        assert.equal(stdout.trim(), "directory");
+        await promisify(execFile)(
+          "sudo",
+          ["-n", "test", "!", "-e", `${path}/volumes/${fixture.uuid}`],
+          { timeout: 5000 },
+        );
+      } else {
+        assert.equal(completion, undefined);
+      }
     } else {
       await eventually(
         "destination callback",
@@ -288,7 +335,7 @@ async function main() {
       assert.equal(failure, false);
     }
     if (dropReport || interrupted) {
-      assert.equal(completion, undefined);
+      assert.equal(completion, partial ? false : undefined);
       if (interrupted) {
         await assert.rejects(to.state(fixture.uuid), { reason: "not_found" });
       } else {
@@ -391,6 +438,7 @@ async function main() {
     );
   } finally {
     await app.close();
+    upstream?.destroy();
     sink.closeAllConnections();
     sink.close();
     await pool.end();

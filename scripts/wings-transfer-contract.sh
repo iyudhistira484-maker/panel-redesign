@@ -79,7 +79,7 @@ FROM alpine:3.22.2
 ENTRYPOINT ["/bin/sh", "/home/container/relay-start.sh"]
 DOCKERFILE
 docker save relay-wings-contract-workload:ci | sudo -n docker -H "$inner" load >/dev/null
-./node_modules/.bin/tsx api/wings/live-transfer.ts &
+RELAY_TRANSFER_FIXTURE_ROOT="$work/target-data" ./node_modules/.bin/tsx api/wings/live-transfer.ts &
 pid=$!
 run_wings() {
   local role=$1 name=$2 socket=$3
