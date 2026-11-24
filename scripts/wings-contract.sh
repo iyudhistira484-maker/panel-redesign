@@ -37,6 +37,8 @@ system:
   archive_directory: $work/data/archives
   backup_directory: $work/data/backups
   tmp_directory: $work/data/tmp
+  machine_id:
+    directory: $work/data/machine-id
   timezone: UTC
   sftp:
     bind_address: 127.0.0.1
@@ -59,7 +61,7 @@ docker run --detach --name "$name" --network host \
   debian:12-slim /usr/local/bin/wings --config /etc/pterodactyl/config.yml >/dev/null
 if ! wait "$harness_pid"; then
   state=$(docker inspect --format '{{.State.Status}} (exit {{.State.ExitCode}})' "$name")
-  echo "::error::Wings bootstrap did not complete; container $state"
+  echo "::error::Wings contract did not complete; container $state"
   # Only emit a short fatal diagnostic from this credential-isolated fixture.
   fatal=$(docker logs "$name" 2>&1 | sed -E "s/${RELAY_WINGS_TEST_TOKEN}/[redacted]/g; s/\x1b\[[0-9;]*m//g" | grep -iE 'fatal|error|panic|failed|invalid|configuration' | tail -3 | cut -c1-280 || true)
   while IFS= read -r line; do

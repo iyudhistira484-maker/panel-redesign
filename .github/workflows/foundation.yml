@@ -15,6 +15,7 @@ jobs:
       - run: npm ci
       - run: npm audit --audit-level=high
       - run: npm run lint
+      - run: npm run test:eggs
       - run: npm run build
       - run: npm run budget
       - name: Use runner Chromium or install Playwright browser

@@ -26,7 +26,10 @@ async function main() {
   const fixture = lifecycleFixture((result) => {
     installResult = result;
   });
-  const app = Fastify({ logger: false });
+  const app = Fastify({
+    logger: false,
+    ajv: { customOptions: { coerceTypes: false, removeAdditional: false } },
+  });
   const successes = new Set<string>();
   app.addHook("onResponse", async (request, reply) => {
     if (reply.statusCode < 300 && request.routeOptions.url)

@@ -15,7 +15,8 @@
     "test:identity": "tsx --test api/*.test.ts",
     "provision": "tsx api/provision.ts",
     "wings:health": "tsx api/wings/health.ts",
-    "test:wings": "tsx --test api/wings/*.test.ts"
+    "test:wings": "tsx --test api/wings/*.test.ts",
+    "test:eggs": "tsx --test api/eggs/*.test.ts"
   },
   "repository": {
     "type": "git",

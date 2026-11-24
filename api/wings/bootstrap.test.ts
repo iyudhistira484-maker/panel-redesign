@@ -138,3 +138,73 @@ test("outbound client pins origin and version without reflecting upstream errors
     { reason: "http" },
   );
 });
+
+test("disposable lifecycle callbacks accept only the registered UUID and strict result booleans", async () => {
+  const { registerRemote } = await import("./remote");
+  const { lifecycleFixture } = await import("./lifecycle-fixture");
+  const { default: Fastify } = await import("fastify");
+  const app = Fastify({
+    ajv: { customOptions: { coerceTypes: false, removeAdditional: false } },
+  });
+  const results: unknown[] = [];
+  const fixture = lifecycleFixture((result) => results.push(result));
+  await app.register((instance) => registerRemote(instance, node, fixture), {
+    prefix: "/api/remote",
+  });
+  try {
+    const target = `/api/remote/servers/${fixture.uuid}`;
+    assert.equal((await app.inject({ url: target })).statusCode, 401);
+    const response = await app.inject({
+      url: target,
+      headers: { authorization: auth },
+    });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().settings.uuid, fixture.uuid);
+    assert.equal(
+      (
+        await app.inject({
+          url: `${target}/install`,
+          headers: { authorization: auth },
+        })
+      ).statusCode,
+      200,
+    );
+    const request = {
+      method: "POST",
+      url: `${target}/install`,
+      headers: { authorization: auth },
+    } as const;
+    assert.equal(
+      (
+        await app.inject({
+          ...request,
+          payload: { successful: "true", reinstall: false },
+        })
+      ).statusCode,
+      400,
+    );
+    assert.equal(
+      (
+        await app.inject({
+          ...request,
+          url: "/api/remote/servers/11111111-1111-4111-8111-111111111111/install",
+          payload: { successful: true, reinstall: false },
+        })
+      ).statusCode,
+      404,
+    );
+    assert.deepEqual(results, []);
+    assert.equal(
+      (
+        await app.inject({
+          ...request,
+          payload: { successful: true, reinstall: false },
+        })
+      ).statusCode,
+      204,
+    );
+    assert.deepEqual(results, [{ successful: true, reinstall: false }]);
+  } finally {
+    await app.close();
+  }
+});
