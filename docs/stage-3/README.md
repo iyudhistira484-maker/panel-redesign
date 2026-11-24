@@ -77,3 +77,15 @@ Rute berikut ditambahkan ke `/api/v1/admin`, hanya dalam mode fixture sekali pak
 Pemeriksaan kehadiran daemon tidak bisa memastikan hasil instalasi. Jika callback hilang, status tetap sesuai catatan terakhir; belum ada mekanisme reset/force retry otomatis. API delete/reinstall/transfer serta integrasi websocket masih terpisah dari rute admin. `api/wings/{client,provision,live-contract}.ts`, `api/catalog/routes.ts`, dan `api/identity.integration.test.ts` memuat perubahan dan tes. Jalankan `npm run test:wings` dan periksa job `identity` serta `wings-bootstrap` untuk MySQL dan daemon nyata.
 
 **Hasil kontrol runtime:** [GitHub Actions 45355558549](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45355558549) lulus ketiga job. Harness start dan stop sekarang melalui API admin, dengan polling state melalui rute runtime dan verifikasi daemon asli. Uji MySQL memverifikasi bahwa pengguna biasa ditolak, konfirmasi wajib, dan rekonsiliasi outage tidak membuat dispatch kedua atau mengubah `uncertain` menjadi sukses. Penghapusan harness masih langsung melalui adaptor untuk cleanup lingkungan uji.
+
+## Reinstall dan delete dari API admin
+
+`POST /api/v1/admin/servers/{id}/reinstall` dan `/delete` memerlukan sesi admin, origin/CSRF yang sah, dan body `{ "confirm": true }`. Rute hanya terdaftar dalam mode fixture. Relay menolak aksi jika daemon tidak bisa memastikan server `offline`; fase dan audit dicatat sebelum memanggil Wings. Pengiriman untuk server yang sama diserialkan dalam proses staging tunggal. Ini bukan penguncian multi-instans.
+
+- Reinstall masuk `reinstalling`; callback yang memang bertanda `reinstall` menentukan `installed` atau `install_failed`. Dispatch yang tidak pasti ditandai `reinstall_uncertain` tanpa retry otomatis.
+- Delete masuk `deleting`; `deleted` berarti Wings mengonfirmasi penghapusan server dari manajernya, bukan bukti bahwa seluruh file sudah hilang. Katalog mempertahankan entri sebagai riwayat, alokasi tidak dibebaskan, dan server tidak diterbitkan ulang saat Wings boot. Timeout masuk `delete_uncertain`; observasi tidak otomatis menyelesaikannya.
+- Migrasi `004_lifecycle` menambah fase tersebut. Untuk migrasi staging jalankan `npm run db -- up`. Rollback skema penuh tetap menghapus data staging; pada langkah penurunan versi fase baru dipetakan ke `uncertain`, bukan `installed`.
+
+Berkas: `api/wings/{client,provision,live-contract}.ts`, `api/catalog/routes.ts`, `api/identity.integration.test.ts`, `api/migrate.ts`, `migrations/004_lifecycle.{up,down}.sql`. Tes lokal: `npm run test:wings`. Integrasi API → MySQL → daemon asli dijalankan job `wings-bootstrap`.
+
+**Hasil:** [GitHub Actions 45358544003](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45358544003) lulus. Daemon asli menolak tahap destruktif melalui pemeriksaan Relay ketika fixture masih berjalan; sesudah stop, tes memverifikasi callback reinstall kedua, penghapusan dari Wings, penolakan delete ulang, dan tidak ada UUID terhapus dalam daftar bootstrap. Job MySQL juga lulus untuk penolakan non-admin dan fase `uncertain`.
