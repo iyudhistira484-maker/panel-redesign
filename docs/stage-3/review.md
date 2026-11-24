@@ -1,0 +1,11 @@
+# Paket review Tahap 3
+
+**Bukti utama:** [Foundation 45501719828](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45501719828), 12 job lulus setelah rerun satu job. Pada percobaan pertama Wings menolak arsip Mumble skenario laporan hilang karena checksum transport berbeda. Rerun adalah percobaan CI terpisah dengan database dan daemon baru, bukan retry atas operasi yang dikarantina. Penyebab mismatch intermiten belum dipastikan.
+
+| Kriteria | Bukti staging | Batas |
+| --- | --- | --- |
+| Dry-run, impor dan rollback | `legacy-panel`: Panel v1.15.2, salinan MariaDB, impor tiga baris katalog dengan dua pemilik dan dua grant, replay idempoten serta tes konflik atomik pada latihan adopsi. Dua workload nyata dialihkan, akun aktif lewat Mailpit, izin dibuktikan lewat API dan Wings, lalu rollback dengan UUID, container, dan checksum tetap. | Baris ketiga sintetis. Apply masih shell yang ditinjau, akun uji yang dipetakan eksplisit, alokasi primer, dan node loopback; bukan importer Panel umum. |
+| Egg upstream | `lifecycle` Mumble (installer asli, INI, dan `MAX_USERS` valid/tidak valid). `gitea-qualification` Gitea (installer Debian asli, binary ELF, start–stop). Kedua dokumen disimpan dan diekspor byte persis. | Dokumen terpilih saja. Gitea memakai profil fixed versi 1.25.5, bukan override umum. Tag image installer/runtime belum dikunci ke digest. |
+| Transfer non-shell | `mumble-reported` dan `mumble-missing-report` memakai upstream Mumble dengan konfigurasi yang sudah ada. Sukses: callback, restart Relay, checksum INI, atomik pindah node; tujuan start/stop dengan `port=25611` dan `users=37`. Ambigu: arsip mendarat, laporan tidak dipersisten, restart sumber, fase `uncertain`, sumber dan reservasi tetap ada, tanpa pengiriman ulang. Skenario HTTP juga lulus. | Satu server per pasangan instans staging; checksum Relay satu file saksi, bukan seluruh pohon file. Tes Mumble transfer tidak mengandalkan installer APK untuk mengambil konfigurasi baru; CI menyemai konfigurasi, sedangkan instalasi bersih diuji oleh `lifecycle`. |
+
+Paket ini siap untuk meninjau bukti tiga sasaran staging. [Gate pengganti Panel](replacement-gate.md) masih terbuka untuk importer produksi, cakupan egg umum, transfer katalog umum dan pemulihan hasil ambigu. Lulus matriks staging tidak menutup gate itu. Tidak ada cutover produksi atau pekerjaan Tahap 4.

@@ -342,3 +342,11 @@ Dua pemeriksaan tambahan belum lulus dan tetap terpisah dari jalur default: `REL
 [CI 45426673566](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45426673566) menyelesaikan hambatan cgroup: Docker tujuan memakai namespace host dengan subtree cgroup khusus pada runner sekali pakai. Sembilan job lulus, termasuk `reported` yang memverifikasi file sumber masih utuh setelah finalisasi dan workload HTTP bisa start/stop pada Wings tujuan. Ini tidak membuktikan transfer Mumble atau integritas seluruh pohon file.
 
 Kualifikasi Gitea tetap eksperimental. Bila job dijalankan dengan `RELAY_EXPERIMENTAL_GITEA=1`, sekarang ia membedakan installer yang melapor sukses tetapi tidak menghasilkan ELF dari kegagalan boot setelah binary tersedia. Opsi ini tidak mengubah jalur default dan tidak boleh dipakai sebagai bukti kelulusan.
+
+### Egg upstream kedua: Gitea
+
+Job [`gitea-qualification`](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45501363404/job/138825229180) lulus impor/ekspor byte persis, installer Debian asli, pemeriksaan executable ELF, start hingga Wings melaporkan `running`, stop, dan delete. Profil uji menjepit versi runtime ke `1.25.5` dan mematikan SSH. Override Mumble ditolak pada egg Gitea sebelum membuat draft. Installer memerlukan akses HTTPS; hanya jaringan runner sekali pakai untuk kualifikasi ini yang diberi egress, sedangkan alokasi tetap loopback. Ini bukti dua egg upstream yang ditinjau, bukan engine universal untuk egg komunitas.
+
+### Paket review Tahap 3
+
+Lihat [matriks bukti, hasil Mumble transfer, dan batas penutupan](review.md).
