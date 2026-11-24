@@ -1,13 +1,10 @@
 import { rows } from "../db";
 import { transferProfile } from "./transfer-profile";
-import { createHash } from "node:crypto";
 import type { Pool } from "mysql2/promise";
 import { transferLedger } from "../catalog/transfer";
 import { WingsClient, type WingsNode } from "./client";
 import { signTransferCapability } from "./transfer-token";
 
-const digest = (text: string) =>
-  createHash("sha256").update(text).digest("hex");
 type Endpoint = { id: string; node: WingsNode };
 
 /** Internal fixture orchestration. Callers must resolve the two trusted staging endpoints. */
@@ -43,12 +40,14 @@ export function fixtureTransferService(
       if (!workload) return false;
       const file = await from.readFixtureFile(entry.server_id, workload.path);
       if (!file.includes(workload.marker)) return false;
+      const fingerprint = await from.transferTreeDigest(entry.server_id);
+      if ((await from.state(entry.server_id)) !== "offline") return false;
       const capability = signTransferCapability(
         target.node,
         issuer,
         entry.server_id,
       );
-      if (!(await ledger.claim(id, digest(file)))) return false;
+      if (!(await ledger.claim(id, fingerprint))) return false;
       try {
         await from.transferTo(entry.server_id, target.node, capability);
         return true;
@@ -68,17 +67,16 @@ export function fixtureTransferService(
         return false;
       const workload = await profile(entry.server_id);
       if (!workload) return false;
-      const destination = await to.readFixtureFile(
-        entry.server_id,
-        workload.path,
-      );
-      const original = await from.readFixtureFile(
-        entry.server_id,
-        workload.path,
-      );
+      if ((await from.state(entry.server_id)) !== "offline") return false;
+      const [destination, original] = await Promise.all([
+        to.transferTreeDigest(entry.server_id),
+        from.transferTreeDigest(entry.server_id),
+      ]);
       if (
-        digest(destination) !== entry.fixture_digest ||
-        digest(original) !== entry.fixture_digest
+        destination !== entry.fixture_digest ||
+        original !== entry.fixture_digest ||
+        (await from.state(entry.server_id)) !== "offline" ||
+        (await to.state(entry.server_id)) !== "offline"
       )
         return false;
       return ledger.settle(id, {

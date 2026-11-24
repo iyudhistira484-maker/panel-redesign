@@ -743,6 +743,25 @@ async function main() {
     await pool.execute("UPDATE users SET is_admin=0 WHERE id=?", [owner]);
     assert.equal((await sourceApp.inject(finish)).statusCode, 403);
     await pool.execute("UPDATE users SET is_admin=1 WHERE id=?", [owner]);
+    const treeRoot = process.env.RELAY_TRANSFER_FIXTURE_ROOT;
+    assert.ok(treeRoot);
+    const unexpectedFile = `${treeRoot}/volumes/${fixture.uuid}/.unexpected.bin`;
+    await promisify(execFile)("sudo", ["-n", "touch", unexpectedFile], {
+      timeout: 5000,
+    });
+    try {
+      assert.equal((await sourceApp.inject(finish)).statusCode, 409);
+      assert.deepEqual(
+        await rows(pool, "SELECT node_id FROM servers WHERE id=?", [
+          fixture.uuid,
+        ]),
+        [{ node_id: sourceId }],
+      );
+    } finally {
+      await promisify(execFile)("sudo", ["-n", "rm", "--", unexpectedFile], {
+        timeout: 5000,
+      });
+    }
     assert.equal((await sourceApp.inject(finish)).statusCode, 200);
     assert.equal((await sourceApp.inject(finish)).statusCode, 409);
     assert.deepEqual(

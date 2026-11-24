@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 export const UUID_V4 =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 export const supportedWings = "1.13.5";
@@ -158,6 +159,91 @@ export class WingsClient {
     );
     const data = await this.#read(result, name === "murmur.ini" ? 65536 : 8192);
     return data.toString("utf8");
+  }
+  /** Bounded digest of all visible directories and regular-file bytes; fail closed on other entries. */
+  async transferTreeDigest(id: string) {
+    const root = this.#server(id);
+    const tree = createHash("sha256").update("relay-transfer-tree-v1\n");
+    let count = 0;
+    let remaining = 32 * 1024 * 1024;
+    const deadline = Date.now() + 30_000;
+    const validateTime = () => {
+      if (Date.now() > deadline) throw new WingsUnavailable("payload");
+    };
+    const walk = async (dir: string, depth: number) => {
+      validateTime();
+      if (depth > 12) throw new WingsUnavailable("payload");
+      const response = await this.#send(
+        `${root}/files/list-directory?directory=${encodeURIComponent(dir || "/")}`,
+        200,
+      );
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(
+          (await this.#read(response, 262144)).toString("utf8"),
+        );
+      } catch {
+        throw new WingsUnavailable("payload");
+      }
+      if (!Array.isArray(parsed) || parsed.length > 256 - count)
+        throw new WingsUnavailable("payload");
+      count += parsed.length;
+      const entries = new Map<string, { directory: boolean; size: number }>();
+      for (const row of parsed) {
+        if (
+          !row ||
+          typeof row.name !== "string" ||
+          !row.name ||
+          row.name === "." ||
+          row.name === ".." ||
+          /[\\/\ufffd]/.test(row.name) ||
+          [...row.name].some((ch) => ch.charCodeAt(0) < 32) ||
+          Buffer.byteLength(row.name) > 255 ||
+          entries.has(row.name) ||
+          row.symlink !== false ||
+          typeof row.directory !== "boolean" ||
+          row.file !== !row.directory ||
+          typeof row.mode !== "string" ||
+          (row.directory
+            ? !row.mode.startsWith("d")
+            : !row.mode.startsWith("-")) ||
+          !Number.isSafeInteger(row.size) ||
+          row.size < 0
+        )
+          throw new WingsUnavailable("payload");
+        entries.set(row.name, { directory: row.directory, size: row.size });
+      }
+      for (const name of [...entries.keys()].sort()) {
+        validateTime();
+        const entry = entries.get(name);
+        if (!entry) throw new WingsUnavailable("payload");
+        const path = dir ? `${dir}/${name}` : name;
+        if (entry.directory) {
+          tree.update(`${JSON.stringify(["d", path])}\n`);
+          await walk(path, depth + 1);
+        } else {
+          if (entry.size > remaining) throw new WingsUnavailable("payload");
+          const result = await this.#send(
+            `${root}/files/contents?file=${encodeURIComponent(path)}&download=1`,
+            200,
+          );
+          const data = await this.#read(result, entry.size);
+          if (data.length !== entry.size) throw new WingsUnavailable("payload");
+          remaining -= data.length;
+          tree.update(
+            `${JSON.stringify([
+              "f",
+              path,
+              entry.size,
+              createHash("sha256").update(data).digest("hex"),
+            ])}\n`,
+          );
+        }
+      }
+    };
+    await walk("", 0);
+    validateTime();
+    return tree.digest("hex");
   }
   async reinstall(id: string) {
     const result = await this.#send(
