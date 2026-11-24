@@ -1014,3 +1014,52 @@ dialog h2 {
 .pagination output {
   font: 12px var(--mono);
 }
+
+/* One entrance sequence on the sign-in schematic, not a live status signal. */
+.auth-sequence {
+  display: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .auth-sequence {
+    display: inline;
+    color: var(--muted);
+  }
+  .auth-sequence path {
+    stroke-dasharray: 1;
+    animation: auth-trace 180ms ease-out both;
+  }
+  .auth-sequence path:nth-child(2) {
+    animation-delay: 180ms;
+  }
+  .auth-sequence path:nth-child(3) {
+    animation-delay: 360ms;
+  }
+  .auth-sequence rect {
+    animation: auth-checkpoint 180ms ease-out 140ms both;
+  }
+  .auth-sequence rect:last-child {
+    animation-delay: 320ms;
+  }
+}
+@keyframes auth-trace {
+  0% {
+    stroke-dashoffset: 1;
+    opacity: 0;
+  }
+  55% {
+    opacity: 0.7;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+@keyframes auth-checkpoint {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}

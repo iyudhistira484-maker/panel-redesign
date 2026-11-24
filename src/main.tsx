@@ -416,7 +416,7 @@ function App() {
         </div>
         <div className="auth-art decorated">
           <DotGrid />
-          <Geometry seed={2} />
+          <Geometry seed={2} sequence />
         </div>
       </section>
     ) : page === "errorView" ? (

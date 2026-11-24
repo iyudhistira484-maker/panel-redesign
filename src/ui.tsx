@@ -66,7 +66,13 @@ export function Modal({
     </dialog>
   );
 }
-export function Geometry({ seed }: { seed: number }) {
+export function Geometry({
+  seed,
+  sequence = false,
+}: {
+  seed: number;
+  sequence?: boolean;
+}) {
   const x = 72 + (seed % 4) * 16;
   return (
     <svg
@@ -85,6 +91,15 @@ export function Geometry({ seed }: { seed: number }) {
       <rect x="284" y="108" width="8" height="8" />
       <circle cx="240" cy="144" r="3" />
       <path d="M112 136v16m16-12v8m16-8v8m16-8v8m16-8v8" />
+      {sequence && (
+        <g className="auth-sequence">
+          <path pathLength="1" d={`M0 144H${x}V48`} />
+          <path pathLength="1" d={`M${x} 48H288V112`} />
+          <path pathLength="1" d="M288 112H416" />
+          <rect x={x - 4} y="44" width="8" height="8" />
+          <rect x="284" y="108" width="8" height="8" />
+        </g>
+      )}
     </svg>
   );
 }
