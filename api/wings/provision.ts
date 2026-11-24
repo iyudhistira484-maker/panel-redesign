@@ -1,3 +1,4 @@
+import { WingsSocket, SocketError } from "./socket";
 import { timingSafeEqual } from "node:crypto";
 import type { Pool } from "mysql2/promise";
 import { rows, transaction, type Executor } from "../db";
@@ -59,10 +60,12 @@ export function createProvisioner(
   rawNode: WingsNode,
   key: Buffer,
   pepper: Buffer,
+  origin: string,
 ) {
   const node = validateNode(rawNode);
   const crypt = cryptoContext(key, pepper, "node-token");
   const client = new WingsClient(node);
+  const socket = new WingsSocket(node, origin);
   const fromNode = (s: ServerRow) => {
     if (s.origin !== node.origin || s.tokenId !== node.tokenId) return false;
     const saved = crypt.open(s.cipher, s.nodeId),
@@ -204,6 +207,21 @@ export function createProvisioner(
   }
   return {
     provider,
+    async stats(id: string, actor: Actor) {
+      const server = await authorized(pool, id, actor);
+      if (server.phase !== "installed")
+        throw new ProvisionError(409, "server_not_installed");
+      try {
+        return await socket.stats(id, actor.id);
+      } catch (error) {
+        if (error instanceof SocketError)
+          throw new ProvisionError(
+            error.reason === "capacity" ? 429 : 502,
+            "wings_stats_unavailable",
+          );
+        throw error;
+      }
+    },
     async runtime(id: string, actor: Actor) {
       const server = await authorized(pool, id, actor);
       if (server.phase !== "installed")

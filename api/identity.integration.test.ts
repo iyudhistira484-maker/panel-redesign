@@ -289,6 +289,8 @@ test(
         await postAdmin(`servers/${approvedId}/reinstall`, { confirm: true }),
         409,
       );
+      ok(await getAdmin(`servers/${approvedId}/stats`, a), 403);
+      ok(await getAdmin(`servers/${approvedId}/stats`, operator), 409);
       const callback = `/api/remote/servers/${approvedId}/install`;
       ok(
         await app.inject({

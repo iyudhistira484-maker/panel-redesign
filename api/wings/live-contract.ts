@@ -1,3 +1,4 @@
+import { WingsSocket } from "./socket";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createApp } from "../app";
@@ -156,6 +157,24 @@ async function main() {
     });
     assert.equal(repeated.statusCode, 204);
     assert.equal(await phase(), "installed");
+    const sample = await admin("GET", `servers/${uuid}/stats`);
+    assert.equal(sample.statusCode, 200, sample.body);
+    assert.deepEqual(
+      Object.keys(sample.json()).sort(),
+      [
+        "cpuAbsolute",
+        "diskBytes",
+        "memoryBytes",
+        "memoryLimitBytes",
+        "rxBytes",
+        "txBytes",
+        "uptimeMs",
+      ].sort(),
+    );
+    await assert.rejects(
+      new WingsSocket(node, "https://rejected.example.test").stats(uuid, id),
+      { reason: "transport" },
+    );
     const runtime = async () => {
       const res = await admin("GET", `servers/${uuid}/runtime`);
       assert.equal(res.statusCode, 200);

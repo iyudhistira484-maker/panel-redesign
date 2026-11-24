@@ -49,6 +49,8 @@ docker:
   network:
     name: $network
     network_mode: $network
+allowed_origins:
+  - https://relay.example.test
 allowed_mounts: []
 YAML
 chmod 0600 "$work/config/config.yml"

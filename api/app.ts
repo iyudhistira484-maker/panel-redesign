@@ -109,7 +109,7 @@ export async function createApp({
     );
   const provisioner =
     enableDisposableProvisioning && wingsTestNode && catalogNodeKey
-      ? createProvisioner(pool, wingsTestNode, catalogNodeKey, pepper)
+      ? createProvisioner(pool, wingsTestNode, catalogNodeKey, pepper, origin)
       : undefined;
   const crypt = cryptoContext(key, pepper);
   const dummyHash = await passwordHash(token());

@@ -323,6 +323,14 @@ export async function registerCatalog(
       return actor;
     };
     app.get<{ Params: { id: string } }>(
+      "/servers/:id/stats",
+      {
+        schema: byId,
+        config: { rateLimit: { max: 15, timeWindow: "1 minute" } },
+      },
+      (req) => provisioner.stats(req.params.id, admin(req)),
+    );
+    app.get<{ Params: { id: string } }>(
       "/servers/:id/runtime",
       {
         schema: byId,
