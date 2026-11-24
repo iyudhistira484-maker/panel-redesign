@@ -71,6 +71,7 @@ DOCKERFILE
 if [[ "$harness" == api/wings/live-contract.ts ]]; then
   cat <<'DOCKERFILE' | docker build --tag relay-wings-contract-http:ci -
 FROM alpine:3.22.2
+RUN apk add --no-cache busybox-extras
 ENTRYPOINT ["/bin/sh", "-c", "exec /bin/sh -c \"$STARTUP\""]
 DOCKERFILE
 fi

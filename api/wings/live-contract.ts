@@ -327,18 +327,32 @@ async function main() {
         action: "start",
       });
       assert.equal(start.statusCode, 202, start.body);
-      await until(`HTTP egg ${index + 1} response`, async () => {
-        try {
-          const { stdout } = await docker(
-            "docker",
-            ["exec", serverId, "wget", "-qO-", `http://127.0.0.1:${port}/`],
-            { timeout: 2000 },
-          );
-          return stdout.trim() === "RELAY_REVIEWED_EGG_HTTP";
-        } catch {
-          return false;
-        }
-      });
+      try {
+        await until(`HTTP egg ${index + 1} response`, async () => {
+          try {
+            const { stdout } = await docker(
+              "docker",
+              ["exec", serverId, "wget", "-qO-", `http://127.0.0.1:${port}/`],
+              { timeout: 2000 },
+            );
+            return stdout.trim() === "RELAY_REVIEWED_EGG_HTTP";
+          } catch {
+            return false;
+          }
+        });
+      } catch (error) {
+        const output = await docker(
+          "docker",
+          ["logs", "--tail", "4", serverId],
+          { timeout: 4000 },
+        ).catch(() => undefined);
+        const summary = `${output?.stdout ?? ""} ${output?.stderr ?? ""}`
+          .replace(/[^a-z0-9 ./_:-]/gi, " ")
+          .slice(0, 240);
+        if (summary.trim())
+          console.log(`::warning::Reviewed HTTP fixture output: ${summary}`);
+        throw error;
+      }
       assert.equal(
         (
           await admin("POST", `servers/${serverId}/power`, {
