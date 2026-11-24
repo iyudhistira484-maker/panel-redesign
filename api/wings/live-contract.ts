@@ -559,6 +559,22 @@ async function main() {
         },
         160,
       );
+      // The upstream installer does not fail on all HTTP errors. Verify it produced a real executable.
+      const data = process.env.RELAY_WINGS_CONTRACT_DATA;
+      assert.ok(data);
+      const candidate = `${data}/${gitServer}/gitea`;
+      const imageHeader = await docker(
+        "sudo",
+        ["-n", "od", "-An", "-tx1", "-N4", candidate],
+        { timeout: 3000 },
+      )
+        .then((result) => result.stdout.trim().replace(/\s+/g, " "))
+        .catch(() => "missing");
+      assert.equal(
+        imageHeader,
+        "7f 45 4c 46",
+        "Upstream Gitea installer did not produce an ELF executable",
+      );
       assert.equal(
         (
           await admin("POST", `servers/${gitServer}/power`, {
@@ -582,6 +598,19 @@ async function main() {
             timeout: 3000,
           },
         ).catch(() => ({ stdout: "", stderr: "" }));
+        const runtime = await docker(
+          "docker",
+          [
+            "inspect",
+            "-f",
+            "{{.State.Status}}/{{.State.ExitCode}}/{{.State.OOMKilled}}",
+            gitServer,
+          ],
+          { timeout: 3000 },
+        )
+          .then((result) => result.stdout.trim())
+          .catch(() => "not-created");
+        console.log(`::warning::Gitea container state: ${runtime}`);
         const text = log.stdout + log.stderr;
         const hints = [
           "not found",

@@ -127,7 +127,7 @@ if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then
     exit 1
   fi
 fi
-RELAY_ADOPTION_FIXTURE_CONFIG="$work/config/config.yml" RELAY_ADOPTION_SECOND_CONFIG="$work/config2/config.yml" ./node_modules/.bin/tsx "$harness" &
+RELAY_WINGS_CONTRACT_DATA="$work/data/volumes" RELAY_ADOPTION_FIXTURE_CONFIG="$work/config/config.yml" RELAY_ADOPTION_SECOND_CONFIG="$work/config2/config.yml" ./node_modules/.bin/tsx "$harness" &
 harness_pid=$!
 docker run --detach --name "$name" --network host \
   -v /var/run/docker.sock:/var/run/docker.sock \

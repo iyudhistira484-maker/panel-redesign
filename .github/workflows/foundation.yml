@@ -94,6 +94,7 @@ jobs:
       - run: bash scripts/wings-contract.sh
         env:
           RELAY_BOOTSTRAP_SCENARIO: ${{ matrix.scenario }}
+          RELAY_EXPERIMENTAL_GITEA: ${{ vars.RELAY_EXPERIMENTAL_GITEA }}
           RELAY_STAGING_DATABASE_URL: mysql://relay:disposable-ci@127.0.0.1:${{ job.services.mysql.ports[3306] }}/relay_test
   wings-transfer:
     if: github.event_name == 'push'
