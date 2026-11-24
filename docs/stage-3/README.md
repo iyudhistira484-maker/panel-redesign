@@ -141,3 +141,9 @@ Sejak migrasi `006_transfer_dispatch`, harness dua daemon juga memakai MySQL 8.4
 Urutan penyelesaian yang disarankan: selesaikan verifikasi dan rekonsiliasi transfer fixture termasuk restart proses sungguhan; uji adopsi dari instalasi Panel lama yang dibuat khusus di staging; lalu uji eksekusi egg impor yang representatif. Adopsi pertama tidak memerlukan data produksi. Untuk rehearsal dengan salinan produksi pada tahap yang disetujui, konfirmasi backup dan uji restore lebih dahulu; jangan kirim kredensial atau `APP_KEY` lewat chat.
 
 [CI 45365334753](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45365334753) lulus empat job, termasuk tes koneksi baru di MySQL 8.4 dan kontrak dua daemon Wings.
+
+### Melanjutkan transfer setelah listener callback ditutup
+
+Harness menghentikan listener callback setelah sukses tujuan tercatat, sebelum katalog dipindah. Proses Node baru membuka koneksi MySQL terpisah, membaca klaim dan laporan yang persisten, memastikan klaim tidak bisa digunakan lagi, memeriksa status offline tujuan serta checksum sumber/tujuan lewat dua daemon Wings, lalu menyelesaikan perubahan penempatan. Proses baru mendapat ID transfer dan checksum fixture acuan dari harness; ini belum discovery otomatis oleh worker. Skenario ini menguji pemulihan **setelah** callback tersimpan, bukan proses mati selama pengiriman arsip atau saat callback belum mencapai Relay.
+
+[CI 45366407844](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45366407844) lulus empat job, termasuk pemulihan pada proses terpisah dengan MySQL 8.4 dan dua daemon Wings v1.13.5. Jalankan kontrak melalui job `wings-transfer`; jangan menjalankan skrip pada host bersama.
