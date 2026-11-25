@@ -377,8 +377,43 @@ export function createProvisioner(
   }
   const uploadAllowed = (id: string, actor: Actor) =>
     ownerFileScope(id, actor, "upload");
+  async function dispatchInstallation(id: string) {
+    let next: Phase = "installing";
+    try {
+      await client.create(id);
+    } catch {
+      next = "uncertain";
+    }
+    // A callback can win the race before create returns. Never overwrite a terminal result.
+    await pool.execute(
+      "UPDATE wings_provisions SET phase=? WHERE server_id=? AND phase='dispatching'",
+      [next, id],
+    );
+    return (await load(pool, id))?.phase ?? next;
+  }
   return {
     provider,
+    applicationCreate: {
+      async claim(db: Executor, id: string, actorId: string) {
+        const server = await load(db, id, true);
+        if (
+          !server ||
+          !fromNode(server) ||
+          !server.document.equals(Buffer.from(disposableEgg)) ||
+          server.port < 1024
+        )
+          throw new ProvisionError(422, "fixture_placement_not_supported");
+        await db.execute(
+          "INSERT INTO wings_provisions (server_id,phase) VALUES (?,'dispatching')",
+          [id],
+        );
+        await db.execute(
+          "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'wings.application_provision_requested',?)",
+          [actorId, id],
+        );
+      },
+      dispatch: dispatchInstallation,
+    },
     async files(
       id: string,
       actor: Actor,
@@ -903,18 +938,7 @@ export function createProvisioner(
           [actor.id, id],
         );
       });
-      let next: Phase = "installing";
-      try {
-        await client.create(id);
-      } catch {
-        next = "uncertain";
-      }
-      // A callback can win the race before create returns. Never overwrite a terminal result.
-      await pool.execute(
-        "UPDATE wings_provisions SET phase=? WHERE server_id=? AND phase='dispatching'",
-        [next, id],
-      );
-      return (await load(pool, id))?.phase ?? next;
+      return dispatchInstallation(id);
     },
   };
 }

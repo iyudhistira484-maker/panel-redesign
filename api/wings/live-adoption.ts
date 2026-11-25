@@ -175,6 +175,64 @@ async function main() {
     createHash("sha256")
       .update(await clientFor(id).readFixtureFile(id, "relay-start.sh"))
       .digest("hex");
+  const appServerPath = "/api/application/servers";
+  const createBody = (
+    user: number,
+    eggId: number,
+    allocationId: number,
+    external_id: string,
+  ) => ({
+    name: "Application disposable shell",
+    user,
+    egg: eggId,
+    docker_image: "~relay-wings-contract-workload:ci",
+    startup: "sh /home/container/relay-start.sh",
+    environment: {},
+    limits: { memory: 128, swap: 0, disk: 64, io: 500, cpu: 50 },
+    feature_limits: { databases: 0, allocations: 0, backups: 0 },
+    allocation: { default: allocationId },
+    start_on_completion: false,
+    external_id,
+  });
+  type AppFixture = {
+    object: string;
+    attributes: {
+      id: number;
+      uuid: string;
+      node: number;
+      allocation: number;
+      status: string | null;
+      external_id: string;
+    };
+  };
+  const appRequest = (
+    base: string,
+    path: string,
+    key: string,
+    body?: unknown,
+    method = body === undefined ? "GET" : "POST",
+  ) =>
+    fetch(`${base}${path}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${key}`,
+        accept: "application/json",
+        ...(body === undefined ? {} : { "content-type": "application/json" }),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  const fixtureScript = (command: string) =>
+    docker(
+      "docker",
+      [
+        "exec",
+        "relay-adoption-panel",
+        "php",
+        "/tmp/relay-fixture.php",
+        command,
+      ],
+      { timeout: 10000 },
+    );
   try {
     await migrate(pool, "up");
     if (!actual) await legacy.listen({ host: "127.0.0.1", port: 13202 });
@@ -238,6 +296,55 @@ async function main() {
           port: 25611,
         },
       ]);
+    }
+    if (actual) {
+      const base = "http://127.0.0.1:13202";
+      const seed = JSON.parse(
+        (await fixtureScript("application-create-key")).stdout,
+      ) as {
+        key: string;
+        user: number;
+        egg: number;
+        node: number;
+        allocation: number;
+      };
+      const response = await appRequest(
+        base,
+        appServerPath,
+        seed.key,
+        createBody(
+          seed.user,
+          seed.egg,
+          seed.allocation,
+          "legacy-created-shell",
+        ),
+      );
+      assert.equal(
+        response.status,
+        201,
+        "Legacy Application create must return 201",
+      );
+      const made = (await response.json()) as AppFixture;
+      assert.equal(made.object, "server");
+      assert.equal(made.attributes.node, seed.node);
+      assert.equal(made.attributes.allocation, seed.allocation);
+      const detail = `${appServerPath}/${made.attributes.id}`;
+      await until("legacy Application install and read-back", async () => {
+        const status = await appRequest(base, detail, seed.key);
+        const payload = (await status.json()) as AppFixture;
+        return (
+          status.ok &&
+          payload.attributes.status === null &&
+          (
+            await client.readFixtureFile(made.attributes.uuid, "relay-start.sh")
+          ).includes("RELAY_CONTRACT_READY")
+        );
+      });
+      assert.equal(
+        (await appRequest(base, detail, seed.key, undefined, "DELETE")).status,
+        204,
+      );
+      await fixtureScript("application-create-cleanup");
     }
     for (const id of workloadIds) await clientFor(id).power(id, "start");
     await until("source running", async () =>
@@ -619,6 +726,7 @@ async function main() {
       [],
     );
     let verifyPower: (() => Promise<void>) | undefined;
+    let verifyCreate: (() => Promise<void>) | undefined;
     if (actual) {
       const headers = {
         origin,
@@ -1050,6 +1158,183 @@ async function main() {
       assert.ok(second);
       assert.equal((await activity(second, collaborator)).statusCode, 404);
       assert.equal((await activity(uuid)).statusCode, 401);
+      verifyCreate = async () => {
+        // Restore the Relay remote for this separate create slice, after the old-panel rollback proof.
+        const legacyRemote = await readFile(config, "utf8");
+        await writeFile(
+          config,
+          legacyRemote.replace(
+            "remote: http://127.0.0.1:13202",
+            "remote: http://127.0.0.1:13200",
+          ),
+        );
+        await restart();
+        const base = "http://127.0.0.1:13200";
+        const management = "/api/v1/account/application-keys";
+        await pool.execute(
+          "UPDATE users SET is_admin=TRUE WHERE email='outsider@example.test'",
+        );
+        const newKey = async (createServers: boolean) => {
+          const result = await relay.inject({
+            method: "POST",
+            remoteAddress: "127.0.0.12",
+            url: management,
+            headers: { ...headers, ...outsider },
+            payload: {
+              label: "Disposable create contract",
+              createServers,
+              readServers: !createServers,
+            },
+          });
+          assert.equal(result.statusCode, 201);
+          return result.json<{ token: string }>().token;
+        };
+        try {
+          const [writer, reader] = await Promise.all([
+            newKey(true),
+            newKey(false),
+          ]);
+          const [nodeRow] = await rows<{ id: number }>(
+            pool,
+            "SELECT application_id AS id FROM nodes WHERE id=?",
+            [nodeId],
+          );
+          const [ownerRow] = await rows<{ id: number }>(
+            pool,
+            "SELECT application_id AS id FROM users WHERE id=?",
+            [owner],
+          );
+          const [eggRow] = await rows<{ id: number }>(
+            pool,
+            "SELECT application_id AS id FROM eggs WHERE id=?",
+            [egg],
+          );
+          const reserve = async (port: number) => {
+            const id = randomUUID();
+            await pool.execute(
+              "INSERT INTO allocations (id,node_id,ip,port) VALUES (?,?,'127.0.0.1',?)",
+              [id, nodeId, port],
+            );
+            const [row] = await rows<{ id: number }>(
+              pool,
+              "SELECT application_id AS id FROM allocations WHERE id=?",
+              [id],
+            );
+            return row.id;
+          };
+          const [available, outage] = await Promise.all([
+            reserve(25618),
+            reserve(25619),
+          ]);
+          const approved = createBody(
+            ownerRow.id,
+            eggRow.id,
+            available,
+            "relay-created-shell",
+          );
+          const post = (key: string, input: unknown) =>
+            appRequest(base, appServerPath, key, input);
+          assert.equal((await post(reader, approved)).status, 403);
+          assert.equal((await post(relayKey, approved)).status, 403); // global origin gate rejects Client keys on this route
+          assert.equal(
+            (await post(writer, { ...approved, startup: "unreviewed" })).status,
+            422,
+          );
+          assert.equal(
+            (await appRequest(base, appServerPath, writer)).status,
+            403,
+          );
+          const competing = await Promise.all([
+            post(writer, approved),
+            post(writer, {
+              ...approved,
+              external_id: "relay-conflicting-shell",
+            }),
+          ]);
+          assert.deepEqual(
+            competing.map((response) => response.status).sort(),
+            [201, 409],
+          );
+          const made = (await competing
+            .find((response) => response.status === 201)
+            ?.json()) as AppFixture;
+          assert.equal(made.object, "server");
+          assert.equal(made.attributes.node, nodeRow.id);
+          assert.equal(made.attributes.allocation, available);
+          assert.ok(
+            made.attributes.status === null ||
+              made.attributes.status === "installing",
+          );
+          const detail = async (id: number) =>
+            appRequest(base, `${appServerPath}/${id}`, reader);
+          await until("Relay Application install and read-back", async () => {
+            const response = await detail(made.attributes.id);
+            const payload = (await response.json()) as AppFixture;
+            return (
+              response.ok &&
+              payload.attributes.status === null &&
+              (
+                await client.readFixtureFile(
+                  made.attributes.uuid,
+                  "relay-start.sh",
+                )
+              ).includes("RELAY_CONTRACT_READY")
+            );
+          });
+          assert.equal(await client.state(made.attributes.uuid), "offline");
+          const list = await appRequest(
+            base,
+            `${appServerPath}?${new URLSearchParams({ "filter[uuid]": made.attributes.uuid })}`,
+            reader,
+          );
+          assert.equal(list.status, 200);
+          const inventory = (await list.json()) as { data: AppFixture[] };
+          assert.deepEqual(
+            inventory.data.map((row) => row.attributes.uuid),
+            [made.attributes.uuid],
+          );
+          const unavailable = createBody(
+            ownerRow.id,
+            eggRow.id,
+            outage,
+            "relay-uncertain-shell",
+          );
+          await docker("docker", ["pause", "relay-wings-contract"], {
+            timeout: 5000,
+          });
+          try {
+            const failed = await post(writer, unavailable);
+            assert.equal(failed.status, 502);
+            const report = (await failed.json()) as {
+              meta: { server: AppFixture["attributes"] };
+            };
+            assert.equal(report.meta.server.status, "uncertain");
+            const reserved = await detail(report.meta.server.id);
+            assert.equal(
+              ((await reserved.json()) as AppFixture).attributes.status,
+              "uncertain",
+            );
+            assert.equal((await post(writer, unavailable)).status, 409);
+            const attempts = await rows(
+              pool,
+              "SELECT id FROM audit_log WHERE event='wings.application_provision_requested' AND subject_id=?",
+              [report.meta.server.uuid],
+            );
+            assert.equal(attempts.length, 1);
+          } finally {
+            await docker("docker", ["unpause", "relay-wings-contract"], {
+              timeout: 5000,
+            });
+          }
+          await client.remove(made.attributes.uuid);
+        } finally {
+          await pool.execute(
+            "UPDATE users SET is_admin=FALSE WHERE email='outsider@example.test'",
+          );
+          await writeFile(config, legacyRemote);
+          await restart();
+        }
+      };
       verifyPower = async () => {
         const power = (
           id: string,
@@ -2790,7 +3075,7 @@ async function main() {
                 headers: { ...headers, ...auth(application.token) },
               })
             ).status,
-            404,
+            403,
           );
           await pool.execute(
             "UPDATE users SET is_admin=FALSE WHERE email='outsider@example.test'",
@@ -2895,6 +3180,7 @@ async function main() {
     assert.deepEqual(await Promise.all(workloadIds.map(inspect)), before);
     assert.deepEqual(await Promise.all(workloadIds.map(checksum)), hash);
     await verifyPower?.();
+    await verifyCreate?.();
     if (!actual) assert.equal(installed, 1);
     for (const id of workloadIds) {
       await clientFor(id).power(id, "stop");

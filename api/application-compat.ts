@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { lockFreeAllocation } from "./catalog/transfer";
+import { ProvisionError } from "./wings/provision";
 import { isExternalServerId } from "./external-server-id";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { Pool } from "mysql2/promise";
@@ -48,20 +51,28 @@ export function registerApplicationInventory(
   pool: Pool,
   origin: string,
   digest: (key: string) => Buffer,
+  create?: {
+    claim(db: Executor, id: string, actorId: string): Promise<void>;
+    dispatch(id: string): Promise<string>;
+  },
 ) {
   async function authorize(
     db: Executor,
     auth: string,
     reply: FastifyReply,
-    scope: "read_servers" | "read_nodes" | "read_allocations" = "read_servers",
+    scope:
+      | "read_servers"
+      | "read_nodes"
+      | "read_allocations"
+      | "create_servers" = "read_servers",
   ) {
     const token = /^rlya_[A-Za-z0-9_-]{43}$/.exec(
       auth.startsWith("Bearer ") ? auth.slice(7) : "",
     )?.[0];
     const [key] = token
-      ? await rows<Record<typeof scope, number>>(
+      ? await rows<Record<typeof scope, number> & { user_id: string }>(
           db,
-          `SELECT k.read_servers,k.read_nodes,k.read_allocations FROM application_keys k JOIN users u ON u.id=k.user_id WHERE k.digest=? AND k.expires_at>UTC_TIMESTAMP(3) AND u.is_admin=TRUE`,
+          `SELECT k.user_id,k.read_servers,k.read_nodes,k.read_allocations,k.create_servers FROM application_keys k JOIN users u ON u.id=k.user_id WHERE k.digest=? AND k.expires_at>UTC_TIMESTAMP(3) AND u.is_admin=TRUE${scope === "create_servers" ? " FOR UPDATE" : ""}`,
           [digest(token)],
         )
       : [];
@@ -73,10 +84,158 @@ export function registerApplicationInventory(
       deny(reply, 403, "AuthorizationException", "Inventory access denied.");
       return false;
     }
-    return true;
+    return key.user_id;
   }
   const config = { rateLimit: { max: 40, timeWindow: "1 minute" } };
   const path = "/api/application/servers";
+  const profile = { memory: 128, swap: 0, disk: 64, io: 500, cpu: 50 };
+  const featureLimits = { databases: 0, allocations: 0, backups: 0 };
+  const record = (value: unknown): value is Record<string, unknown> =>
+    !!value && typeof value === "object" && !Array.isArray(value);
+  const agrees = (value: unknown, expected: Record<string, unknown>) =>
+    record(value) &&
+    Object.keys(value).length === Object.keys(expected).length &&
+    Object.entries(expected).every(([key, v]) => value[key] === v);
+  const validId = (value: unknown): value is number =>
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value > 0 &&
+    value <= 4_294_967_295;
+  app.post(
+    path,
+    {
+      bodyLimit: 4096,
+      config: { rateLimit: { max: 12, timeWindow: "1 minute" } },
+    },
+    async (req, reply) => {
+      try {
+        const id = await transaction(pool, async (db) => {
+          const actor = await authorize(
+            db,
+            req.headers.authorization ?? "",
+            reply,
+            "create_servers",
+          );
+          if (!actor) return null;
+          if (!create)
+            throw new ProvisionError(503, "staging_provisioning_unavailable");
+          const input = req.body;
+          if (
+            !record(input) ||
+            Object.keys(input).some(
+              (field) =>
+                ![
+                  "name",
+                  "user",
+                  "egg",
+                  "docker_image",
+                  "startup",
+                  "environment",
+                  "limits",
+                  "feature_limits",
+                  "allocation",
+                  "external_id",
+                  "start_on_completion",
+                ].includes(field),
+            ) ||
+            typeof input.name !== "string" ||
+            !input.name.trim() ||
+            [...input.name].length > 100 ||
+            /\p{Cc}/u.test(input.name) ||
+            !validId(input.user) ||
+            !validId(input.egg) ||
+            !record(input.allocation) ||
+            Object.keys(input.allocation).length !== 1 ||
+            !validId(input.allocation.default) ||
+            input.docker_image !== "~relay-wings-contract-workload:ci" ||
+            input.startup !== "sh /home/container/relay-start.sh" ||
+            !agrees(input.environment, {}) ||
+            !agrees(input.limits, profile) ||
+            !agrees(input.feature_limits, featureLimits) ||
+            (input.start_on_completion !== undefined &&
+              input.start_on_completion !== false) ||
+            (input.external_id !== undefined &&
+              input.external_id !== null &&
+              !isExternalServerId(input.external_id))
+          )
+            throw new ProvisionError(422, "invalid_fixture_profile");
+          const [owner] = await rows<{ id: string }>(
+            db,
+            "SELECT id FROM users WHERE application_id=? AND email LIKE '%@example.test' AND is_admin=FALSE",
+            [input.user],
+          );
+          const [egg] = await rows<{ id: string }>(
+            db,
+            "SELECT id FROM eggs WHERE application_id=?",
+            [input.egg],
+          );
+          const [allocation] = await rows<{ id: string; node_id: string }>(
+            db,
+            "SELECT id,node_id FROM allocations WHERE application_id=? AND ip='127.0.0.1'",
+            [input.allocation.default],
+          );
+          if (!owner || !egg || !allocation)
+            throw new ProvisionError(422, "fixture_placement_not_supported");
+          if (
+            !(await lockFreeAllocation(db, allocation.node_id, allocation.id))
+          )
+            throw new ProvisionError(409, "allocation_unavailable");
+          const id = randomUUID();
+          await db.execute(
+            "INSERT INTO servers (id,name,node_id,owner_id,egg_id,allocation_id,external_id) VALUES (?,?,?,?,?,?,?)",
+            [
+              id,
+              input.name,
+              allocation.node_id,
+              owner.id,
+              egg.id,
+              allocation.id,
+              input.external_id ?? null,
+            ],
+          );
+          await create.claim(db, id, actor);
+          return id;
+        });
+        if (!id || !create) return reply;
+        const phase = await create.dispatch(id);
+        const [result] = await rows<Inventory>(
+          pool,
+          `${projection} WHERE s.id=?`,
+          [id],
+        );
+        if (phase === "uncertain" || phase === "install_failed")
+          return reply.code(502).send({
+            errors: [
+              {
+                code: "DaemonConnectionException",
+                status: "502",
+                detail: "Server reserved; installation not confirmed.",
+              },
+            ],
+            meta: { server: item(result).attributes },
+          });
+        return reply.code(201).send(item(result));
+      } catch (error) {
+        if ((error as { code?: string }).code === "ER_DUP_ENTRY")
+          return deny(
+            reply,
+            409,
+            "ConflictHttpException",
+            "Allocation or external ID already in use.",
+          );
+        if (error instanceof ProvisionError)
+          return deny(
+            reply,
+            error.status,
+            error.status === 409
+              ? "ConflictHttpException"
+              : "ProvisionException",
+            error.code,
+          );
+        throw error;
+      }
+    },
+  );
   app.get<{ Querystring: Record<string, unknown> }>(
     path,
     { config },

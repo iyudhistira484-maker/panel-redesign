@@ -15,20 +15,33 @@ if (($argv[1] ?? '') === 'status') {
     echo json_encode($server, JSON_THROW_ON_ERROR);
     exit;
 }
-if (in_array(($argv[1] ?? ''), ['client-key', 'application-key'], true)) {
-    $application = $argv[1] === 'application-key';
+if (($argv[1] ?? '') === 'application-create-cleanup') {
+    $node = DB::table('nodes')->where('uuid', '3ab63670-f83b-4a2c-adeb-5b2852859319')->value('id');
+    DB::table('allocations')->where('node_id', $node)->where('port', 25618)->whereNull('server_id')->delete();
+    exit;
+}
+if (in_array(($argv[1] ?? ''), ['client-key', 'application-key', 'application-create-key'], true)) {
+    $create = $argv[1] === 'application-create-key';
+    $application = $argv[1] !== 'client-key';
     $account = DB::table('users')->where('email', $application ? 'outsider@example.test' : 'adoption@example.test')->first(['id']);
     if (!$account) { throw new RuntimeException('Fixture account missing'); }
     $service = $app->make(\Pterodactyl\Services\Api\KeyCreationService::class);
     if ($application) {
         DB::table('users')->where('id', $account->id)->update(['root_admin' => true]);
-        $node = DB::table('nodes')->where('uuid', '33113cc5-78fb-4cd0-881b-326c3888b38b')->value('id');
-        DB::table('allocations')->updateOrInsert(['node_id' => $node, 'ip' => '127.0.0.1', 'port' => 25617], ['server_id' => null]);
+        if (!$create) {
+            $node = DB::table('nodes')->where('uuid', '33113cc5-78fb-4cd0-881b-326c3888b38b')->value('id');
+            DB::table('allocations')->updateOrInsert(['node_id' => $node, 'ip' => '127.0.0.1', 'port' => 25617], ['server_id' => null]);
+        }
     }
     $key = $service->setKeyType($application ? \Pterodactyl\Models\ApiKey::TYPE_APPLICATION : \Pterodactyl\Models\ApiKey::TYPE_ACCOUNT)->handle([
         'user_id' => $account->id, 'memo' => 'Disposable Relay comparison', 'allowed_ips' => [],
-    ], $application ? ['r_servers' => 1, 'r_nodes' => 1, 'r_allocations' => 1] : []);
-    echo $key->identifier . $app->make('encrypter')->decrypt($key->token);
+    ], $application ? ['r_servers' => $create ? 3 : 1, 'r_nodes' => 1, 'r_allocations' => 1] : []);
+    $token = $key->identifier . $app->make('encrypter')->decrypt($key->token);
+    if ($create) {
+        $source = DB::table('servers')->where('uuid', $uuid)->first();
+        $allocation = DB::table('allocations')->insertGetId(['node_id' => $source->node_id, 'ip' => '127.0.0.1', 'port' => 25618]);
+        echo json_encode(['key' => $token, 'user' => $source->owner_id, 'egg' => $source->egg_id, 'node' => $source->node_id, 'allocation' => $allocation], JSON_THROW_ON_ERROR);
+    } else { echo $token; }
     exit;
 }
 DB::transaction(function () use ($uuid, $app) {

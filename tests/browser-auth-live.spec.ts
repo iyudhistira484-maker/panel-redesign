@@ -186,7 +186,7 @@ test("staging server list shows only owned or shared rows and never falls back t
     );
     await pool.execute("INSERT INTO nests VALUES (?,?)", [nest, nest]);
     await pool.execute(
-      "INSERT INTO eggs VALUES (?,?,'Fixture egg','PTDL_v2',X'00')",
+      "INSERT INTO eggs (id,nest_id,name,version,document) VALUES (?,?,'Fixture egg','PTDL_v2',X'00')",
       [egg, nest],
     );
     for (const [i, name] of [

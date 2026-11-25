@@ -180,6 +180,13 @@ export async function createApp({
         req.headers.cookie === undefined &&
         (req.headers.origin === undefined || req.headers.origin === origin)
       ) &&
+      !(
+        req.method === "POST" &&
+        req.routeOptions.url === "/api/application/servers" &&
+        req.headers.origin === undefined &&
+        req.headers.cookie === undefined &&
+        /^Bearer rlya_[A-Za-z0-9_-]{43}$/.test(req.headers.authorization ?? "")
+      ) &&
       // Legacy SDK requests carry an explicit bearer, never a browser session.
       !(
         req.method === "POST" &&
@@ -313,8 +320,12 @@ export async function createApp({
     provisioner?.compatStream,
     provisioner?.compatFiles,
   );
-  registerApplicationInventory(app, pool, origin, (key) =>
-    crypt.digest("application-key", key),
+  registerApplicationInventory(
+    app,
+    pool,
+    origin,
+    (key) => crypt.digest("application-key", key),
+    provisioner?.applicationCreate,
   );
   app.post<{
     Body: {
@@ -322,6 +333,7 @@ export async function createApp({
       readServers?: boolean;
       readNodes?: boolean;
       readAllocations?: boolean;
+      createServers?: boolean;
     };
   }>(
     "/api/v1/account/application-keys",
@@ -334,6 +346,7 @@ export async function createApp({
             readServers: { type: "boolean" },
             readNodes: { type: "boolean" },
             readAllocations: { type: "boolean" },
+            createServers: { type: "boolean" },
           },
           ["label"],
         ),
@@ -353,7 +366,7 @@ export async function createApp({
         const id = randomUUID(),
           token = `rlya_${randomBytes(32).toString("base64url")}`;
         await db.execute(
-          "INSERT INTO application_keys (id,user_id,digest,label,read_servers,read_nodes,read_allocations,expires_at) VALUES (?,?,?,?,?,?,?,TIMESTAMPADD(DAY,30,UTC_TIMESTAMP(3)))",
+          "INSERT INTO application_keys (id,user_id,digest,label,read_servers,read_nodes,read_allocations,create_servers,expires_at) VALUES (?,?,?,?,?,?,?,?,TIMESTAMPADD(DAY,30,UTC_TIMESTAMP(3)))",
           [
             id,
             account.id,
@@ -362,6 +375,7 @@ export async function createApp({
             req.body.readServers === true,
             req.body.readNodes === true,
             req.body.readAllocations === true,
+            req.body.createServers === true,
           ],
         );
         await audit(db, "identity.application_key_created", account.id);
