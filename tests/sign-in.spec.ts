@@ -54,3 +54,36 @@ test("sign-in requires 2FA and confirms the account before displaying an active 
   ).toBeVisible();
   await expect(page.getByText("Operator Relay")).toHaveCount(0);
 });
+
+test("staging inventory errors clear previously loaded rows without showing demo data", async ({
+  page,
+}) => {
+  await page.route("**/api/v1/account", (route) =>
+    route.fulfill({ json: { displayName: "Operator Relay", twoFactor: true } }),
+  );
+  let fail = false;
+  await page.route("**/api/v1/servers", (route) =>
+    route.fulfill(
+      fail
+        ? { status: 503 }
+        : {
+            json: {
+              items: [{ id: "fixture", name: "Staging fixture only" }],
+              next: null,
+            },
+          },
+    ),
+  );
+  await page.goto("/#authView");
+  const load = page.getByRole("button", { name: "Muat daftar server" });
+  await load.click();
+  await expect(page.getByText("Staging fixture only")).toBeVisible();
+  fail = true;
+  await load.click();
+  await expect(page.getByRole("alert")).toHaveText(
+    "Daftar server gagal dimuat.",
+  );
+  await expect(
+    page.getByRole("list", { name: "Server yang dapat diakses" }),
+  ).toHaveCount(0);
+});
