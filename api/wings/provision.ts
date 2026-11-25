@@ -299,8 +299,23 @@ export function createProvisioner(
         throw error;
       }
     },
-    async runtime(id: string, actor: Actor) {
-      const server = await authorized(pool, id, actor);
+    async runtime(id: string, actor: Actor, scope: "admin" | "user" = "admin") {
+      const server =
+        scope === "admin"
+          ? await authorized(pool, id, actor)
+          : await load(pool, id);
+      if (!server) throw new ProvisionError(404, "server_not_found");
+      if (scope === "user") {
+        const [visible] = await rows(
+          pool,
+          `SELECT 1 FROM servers s WHERE s.id=? AND (s.owner_id=? OR EXISTS (SELECT 1 FROM server_grants g WHERE g.server_id=s.id AND g.user_id=? AND JSON_LENGTH(g.permissions)>0))`,
+          [id, actor.id, actor.id],
+        );
+        if (!visible || actor.channel !== "session")
+          throw new ProvisionError(404, "server_not_found");
+        if (!eligible(server))
+          throw new ProvisionError(422, "disposable_fixture_required");
+      }
       if (server.phase !== "installed")
         throw new ProvisionError(409, "server_not_installed");
       return observe(id);

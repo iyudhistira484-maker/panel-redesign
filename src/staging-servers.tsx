@@ -1,3 +1,4 @@
+import { ServerPower } from "./server-power";
 import { useState } from "react";
 import type { Locale } from "./i18n";
 import { Button } from "./ui";
@@ -5,6 +6,7 @@ import { Button } from "./ui";
 type ServerSummary = { id: string; name: string };
 export function StagingServers({ locale }: { locale: Locale }) {
   const en = locale === "en";
+  const [opened, setOpened] = useState<string | null>(null);
   const [items, setItems] = useState<ServerSummary[]>([]);
   const [next, setNext] = useState<string | null>(null);
   const [status, setStatus] = useState<
@@ -59,8 +61,8 @@ export function StagingServers({ locale }: { locale: Locale }) {
       <h2>{en ? "Staging servers" : "Server staging"}</h2>
       <p>
         {en
-          ? "Read-only list from the staging API."
-          : "Daftar baca-saja dari API staging."}
+          ? "Server list from the staging API."
+          : "Daftar server dari API staging."}
       </p>
       <Button onClick={() => void load()} disabled={status === "busy"}>
         {en ? "Load servers" : "Muat daftar server"}
@@ -89,7 +91,18 @@ export function StagingServers({ locale }: { locale: Locale }) {
           aria-label={en ? "Accessible servers" : "Server yang dapat diakses"}
         >
           {items.map((item) => (
-            <li key={item.id}>{item.name}</li>
+            <li key={item.id}>
+              {item.name}{" "}
+              <Button
+                aria-expanded={opened === item.id}
+                onClick={() => setOpened(opened === item.id ? null : item.id)}
+              >
+                {en ? "Server detail" : "Detail server"}
+              </Button>
+              {opened === item.id && (
+                <ServerPower id={item.id} locale={locale} />
+              )}
+            </li>
           ))}
         </ul>
       )}

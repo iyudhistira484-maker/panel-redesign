@@ -87,3 +87,41 @@ test("staging inventory errors clear previously loaded rows without showing demo
     page.getByRole("list", { name: "Server yang dapat diakses" }),
   ).toHaveCount(0);
 });
+
+test("server power requires confirmation and an uncertain response never looks successful", async ({
+  page,
+}) => {
+  await page.route("**/api/v1/account", (route) =>
+    route.fulfill({ json: { displayName: "Operator", twoFactor: true } }),
+  );
+  await page.route("**/api/v1/servers", (route) =>
+    route.fulfill({
+      json: { items: [{ id: "fixture", name: "Fixture" }], next: null },
+    }),
+  );
+  await page.route("**/servers/fixture/runtime", (route) =>
+    route.fulfill({ json: { presence: "present", state: "offline" } }),
+  );
+  let posts = 0;
+  await page.route("**/servers/fixture/power", (route) => {
+    posts++;
+    expect(route.request().postDataJSON()).toEqual({
+      action: "start",
+      confirm: true,
+    });
+    return route.fulfill({ status: 502 });
+  });
+  await page.goto("/#authView");
+  await page.getByRole("button", { name: "Muat daftar server" }).click();
+  await page.getByRole("button", { name: "Detail server" }).click();
+  await page.getByRole("button", { name: "Start", exact: true }).click();
+  expect(posts).toBe(0);
+  await page.getByRole("button", { name: "Konfirmasi aksi" }).click();
+  await expect(
+    page.getByText("Hasil belum diketahui.", { exact: false }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Start", exact: true }),
+  ).toHaveCount(0);
+  expect(posts).toBe(1);
+});
