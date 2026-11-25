@@ -417,6 +417,95 @@ export function createProvisioner(
         );
       },
       dispatch: (id: string) => dispatchInstallation(id, appDispatch),
+      async delete(
+        id: string,
+        authorize: (db: Executor) => Promise<string | false>,
+      ) {
+        return exclusive(id, async () => {
+          async function check(db: Executor, lock = false) {
+            const server = await load(db, id, lock);
+            const [marker] = await rows<{ application_origin: number }>(
+              db,
+              "SELECT application_origin FROM wings_provisions WHERE server_id=?",
+              [id],
+            );
+            if (
+              !server ||
+              !marker?.application_origin ||
+              !fromNode(server) ||
+              !server.document.equals(Buffer.from(disposableEgg))
+            )
+              throw new ProvisionError(404, "fixture_not_found");
+            if (server.phase !== "installed")
+              throw new ProvisionError(409, "fixture_not_installed");
+          }
+          await check(pool);
+          const before = await observe(id);
+          if (before.presence === "unreachable")
+            throw new ProvisionError(502, "offline_status_unverified");
+          if (before.presence !== "present" || before.state !== "offline")
+            throw new ProvisionError(409, "fixture_not_offline");
+          const actor = await transaction(pool, async (db) => {
+            const actor = await authorize(db);
+            if (!actor) return false;
+            await check(db, true);
+            const history = await rows(
+              db,
+              "SELECT id FROM wings_transfers WHERE server_id=? LIMIT 1 FOR UPDATE",
+              [id],
+            );
+            const secondary = await rows(
+              db,
+              "SELECT allocation_id FROM server_secondary_allocations WHERE server_id=? LIMIT 1 FOR UPDATE",
+              [id],
+            );
+            if (history.length || secondary.length)
+              throw new ProvisionError(409, "fixture_has_placement_history");
+            await db.execute(
+              "UPDATE wings_provisions SET phase='deleting' WHERE server_id=?",
+              [id],
+            );
+            await db.execute(
+              "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'wings.application_delete_requested',?)",
+              [actor, id],
+            );
+            return actor;
+          });
+          if (!actor) return "denied" as const;
+          try {
+            await appDispatch.remove(id);
+            if ((await observe(id)).presence !== "absent")
+              throw new Error("Wings absence not confirmed");
+            await transaction(pool, async (db) => {
+              const current = await load(db, id, true);
+              if (current?.phase !== "deleting")
+                throw new Error("Delete reservation changed");
+              await db.execute(
+                "DELETE FROM wings_provisions WHERE server_id=?",
+                [id],
+              );
+              await db.execute("DELETE FROM servers WHERE id=?", [id]);
+              await db.execute(
+                "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'wings.application_deleted',?)",
+                [actor, id],
+              );
+            });
+            return "deleted" as const;
+          } catch {
+            await transaction(pool, async (db) => {
+              await db.execute(
+                "UPDATE wings_provisions SET phase='delete_uncertain' WHERE server_id=? AND phase='deleting'",
+                [id],
+              );
+              await db.execute(
+                "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'wings.application_delete_uncertain',?)",
+                [actor, id],
+              );
+            });
+            return "delete_uncertain" as const;
+          }
+        });
+      },
       async probe(id: string) {
         const server = await load(pool, id);
         if (

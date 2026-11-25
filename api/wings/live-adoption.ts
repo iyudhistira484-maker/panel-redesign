@@ -15,7 +15,7 @@ import { rows, stagingPool } from "../db";
 import { canServer } from "../policy";
 import { migrate } from "../migrate";
 import { cryptoContext } from "../security";
-import { WingsClient } from "./client";
+import { WingsClient, WingsUnavailable } from "./client";
 import { lifecycleFixture } from "./lifecycle-fixture";
 import { disposableEgg } from "./provision";
 import { registerRemote } from "./remote";
@@ -120,7 +120,18 @@ async function main() {
   let interceptNextApplicationCreate = false;
   let interceptedDelivery: (() => Promise<Response>) | undefined;
   let interceptedDispatches = 0;
+  let blockNextApplicationDelete: string | undefined;
+  let interceptedDeletes = 0;
   const applicationDispatchRequest: typeof fetch = async (input, init) => {
+    if (blockNextApplicationDelete && init?.method === "DELETE") {
+      assert.equal(
+        String(input),
+        `${node.origin}/api/servers/${blockNextApplicationDelete}`,
+      );
+      blockNextApplicationDelete = undefined;
+      interceptedDeletes++;
+      throw new Error("Disposable delete transport timeout");
+    }
     if (!interceptNextApplicationCreate) return fetch(input, init);
     assert.equal(String(input), `${node.origin}/api/servers`);
     assert.equal(init?.method, "POST");
@@ -1201,6 +1212,7 @@ async function main() {
         const newKey = async (
           createServers: boolean,
           reconcileServers = false,
+          deleteServers = false,
         ) => {
           const result = await relay.inject({
             method: "POST",
@@ -1210,7 +1222,9 @@ async function main() {
             payload: {
               label: "Disposable create contract",
               createServers,
-              readServers: !createServers && !reconcileServers,
+              readServers:
+                !createServers && !reconcileServers && !deleteServers,
+              deleteServers,
               reconcileServers,
             },
           });
@@ -1218,10 +1232,11 @@ async function main() {
           return result.json<{ token: string }>().token;
         };
         try {
-          const [writer, reader, reconciler] = await Promise.all([
+          const [writer, reader, reconciler, deleter] = await Promise.all([
             newKey(true),
             newKey(false),
             newKey(false, true),
+            newKey(false, false, true),
           ]);
           const [nodeRow] = await rows<{ id: number }>(
             pool,
@@ -1446,8 +1461,94 @@ async function main() {
             ).status,
             409,
           );
-          await client.remove(late.uuid);
-          await client.remove(made.attributes.uuid);
+          const destroy = (id: number, key = deleter, suffix = "") =>
+            appRequest(
+              base,
+              `${appServerPath}/${id}${suffix}`,
+              key,
+              undefined,
+              "DELETE",
+            );
+          assert.equal((await destroy(made.attributes.id, reader)).status, 403);
+          assert.equal((await destroy(made.attributes.id, writer)).status, 403);
+          assert.equal((await destroy(old.id)).status, 404);
+          assert.equal((await destroy(missing.id)).status, 409);
+          assert.equal(
+            (await destroy(made.attributes.id, deleter, "?force=1")).status,
+            400,
+          );
+          const otherBefore = await checksum();
+          const uncertainBefore = await client.readFixtureFile(
+            late.uuid,
+            "relay-start.sh",
+          );
+          assert.equal((await destroy(made.attributes.id)).status, 204);
+          assert.equal((await detail(made.attributes.id)).status, 404);
+          await assert.rejects(
+            client.state(made.attributes.uuid),
+            (error: unknown) =>
+              error instanceof WingsUnavailable && error.reason === "not_found",
+          );
+          assert.equal(await checksum(), otherBefore);
+          assert.equal(
+            await client.readFixtureFile(late.uuid, "relay-start.sh"),
+            uncertainBefore,
+          );
+          const reused = await post(
+            writer,
+            createBody(ownerRow.id, eggRow.id, available, "relay-reused-shell"),
+          );
+          assert.equal(reused.status, 201);
+          const replacement = ((await reused.json()) as AppFixture).attributes;
+          assert.notEqual(replacement.uuid, made.attributes.uuid);
+          assert.notEqual(replacement.id, made.attributes.id);
+          assert.equal(replacement.allocation, available);
+          await until(
+            "replacement installed on released allocation",
+            async () =>
+              ((await (await detail(replacement.id)).json()) as AppFixture)
+                .attributes.status === null,
+          );
+          assert.equal((await destroy(replacement.id)).status, 204);
+          blockNextApplicationDelete = late.uuid;
+          const failed = await destroy(late.id);
+          assert.equal(failed.status, 502);
+          assert.equal(
+            ((await failed.json()) as { meta: { server: { status: string } } })
+              .meta.server.status,
+            "delete_uncertain",
+          );
+          assert.equal(
+            ((await (await detail(late.id)).json()) as AppFixture).attributes
+              .status,
+            "delete_uncertain",
+          );
+          assert.equal(
+            await client.readFixtureFile(late.uuid, "relay-start.sh"),
+            uncertainBefore,
+          );
+          assert.equal((await destroy(late.id)).status, 409);
+          assert.equal(
+            (
+              await post(
+                writer,
+                createBody(
+                  ownerRow.id,
+                  eggRow.id,
+                  late.allocation,
+                  "cannot-reuse-uncertain",
+                ),
+              )
+            ).status,
+            409,
+          );
+          assert.equal(interceptedDeletes, 1);
+          const deletes = await rows(
+            pool,
+            "SELECT id FROM audit_log WHERE event='wings.application_delete_requested' AND subject_id=?",
+            [late.uuid],
+          );
+          assert.equal(deletes.length, 1);
         } finally {
           await pool.execute(
             "UPDATE users SET is_admin=FALSE WHERE email='outsider@example.test'",

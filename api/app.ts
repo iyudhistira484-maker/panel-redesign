@@ -190,9 +190,12 @@ export async function createApp({
         (req.headers.origin === undefined || req.headers.origin === origin)
       ) &&
       !(
-        req.method === "POST" &&
-        (req.routeOptions.url === "/api/application/servers" ||
-          req.routeOptions.url === "/api/application/servers/:id/reconcile") &&
+        ((req.method === "POST" &&
+          (req.routeOptions.url === "/api/application/servers" ||
+            req.routeOptions.url ===
+              "/api/application/servers/:id/reconcile")) ||
+          (req.method === "DELETE" &&
+            req.routeOptions.url === "/api/application/servers/:id")) &&
         req.headers.origin === undefined &&
         req.headers.cookie === undefined &&
         /^Bearer rlya_[A-Za-z0-9_-]{43}$/.test(req.headers.authorization ?? "")
@@ -345,6 +348,7 @@ export async function createApp({
       readAllocations?: boolean;
       createServers?: boolean;
       reconcileServers?: boolean;
+      deleteServers?: boolean;
     };
   }>(
     "/api/v1/account/application-keys",
@@ -359,6 +363,7 @@ export async function createApp({
             readAllocations: { type: "boolean" },
             createServers: { type: "boolean" },
             reconcileServers: { type: "boolean" },
+            deleteServers: { type: "boolean" },
           },
           ["label"],
         ),
@@ -378,7 +383,7 @@ export async function createApp({
         const id = randomUUID(),
           token = `rlya_${randomBytes(32).toString("base64url")}`;
         await db.execute(
-          "INSERT INTO application_keys (id,user_id,digest,label,read_servers,read_nodes,read_allocations,create_servers,reconcile_servers,expires_at) VALUES (?,?,?,?,?,?,?,?,?,TIMESTAMPADD(DAY,30,UTC_TIMESTAMP(3)))",
+          "INSERT INTO application_keys (id,user_id,digest,label,read_servers,read_nodes,read_allocations,create_servers,reconcile_servers,delete_servers,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,TIMESTAMPADD(DAY,30,UTC_TIMESTAMP(3)))",
           [
             id,
             account.id,
@@ -389,6 +394,7 @@ export async function createApp({
             req.body.readAllocations === true,
             req.body.createServers === true,
             req.body.reconcileServers === true,
+            req.body.deleteServers === true,
           ],
         );
         await audit(db, "identity.application_key_created", account.id);

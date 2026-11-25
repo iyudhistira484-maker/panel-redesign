@@ -1,0 +1,1 @@
+ALTER TABLE application_keys ADD COLUMN delete_servers BOOLEAN NOT NULL DEFAULT FALSE;

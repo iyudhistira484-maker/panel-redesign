@@ -54,6 +54,10 @@ export function registerApplicationInventory(
   create?: {
     claim(db: Executor, id: string, actorId: string): Promise<void>;
     dispatch(id: string): Promise<string>;
+    delete(
+      id: string,
+      authorize: (db: Executor) => Promise<string | false>,
+    ): Promise<"denied" | "deleted" | "delete_uncertain">;
     probe(id: string): Promise<{
       presence: "present" | "absent" | "unreachable";
       state: string | null;
@@ -69,7 +73,8 @@ export function registerApplicationInventory(
       | "read_nodes"
       | "read_allocations"
       | "create_servers"
-      | "reconcile_servers" = "read_servers",
+      | "reconcile_servers"
+      | "delete_servers" = "read_servers",
   ) {
     const token = /^rlya_[A-Za-z0-9_-]{43}$/.exec(
       auth.startsWith("Bearer ") ? auth.slice(7) : "",
@@ -77,7 +82,7 @@ export function registerApplicationInventory(
     const [key] = token
       ? await rows<Record<typeof scope, number> & { user_id: string }>(
           db,
-          `SELECT k.user_id,k.read_servers,k.read_nodes,k.read_allocations,k.create_servers,k.reconcile_servers FROM application_keys k JOIN users u ON u.id=k.user_id WHERE k.digest=? AND k.expires_at>UTC_TIMESTAMP(3) AND u.is_admin=TRUE${scope === "create_servers" ? " FOR UPDATE" : ""}`,
+          `SELECT k.user_id,k.read_servers,k.read_nodes,k.read_allocations,k.create_servers,k.reconcile_servers,k.delete_servers FROM application_keys k JOIN users u ON u.id=k.user_id WHERE k.digest=? AND k.expires_at>UTC_TIMESTAMP(3) AND u.is_admin=TRUE${scope === "create_servers" || scope === "delete_servers" ? " FOR UPDATE" : ""}`,
           [digest(token)],
         )
       : [];
@@ -86,7 +91,7 @@ export function registerApplicationInventory(
       return false;
     }
     if (!key[scope]) {
-      deny(reply, 403, "AuthorizationException", "Inventory access denied.");
+      deny(reply, 403, "AuthorizationException", "Application access denied.");
       return false;
     }
     return key.user_id;
@@ -328,6 +333,68 @@ export function registerApplicationInventory(
       } catch (error) {
         if (error instanceof ProvisionError)
           return deny(reply, error.status, "ProvisionException", error.code);
+        throw error;
+      }
+    },
+  );
+  app.delete<{ Params: { id: string }; Querystring: Record<string, unknown> }>(
+    `${path}/:id`,
+    {
+      bodyLimit: 1024,
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+    },
+    async (req, reply) => {
+      const auth = req.headers.authorization ?? "";
+      const authorizeDelete = (db: Executor) =>
+        authorize(db, auth, reply, "delete_servers");
+      if (!(await authorizeDelete(pool))) return reply;
+      if (Object.keys(req.query).length || req.body !== undefined)
+        return deny(
+          reply,
+          400,
+          "BadRequestHttpException",
+          "Deletion takes no input.",
+        );
+      const id = Number(req.params.id);
+      const [server] =
+        /^[1-9]\d{0,9}$/.test(req.params.id) && validId(id)
+          ? await rows<{ uuid: string }>(
+              pool,
+              "SELECT id AS uuid FROM servers WHERE application_id=?",
+              [id],
+            )
+          : [];
+      if (!server || !create)
+        return deny(
+          reply,
+          404,
+          "NotFoundHttpException",
+          "Application fixture not found.",
+        );
+      try {
+        const outcome = await create.delete(server.uuid, authorizeDelete);
+        if (outcome === "denied") return reply;
+        if (outcome === "deleted") return reply.code(204).send();
+        return reply.code(502).send({
+          errors: [
+            {
+              code: "DaemonConnectionException",
+              status: "502",
+              detail: "Deletion unconfirmed; allocation remains reserved.",
+            },
+          ],
+          meta: { server: { id, uuid: server.uuid, status: outcome } },
+        });
+      } catch (error) {
+        if (error instanceof ProvisionError)
+          return deny(
+            reply,
+            error.status,
+            error.status === 409
+              ? "ConflictHttpException"
+              : "ProvisionException",
+            error.code,
+          );
         throw error;
       }
     },
