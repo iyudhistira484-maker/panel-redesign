@@ -270,7 +270,13 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
           {path.join("/") === "fixture-docs" &&
             preview.name === "example.txt" &&
             (draft === null ? (
-              <Button disabled={busy} onClick={() => setDraft(preview.text)}>
+              <Button
+                disabled={busy}
+                onClick={() => {
+                  setSaveStatus(null);
+                  setDraft(preview.text);
+                }}
+              >
                 {en ? "Edit staging text" : "Edit teks staging"}
               </Button>
             ) : (
