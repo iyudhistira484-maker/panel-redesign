@@ -6,6 +6,8 @@ import { promisify } from "node:util";
 import { createApp } from "../app";
 import { rows, stagingPool } from "../db";
 import { keyFrom } from "../security";
+import { randomUUID } from "node:crypto";
+import { checkpointRecord } from "./offhost-http-fixture";
 import { offhostKey } from "./offhost-keys";
 import { UUID_V4, WingsClient } from "./client";
 
@@ -124,6 +126,37 @@ async function main() {
     );
     assert.match(runtime.payloadHash, /^[a-f0-9]{64}$/);
     assert.equal(payload.stdout.split(/\s/)[0], runtime.payloadHash);
+    const port = Number(runtime.placement.port);
+    assert.equal(port, 25610);
+    assert.equal(runtime.placement.ip, "127.0.0.1");
+    const endpoint = `http://127.0.0.1:${port}/cgi-bin/record`;
+    const call = (body?: string) =>
+      fetch(endpoint, {
+        ...(body === undefined ? {} : { method: "POST", body }),
+        signal: AbortSignal.timeout(2000),
+      });
+    async function readHttp(expected: string) {
+      for (let attempt = 0; attempt < 20; attempt++) {
+        const response = await call().catch(() => null);
+        if (response?.ok) {
+          assert.equal(await response.text(), expected);
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      throw new Error("Restored HTTP service unavailable");
+    }
+    await readHttp(checkpointRecord);
+    const freshRecord = `restored-${randomUUID()}`;
+    const write = await call(freshRecord);
+    assert.equal(write.status, 200);
+    assert.equal(await write.text(), freshRecord);
+    await readHttp(freshRecord);
+    await client.power(uuid, "stop");
+    await waitState("offline");
+    await client.power(uuid, "start");
+    await waitState("running");
+    await readHttp(freshRecord);
     const revoke = await app.inject({
       method: "POST",
       url: `/api/v1/servers/${uuid}/activity-access`,
@@ -144,14 +177,20 @@ async function main() {
       "Staging simulated loss window exceeded 30 seconds",
     );
     console.log(
-      `::notice::Relay Wings cross-host restore_ms=${elapsed} checkpoint_to_loss_ms=${runtime.checkpointToSimulatedLossMs} payload_bytes=268435456 files=2048 revocation_reapplied=true independent_keys=${runtime.independentKeys}`,
+      `::notice::Relay Wings cross-host restore_ms=${elapsed} checkpoint_to_loss_ms=${runtime.checkpointToSimulatedLossMs} payload_bytes=268435456 files=2048 revocation_reapplied=true http_write_survived_restart=true independent_keys=${runtime.independentKeys}`,
     );
   } finally {
     await app.close();
     await pool.end();
   }
 }
-main().catch(() => {
-  console.error("Relay/Wings isolated restore assertions failed");
+main().catch((error: unknown) => {
+  const frame =
+    error instanceof Error
+      ? error.stack
+          ?.split("\n")
+          .find((line) => line.includes("offhost-restore.ts:"))
+      : undefined;
+  console.error("Relay/Wings isolated restore assertions failed", frame ?? "");
   process.exitCode = 1;
 });

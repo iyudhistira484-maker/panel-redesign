@@ -18,6 +18,7 @@ import { cryptoContext } from "../security";
 import { UUID_V4, WingsClient, WingsUnavailable } from "./client";
 import { lifecycleFixture } from "./lifecycle-fixture";
 import { disposableEgg } from "./provision";
+import { checkpointRecord, recordCgi, startup } from "./offhost-http-fixture";
 import { offhostKey } from "./offhost-keys";
 import { registerRemote } from "./remote";
 
@@ -1301,10 +1302,20 @@ async function main() {
                 chown --reference=. "$file"
                 i=$((i+1))
               done
+              mkdir -p relay-pilot-http/cgi-bin
+              printf '%s' "$2" > relay-start.sh
+              printf '%s' "$3" > relay-pilot-http/cgi-bin/record
+              printf '%s' "$4" > relay-pilot-http/record.txt
+              chmod 0755 relay-start.sh relay-pilot-http/cgi-bin/record
+              chown --reference=. relay-start.sh
+              chown -R "$(stat -c '%u:%g' .)" relay-pilot-http
               sha256sum relay-pilot-data/*.bin | sha256sum
             `,
                 "pilot-data",
                 `${sourceRoot}/${uuid}`,
+                startup,
+                recordCgi,
+                checkpointRecord,
               ],
               { timeout: 30000 },
             )
