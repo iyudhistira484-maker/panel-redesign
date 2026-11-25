@@ -169,6 +169,16 @@ export async function createApp({
               "/api/remote/servers/:uuid/transfer/:result")) &&
         req.method === "POST"
       ) &&
+      // Legacy SDK requests carry an explicit bearer, never a browser session.
+      !(
+        req.method === "POST" &&
+        req.routeOptions.url === "/api/client/servers/:identifier/power" &&
+        req.headers.origin === undefined &&
+        req.headers.cookie === undefined &&
+        /^Bearer rly_[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{22}$/.test(
+          req.headers.authorization ?? "",
+        )
+      ) &&
       !["GET", "HEAD", "OPTIONS"].includes(req.method) &&
       (req.headers.origin !== origin || req.headers["x-relay-request"] !== "1")
     ) {

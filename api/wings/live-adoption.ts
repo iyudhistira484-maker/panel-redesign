@@ -1255,6 +1255,20 @@ async function main() {
           ).statusCode,
           401,
         );
+        assert.equal(
+          (
+            await relay.inject({
+              method: "POST",
+              url: clientPath,
+              headers: {
+                ...auth(ownerPowerKey),
+                origin: "https://other.example.test",
+              },
+              payload: { signal: "start" },
+            })
+          ).statusCode,
+          403,
+        );
         async function sdkPower(
           base: string,
           key: string,
