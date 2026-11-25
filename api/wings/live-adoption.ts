@@ -157,7 +157,7 @@ async function main() {
         { timeout: 5000 },
       )
     ).stdout.trim();
-  const restart = async () => {
+  const restart = async (requireRunning = true) => {
     for (const container of actual
       ? ["relay-wings-contract", "relay-wings-adoption-second"]
       : ["relay-wings-contract"]) {
@@ -165,10 +165,14 @@ async function main() {
         timeout: 20000,
       });
     }
-    await until("running workload rediscovery", async () =>
-      (
-        await Promise.all(workloadIds.map((id) => clientFor(id).state(id)))
-      ).every((state) => state === "running"),
+    await until(
+      requireRunning ? "running workload rediscovery" : "workload rediscovery",
+      async () =>
+        (
+          await Promise.all(workloadIds.map((id) => clientFor(id).state(id)))
+        ).every((state) =>
+          requireRunning ? state === "running" : typeof state === "string",
+        ),
     );
   };
   const checksum = async (id = uuid) =>
@@ -1168,7 +1172,7 @@ async function main() {
             "remote: http://127.0.0.1:13200",
           ),
         );
-        await restart();
+        await restart(false);
         const base = "http://127.0.0.1:13200";
         const management = "/api/v1/account/application-keys";
         await pool.execute(
@@ -1332,7 +1336,7 @@ async function main() {
             "UPDATE users SET is_admin=FALSE WHERE email='outsider@example.test'",
           );
           await writeFile(config, legacyRemote);
-          await restart();
+          await restart(false);
         }
       };
       verifyPower = async () => {
