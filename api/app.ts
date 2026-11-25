@@ -1069,7 +1069,7 @@ export async function createApp({
   if (provisioner)
     app.get<{
       Params: { id: string };
-      Querystring: { directory?: string; preview?: string };
+      Querystring: { directory?: string; preview?: string; download?: string };
     }>(
       "/api/v1/servers/:id/files",
       { config: { rateLimit: { max: 15, timeWindow: "1 minute" } } },
@@ -1090,12 +1090,26 @@ export async function createApp({
           const preview = req.query.preview;
           if (preview !== undefined && typeof preview !== "string")
             return reply.code(400).send({ error: "invalid_text_file" });
-          return await provisioner.files(
+          const download = req.query.download;
+          if (download !== undefined && (download !== "1" || !preview))
+            return reply.code(400).send({ error: "invalid_download" });
+          const result = await provisioner.files(
             req.params.id,
             principal,
             path,
             preview,
+            download === "1",
           );
+          if (Buffer.isBuffer(result))
+            return reply
+              .header(
+                "content-disposition",
+                `attachment; filename="${preview}"`,
+              )
+              .header("x-content-type-options", "nosniff")
+              .type("application/octet-stream")
+              .send(result);
+          return result;
         } catch (error) {
           if (error instanceof ProvisionError)
             return reply.code(error.status).send({ error: error.code });

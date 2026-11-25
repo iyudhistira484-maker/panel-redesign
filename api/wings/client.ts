@@ -241,7 +241,7 @@ export class WingsClient {
           char === "\r" ||
           (char.charCodeAt(0) >= 32 && char.charCodeAt(0) !== 127),
       )
-        ? text
+        ? { text, bytes: data }
         : null;
     } catch {
       return null;
