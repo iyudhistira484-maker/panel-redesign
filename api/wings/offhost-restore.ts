@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { createApp } from "../app";
 import { rows, stagingPool } from "../db";
 import { keyFrom } from "../security";
+import { offhostKey } from "./offhost-keys";
 import { UUID_V4, WingsClient } from "./client";
 
 async function main() {
@@ -16,7 +17,16 @@ async function main() {
   const runtime = JSON.parse(
     await readFile(process.env.RELAY_OFFHOST_RUNTIME ?? "", "utf8"),
   );
-  const { uuid, node, origin } = runtime;
+  const { uuid, origin } = runtime;
+  assert.equal(
+    runtime.independentKeys,
+    Boolean(process.env.RELAY_OFFHOST_RUNTIME_SEED),
+  );
+  if (runtime.independentKeys) assert.equal(runtime.legacyKeys, undefined);
+  const node = {
+    ...runtime.node,
+    token: process.env.RELAY_WINGS_TEST_TOKEN ?? "",
+  };
   assert.match(uuid, UUID_V4);
   assert.equal(node.origin, "http://127.0.0.1:18080");
   assert.equal(node.tokenId, "relaytestnode");
@@ -24,9 +34,13 @@ async function main() {
   const app = await createApp({
     pool,
     origin,
-    key: keyFrom(runtime.identityKey, "identityKey"),
-    pepper: keyFrom(runtime.pepper, "pepper"),
-    catalogNodeKey: keyFrom(runtime.key, "nodeKey"),
+    key:
+      offhostKey("identity") ??
+      keyFrom(runtime.legacyKeys?.identityKey, "identityKey"),
+    pepper:
+      offhostKey("pepper") ?? keyFrom(runtime.legacyKeys?.pepper, "pepper"),
+    catalogNodeKey:
+      offhostKey("catalog") ?? keyFrom(runtime.legacyKeys?.key, "nodeKey"),
     allowedCatalogNodeOrigins: [node.origin],
     wingsTestNode: node,
     enableDisposableProvisioning: true,
@@ -130,7 +144,7 @@ async function main() {
       "Staging simulated loss window exceeded 30 seconds",
     );
     console.log(
-      `::notice::Relay Wings cross-host restore_ms=${elapsed} checkpoint_to_loss_ms=${runtime.checkpointToSimulatedLossMs} payload_bytes=134217728 files=512 revocation_reapplied=true`,
+      `::notice::Relay Wings cross-host restore_ms=${elapsed} checkpoint_to_loss_ms=${runtime.checkpointToSimulatedLossMs} payload_bytes=134217728 files=512 revocation_reapplied=true independent_keys=${runtime.independentKeys}`,
     );
   } finally {
     await app.close();

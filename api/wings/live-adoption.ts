@@ -18,6 +18,7 @@ import { cryptoContext } from "../security";
 import { UUID_V4, WingsClient, WingsUnavailable } from "./client";
 import { lifecycleFixture } from "./lifecycle-fixture";
 import { disposableEgg } from "./provision";
+import { offhostKey } from "./offhost-keys";
 import { registerRemote } from "./remote";
 
 async function until(label: string, action: () => Promise<boolean>) {
@@ -51,9 +52,9 @@ async function main() {
   };
   const client = new WingsClient(node);
   const pool = stagingPool(),
-    pepper = randomBytes(32),
-    key = randomBytes(32),
-    identityKey = randomBytes(32);
+    pepper = offhostKey("pepper") ?? randomBytes(32),
+    key = offhostKey("catalog") ?? randomBytes(32),
+    identityKey = offhostKey("identity") ?? randomBytes(32);
   const actual = process.env.RELAY_BOOTSTRAP_SCENARIO === "legacy-panel";
   const legacyId = (name: string) => {
     const value = actual
@@ -1348,11 +1349,19 @@ async function main() {
             `${directory}/runtime.json`,
             JSON.stringify({
               uuid,
-              node,
+              node: { origin: node.origin, tokenId: node.tokenId },
               origin,
-              key: key.toString("base64"),
-              pepper: pepper.toString("base64"),
-              identityKey: identityKey.toString("base64"),
+              independentKeys: Boolean(process.env.RELAY_OFFHOST_RUNTIME_SEED),
+              ...(!process.env.RELAY_OFFHOST_RUNTIME_SEED
+                ? {
+                    legacyKeys: {
+                      token: node.token,
+                      key: key.toString("base64"),
+                      pepper: pepper.toString("base64"),
+                      identityKey: identityKey.toString("base64"),
+                    },
+                  }
+                : {}),
               ownerSession,
               payloadHash: pilotPayload?.stdout.split(/\s/)[0],
               checkpointToSimulatedLossMs: Date.now() - checkpointAt,

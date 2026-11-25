@@ -1,6 +1,11 @@
 name: Relay Wings off-host staging
 on:
   workflow_dispatch:
+    inputs:
+      require_independent_keys:
+        description: Require runtime seed from Actions Secrets (pilot rehearsal)
+        type: boolean
+        default: true
 permissions:
   contents: read
 jobs:
@@ -32,11 +37,17 @@ jobs:
         id: checkpoint
         env:
           RELAY_STAGING_DATABASE_URL: mysql://relay:disposable-ci@127.0.0.1:${{ job.services.mysql.ports[3306] }}/relay_test
+          RELAY_OFFHOST_RUNTIME_SEED: ${{ secrets.RELAY_RECOVERY_RUNTIME_SEED }}
+          REQUIRE_INDEPENDENT_KEYS: ${{ inputs.require_independent_keys }}
           RELAY_RECOVERY_MYSQL_SERVICE: ${{ job.services.mysql.id }}
           RELAY_BOOTSTRAP_SCENARIO: legacy-panel
         run: |
           set -euo pipefail
           umask 077
+          if [[ "$REQUIRE_INDEPENDENT_KEYS" == true && -z "$RELAY_OFFHOST_RUNTIME_SEED" ]]; then
+            echo 'Configure RELAY_RECOVERY_RUNTIME_SEED before running in pilot mode'
+            exit 1
+          fi
           test -n "$CERT"
           work=$(mktemp -d)
           trap 'rm -rf -- "$work"' EXIT
@@ -97,6 +108,7 @@ jobs:
         env:
           RELAY_STAGING_DATABASE_URL: mysql://relay:disposable-ci@127.0.0.1:${{ job.services.mysql.ports[3306] }}/relay_test
           MYSQL: ${{ job.services.mysql.id }}
+          RELAY_OFFHOST_RUNTIME_SEED: ${{ secrets.RELAY_RECOVERY_RUNTIME_SEED }}
           PRIVATE_KEY: ${{ secrets.RELAY_RECOVERY_RECIPIENT_KEY }}
         working-directory: ${{ runner.temp }}
         run: |

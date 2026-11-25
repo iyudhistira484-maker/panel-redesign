@@ -31,9 +31,11 @@ chmod 0755 "$work/wings"
 export RELAY_WINGS_TEST_TOKEN_ID=relaytestnode
 RELAY_WINGS_TEST_TOKEN=$(openssl rand -hex 32)
 export RELAY_WINGS_TEST_TOKEN
-if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == offhost-restore ]]; then
+if [[ -n "${RELAY_OFFHOST_RUNTIME_SEED:-}" ]]; then
+  RELAY_WINGS_TEST_TOKEN=$(./node_modules/.bin/tsx -e 'import {offhostKey} from "./api/wings/offhost-keys"; console.log(offhostKey("wings-primary")?.toString("hex"))')
+elif [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == offhost-restore ]]; then
   [[ "$GITHUB_WORKFLOW" == 'Relay Wings off-host staging' && "$GITHUB_EVENT_NAME" == workflow_dispatch ]]
-  RELAY_WINGS_TEST_TOKEN=$(jq -er '.node.token | select(test("^[a-f0-9]{64}$"))' "$RELAY_OFFHOST_RUNTIME")
+  RELAY_WINGS_TEST_TOKEN=$(jq -er '.legacyKeys.token | select(test("^[a-f0-9]{64}$"))' "$RELAY_OFFHOST_RUNTIME")
 fi
 printf '::add-mask::%s\n' "$RELAY_WINGS_TEST_TOKEN"
 mkdir "$work/config" "$work/data"
