@@ -930,8 +930,26 @@ async function main() {
                   RELAY_BROWSER_FIXTURE_ID: uuid,
                   RELAY_BROWSER_FIXTURE_PASSWORD: password,
                 },
-                timeout: 90_000,
+                timeout: 110_000,
               },
+            );
+            const readAfter = (app: typeof relay, id: string) =>
+              app.inject({
+                url: `/api/v1/servers/${id}/files?directory=%2Ffixture-docs&preview=example.txt&download=1`,
+                remoteAddress: "127.0.0.3",
+                headers: ownerSession,
+              });
+            const afterA = await readAfter(relay, uuid);
+            const afterB = await readAfter(secondRelay, second);
+            assert.equal(afterA.statusCode, 200);
+            assert.equal(afterB.statusCode, 200);
+            assert.deepEqual(
+              afterA.rawPayload,
+              Buffer.from("Saved from Chromium\n"),
+            );
+            assert.deepEqual(
+              afterB.rawPayload,
+              Buffer.from("\uFEFFsecond fixture\r\n"),
             );
             console.log(run.stdout);
           } catch (error) {

@@ -19,7 +19,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     "Disposable Wings contract only",
   );
   assert.equal(process.env.RUNNER_ENVIRONMENT, "github-hosted");
-  test.setTimeout(85_000);
+  test.setTimeout(95_000);
   const id = process.env.RELAY_BROWSER_FIXTURE_ID,
     password = process.env.RELAY_BROWSER_FIXTURE_PASSWORD;
   assert.ok(id && password);
@@ -107,6 +107,10 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     name: "Baca aktivitas server",
   });
   const fileApi = `${origin}/api/v1/servers/${id}/files`;
+  const docker = promisify(execFile);
+  const fixtureDaemon = "relay-wings-contract";
+  assert.equal(process.env.RELAY_DISPOSABLE_WINGS_CI, "1");
+  assert.equal(process.env.RELAY_BOOTSTRAP_SCENARIO, "legacy-panel");
   const editApi = `${fileApi}/edit-fixture`;
   const editHeaders = { origin, "x-relay-request": "1" };
   const initialVersion = createHash("sha256")
@@ -127,12 +131,10 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   ).toBe(404);
   expect(
     (
-      await page
-        .context()
-        .request.post(editApi, {
-          headers: editHeaders,
-          data: { version: initialVersion, text: "blocked" },
-        })
+      await page.context().request.post(editApi, {
+        headers: editHeaders,
+        data: { version: initialVersion, text: "blocked" },
+      })
     ).status(),
   ).toBe(404);
   await readActivity.click();
@@ -197,15 +199,41 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     .fill("Saved from Chromium\n");
   await preview.getByRole("button", { name: "Simpan teks" }).click();
   await expect(preview.getByText("Tersimpan dan terverifikasi.")).toBeVisible();
-  const stale = await page
-    .context()
-    .request.post(editApi, {
-      headers: editHeaders,
-      data: { version: initialVersion, text: "stale overwrite" },
-    });
+  const stale = await page.context().request.post(editApi, {
+    headers: editHeaders,
+    data: { version: initialVersion, text: "stale overwrite" },
+  });
   expect(stale.status()).toBe(409);
   expect((await stale.json()).error).toBe("file_version_conflict");
-  await files.getByRole("button", { name: "example.txt", exact: true }).click();
+  await preview.getByRole("button", { name: "Edit teks staging" }).click();
+  await preview
+    .getByRole("textbox", { name: "Editor teks" })
+    .fill("Unverified outage draft");
+  let saveAttempts = 0;
+  page.on("request", (request) => {
+    if (request.url() === editApi && request.method() === "POST")
+      saveAttempts++;
+  });
+  await docker("docker", ["pause", fixtureDaemon], { timeout: 5000 });
+  try {
+    const response = page.waitForResponse((reply) => reply.url() === editApi);
+    await preview.getByRole("button", { name: "Simpan teks" }).click();
+    expect((await response).status()).toBe(502);
+    await expect(preview.getByRole("alert")).toContainText(
+      "Penyimpanan belum terverifikasi",
+    );
+    await expect(
+      preview.getByRole("button", { name: "Simpan teks" }),
+    ).toBeDisabled();
+    await expect(preview.getByText("Tersimpan dan terverifikasi.")).toHaveCount(
+      0,
+    );
+  } finally {
+    await docker("docker", ["unpause", fixtureDaemon], { timeout: 5000 });
+  }
+  await preview.getByRole("button", { name: "Muat ulang file" }).click();
+  expect(saveAttempts).toBe(1);
+
   await expect(preview.locator("pre")).toHaveText("Saved from Chromium");
   await files.getByRole("button", { name: "binary.txt", exact: true }).click();
   await expect(page.getByText("Pratinjau teks tidak tersedia.")).toBeVisible();
@@ -261,11 +289,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
 
   // Pause only the first disposable CI daemon after observing a valid state.
   // Refreshing runtime first would hide the action and not test dispatch failure.
-  const docker = promisify(execFile);
   const refresh = page.getByRole("button", { name: "Perbarui status" });
-  const fixtureDaemon = "relay-wings-contract";
-  assert.equal(process.env.RELAY_DISPOSABLE_WINGS_CI, "1");
-  assert.equal(process.env.RELAY_BOOTSTRAP_SCENARIO, "legacy-panel");
   const requests: string[] = [];
   page.on("request", (request) => {
     if (request.url() === power && request.method() === "POST")
