@@ -20,8 +20,9 @@ if (($argv[1] ?? '') === 'application-create-cleanup') {
     DB::table('allocations')->where('node_id', $node)->where('port', 25618)->whereNull('server_id')->delete();
     exit;
 }
-if (($argv[1] ?? '') === 'account-profile') {
-    $user = DB::table('users')->where('uuid', getenv('RELAY_ADOPTION_OWNER_UUID'))
+if (in_array(($argv[1] ?? ''), ['account-profile', 'collaborator-profile'], true)) {
+    $account = $argv[1] === 'collaborator-profile' ? 'COLLABORATOR' : 'OWNER';
+    $user = DB::table('users')->where('uuid', getenv('RELAY_ADOPTION_' . $account . '_UUID'))
         ->first(['uuid', 'id', 'username', 'name_first', 'name_last', 'language']);
     if (!$user) { throw new RuntimeException('Fixture owner missing'); }
     echo json_encode($user, JSON_THROW_ON_ERROR);

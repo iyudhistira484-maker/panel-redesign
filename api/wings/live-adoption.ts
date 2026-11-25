@@ -26,6 +26,7 @@ import {
   startup,
 } from "./offhost-http-fixture";
 import { offhostKey } from "./offhost-keys";
+import { sftpKeyFingerprint } from "./sftp-auth";
 import { registerRemote } from "./remote";
 
 async function until(label: string, action: () => Promise<boolean>) {
@@ -1149,6 +1150,78 @@ async function main() {
           ),
           false,
         );
+        const delegate = JSON.parse(
+          (await fixtureScript("collaborator-profile")).stdout,
+        );
+        assert.equal(
+          delegate.uuid,
+          process.env.RELAY_ADOPTION_COLLABORATOR_UUID,
+        );
+        await pool.execute(
+          `INSERT INTO compat_account_profiles (user_id,upstream_id,username,first_name,last_name,language) VALUES (?,?,?,?,?,?)`,
+          [
+            delegate.uuid,
+            delegate.id,
+            delegate.username,
+            delegate.name_first,
+            delegate.name_last,
+            delegate.language,
+          ],
+        );
+        const keyPath = `${sftpWork}/delegate-key`;
+        await docker(
+          "ssh-keygen",
+          ["-q", "-t", "ed25519", "-N", "", "-f", keyPath],
+          { timeout: 5000 },
+        );
+        const fingerprint = sftpKeyFingerprint(
+          await readFile(`${keyPath}.pub`, "utf8"),
+        );
+        assert.ok(fingerprint);
+        await pool.execute(
+          "INSERT INTO compat_sftp_keys (fingerprint,user_id) VALUES (?,?)",
+          [fingerprint, delegate.uuid],
+        );
+        const keySftp = () =>
+          docker(
+            "bash",
+            [
+              "-ec",
+              `printf 'get fixture-docs/example.txt delegated.txt\n' |
+          sftp -q -b - -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=known_hosts -i "$1" -P 12022 "$2"`,
+              "sftp",
+              keyPath,
+              `${delegate.username}.${uuid.slice(0, 8)}@127.0.0.1`,
+            ],
+            { cwd: sftpWork, timeout: 10000 },
+          );
+        await assert.rejects(
+          keySftp(),
+          "A registered key without a server grant must not connect",
+        );
+        await pool.execute(
+          "INSERT INTO server_grants (server_id,user_id,permissions) VALUES (?,?,JSON_ARRAY('file.sftp','file.read','file.read-content'))",
+          [uuid, delegate.uuid],
+        );
+        try {
+          await keySftp();
+          assert.deepEqual(
+            await readFile(`${sftpWork}/delegated.txt`),
+            await client.fixtureDownload(uuid, ["fixture-docs"], "example.txt"),
+          );
+        } finally {
+          await pool.execute(
+            "DELETE FROM server_grants WHERE server_id=? AND user_id=?",
+            [uuid, delegate.uuid],
+          );
+        }
+        await assert.rejects(
+          keySftp(),
+          "A revoked grant must deny new SFTP sessions",
+        );
+        await pool.execute("DELETE FROM compat_sftp_keys WHERE fingerprint=?", [
+          fingerprint,
+        ]);
       } finally {
         await rm(sftpWork, { recursive: true, force: true });
       }
