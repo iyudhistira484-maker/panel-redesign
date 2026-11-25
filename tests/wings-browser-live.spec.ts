@@ -264,10 +264,10 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
         .poll(state, { timeout: 15000, intervals: [1000] })
         .toBe("offline");
     }
-    const setStart = async (grant: boolean) => {
+    const setPower = async (name: "Start" | "Stop", grant: boolean) => {
       await removable
         .getByRole("button", {
-          name: grant ? "Beri izin Start" : "Cabut izin Start",
+          name: grant ? `Beri izin ${name}` : `Cabut izin ${name}`,
         })
         .click();
       await removable
@@ -275,12 +275,12 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
         .click();
       await expect(
         removable.getByRole("button", {
-          name: grant ? "Cabut izin Start" : "Beri izin Start",
+          name: grant ? `Cabut izin ${name}` : `Beri izin ${name}`,
         }),
       ).toBeVisible();
       await expect(removable).toContainText("activity.read");
     };
-    await setStart(true);
+    await setPower("Start", true);
     expect(
       (
         await subuser.request.post(power, {
@@ -300,7 +300,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
         })
       ).status(),
     ).toBe(404);
-    await setStart(false);
+    await setPower("Start", false);
     expect(
       (
         await subuser.request.post(power, {
@@ -310,9 +310,33 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       ).status(),
     ).toBe(404);
     expect((await subuser.request.get(history)).status()).toBe(200);
+    // The previous action left the workload running. Only Stop is delegated now.
+    await setPower("Stop", true);
+    await expect(removable).not.toContainText("control.start");
+    const subuserPower = async (action: "start" | "stop") =>
+      (
+        await subuser.request.post(power, {
+          headers,
+          data: { action, confirm: true },
+        })
+      ).status();
+    expect(await subuserPower("stop")).toBe(202);
+    await expect
+      .poll(state, { timeout: 15000, intervals: [1000] })
+      .toBe("offline");
+    expect(await subuserPower("start")).toBe(404);
+    expect(await state()).toBe("offline");
+    await setPower("Stop", false);
+    expect(await subuserPower("stop")).toBe(404);
+    expect(
+      (await subuser.request.get(`${origin}/api/v1/account`)).status(),
+    ).toBe(200);
+    expect((await subuser.request.get(history)).status()).toBe(200);
     await readActivity.click();
     await expect(activity).toContainText("catalog.control.start.grant");
     await expect(activity).toContainText("catalog.control.start.revoke");
+    await expect(activity).toContainText("catalog.control.stop.grant");
+    await expect(activity).toContainText("catalog.control.stop.revoke");
     await removable
       .getByRole("button", { name: "Cabut akses", exact: true })
       .click();
