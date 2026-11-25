@@ -1197,11 +1197,33 @@ async function main() {
           );
         await assert.rejects(
           keySftp(),
-          "A registered key without a server grant must not connect",
+          "A registered key without SFTP grants must not connect",
         );
-        await pool.execute(
-          "INSERT INTO server_grants (server_id,user_id,permissions) VALUES (?,?,JSON_ARRAY('file.sftp','file.read','file.read-content'))",
+        const [prior] = await rows<{ permissions: string[] | string }>(
+          pool,
+          "SELECT permissions FROM server_grants WHERE server_id=? AND user_id=?",
           [uuid, delegate.uuid],
+        );
+        assert.ok(prior);
+        const original =
+          typeof prior.permissions === "string"
+            ? (JSON.parse(prior.permissions) as string[])
+            : prior.permissions;
+        assert.ok(!original.includes("file.sftp"));
+        await pool.execute(
+          "UPDATE server_grants SET permissions=? WHERE server_id=? AND user_id=?",
+          [
+            JSON.stringify([
+              ...new Set([
+                ...original,
+                "file.sftp",
+                "file.read",
+                "file.read-content",
+              ]),
+            ]),
+            uuid,
+            delegate.uuid,
+          ],
         );
         try {
           await keySftp();
@@ -1211,8 +1233,8 @@ async function main() {
           );
         } finally {
           await pool.execute(
-            "DELETE FROM server_grants WHERE server_id=? AND user_id=?",
-            [uuid, delegate.uuid],
+            "UPDATE server_grants SET permissions=? WHERE server_id=? AND user_id=?",
+            [JSON.stringify(original), uuid, delegate.uuid],
           );
         }
         await assert.rejects(
