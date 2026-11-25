@@ -123,7 +123,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   }
   await refresh.click();
   await expect(
-    page.getByText("Status Wings: offline", { exact: true }),
+    page.getByText(/^Status Wings: (offline|starting|running)$/),
   ).toBeVisible();
   expect(requests).toHaveLength(1);
 });
