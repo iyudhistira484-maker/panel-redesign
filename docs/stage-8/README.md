@@ -1,0 +1,7 @@
+# Tahap 8 — kompatibilitas Client API Pterodactyl
+
+Irisan staging baca-saja: `GET /api/client` (termasuk slash akhir) dan `GET /api/client/servers/:identifier`. Relay memakai kunci API Relay via Bearer, bukan sesi browser atau kunci legacy. Daftar/detail hanya berisi server milik akun atau yang dibagikan melalui grant aktif. Kunci tidak memperoleh hak admin. ID menggunakan UUID penuh atau awalan UUID delapan karakter; detail menolak awalan yang ambigu dalam cakupan akun. Pagination mendukung `page` dan `per_page` (maksimal 100 per halaman).
+
+Bentuk `object`, `attributes`, `data`, dan pagination mengikuti bagian yang diuji. Atribut baru mencakup UUID, identifier pendek default, nama, node, dan kepemilikan. Ini bukan kontrak atribut lengkap Pterodactyl: identifier alternatif, ID numerik lama, limits, alokasi/relationships, filter dan route tulis belum didukung. Application API belum tercakup.
+
+[CI 45552934168](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45552934168) lulus 14 job. SDK Nodeactyl 3.3.0 yang tidak dimodifikasi menjalankan fungsi daftar, detail, dan halaman berikutnya yang sama terhadap Panel v1.15.2 asli dan Relay; URL dan kunci saja yang berbeda antarpanel pada probe. Axios dipin melalui override dev untuk menghindari dependency lama. Kontrak juga membandingkan angka pagination dan memeriksa penolakan bagi sesi tanpa Bearer serta akses di luar grant. Ini bukti SDK baca-saja, bukan klaim migrasi semua integrasi pihak ketiga atau deployment produksi.
