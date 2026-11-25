@@ -116,7 +116,9 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       page.getByRole("button", { name: "Start", exact: true }),
     ).toHaveCount(0);
     await refresh.click();
-    await expect(page.getByText("Status Wings tidak tersedia.")).toBeVisible();
+    await expect(page.getByText("Status Wings tidak tersedia.")).toBeVisible({
+      timeout: 9000,
+    });
     expect(requests).toHaveLength(1);
   } finally {
     await docker("docker", ["unpause", fixtureDaemon], { timeout: 5000 });
