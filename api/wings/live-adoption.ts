@@ -1281,6 +1281,33 @@ async function main() {
           "volume checkpoint quiescent",
           async () => (await client.state(uuid)) === "offline",
         );
+        const pilotPayload = process.env.RELAY_OFFHOST_EXPORT
+          ? await docker(
+              "docker",
+              [
+                "exec",
+                "relay-wings-contract",
+                "sh",
+                "-ec",
+                `
+              cd "$1"
+              mkdir relay-pilot-data
+              chown --reference=. relay-pilot-data
+              i=0
+              while [ "$i" -lt 512 ]; do
+                file=$(printf 'relay-pilot-data/%04d.bin' "$i")
+                dd if=/dev/urandom of="$file" bs=262144 count=1 status=none
+                chown --reference=. "$file"
+                i=$((i+1))
+              done
+              sha256sum relay-pilot-data/*.bin | sha256sum
+            `,
+                "pilot-data",
+                `${sourceRoot}/${uuid}`,
+              ],
+              { timeout: 30000 },
+            )
+          : undefined;
         const checkpointFile = await client.fixtureDownload(
           uuid,
           ["fixture-docs"],
@@ -1294,6 +1321,7 @@ async function main() {
         const startBackup = performance.now();
         await script("backup");
         const checkpoint = performance.now();
+        const checkpointAt = Date.now();
         await pool.execute(
           "UPDATE servers SET name='Post-backup metadata' WHERE id=?",
           [uuid],
@@ -1325,6 +1353,9 @@ async function main() {
               key: key.toString("base64"),
               pepper: pepper.toString("base64"),
               identityKey: identityKey.toString("base64"),
+              ownerSession,
+              payloadHash: pilotPayload?.stdout.split(/\s/)[0],
+              checkpointToSimulatedLossMs: Date.now() - checkpointAt,
               relayKey,
               collaborator,
               outsider,

@@ -14,7 +14,9 @@ case ${1:-} in
     set -o noclobber
     docker exec "$container" tar --sort=name -C "$root" -cf - -- "$uuid" > "$archive"
     test -s "$archive"
-    [[ $(stat -c %s "$archive") -le 1048576 ]]
+    limit=1048576
+    if [[ "${GITHUB_WORKFLOW:-}" == 'Relay Wings off-host staging' && -n "${RELAY_OFFHOST_EXPORT:-}" ]]; then limit=150994944; fi
+    [[ $(stat -c %s "$archive") -le $limit ]]
     sha256sum "$archive" | cut -d ' ' -f 1
     ;;
   restore|corrupt)

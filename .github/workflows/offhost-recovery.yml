@@ -87,6 +87,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Start restore exercise clock
+        run: echo "RELAY_OFFHOST_STARTED=$(date +%s%3N)" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
           name: encrypted-checkpoint
@@ -116,7 +118,6 @@ jobs:
           PY
           if "${restore[@]}" --bundle corrupt.cms --output rejected; then exit 1; fi
           test ! -e rejected
-          export RELAY_OFFHOST_STARTED=$(date +%s%3N)
           "${restore[@]}" --bundle checkpoint.cms --output recovered
           openssl cms -decrypt -binary -inform DER -in runtime.cms -recip ../recipient.crt -inkey ../recipient.key -out runtime.signed
           openssl cms -verify -binary -inform DER -in runtime.signed -nointern -noverify -certfile signer.crt -out runtime.json

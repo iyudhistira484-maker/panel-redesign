@@ -97,8 +97,40 @@ async function main() {
       mount.stdout.trim(),
       `${process.env.RELAY_WINGS_CONTRACT_DATA}/${uuid}`,
     );
+    const payload = await docker(
+      "docker",
+      [
+        "exec",
+        uuid,
+        "sh",
+        "-ec",
+        `cd /home/container; set -- relay-pilot-data/*.bin; test "$#" -eq 512; sha256sum "$@" | sha256sum`,
+      ],
+      { timeout: 15000 },
+    );
+    assert.match(runtime.payloadHash, /^[a-f0-9]{64}$/);
+    assert.equal(payload.stdout.split(/\s/)[0], runtime.payloadHash);
+    const revoke = await app.inject({
+      method: "POST",
+      url: `/api/v1/servers/${uuid}/activity-access`,
+      headers: { ...runtime.ownerSession, origin, "x-relay-request": "1" },
+      payload: { email: "collaborator@example.test", action: "revoke" },
+    });
+    assert.equal(revoke.statusCode, 204);
+    assert.equal((await activity(runtime.collaborator)).statusCode, 404);
+    assert.equal((await activity(runtime.ownerSession)).statusCode, 200);
+    const elapsed = Date.now() - Number(process.env.RELAY_OFFHOST_STARTED);
+    assert.ok(
+      elapsed >= 0 && elapsed <= 120_000,
+      "Staging restore exercise exceeded 120 seconds",
+    );
+    assert.ok(
+      runtime.checkpointToSimulatedLossMs >= 0 &&
+        runtime.checkpointToSimulatedLossMs <= 30_000,
+      "Staging simulated loss window exceeded 30 seconds",
+    );
     console.log(
-      `::notice::Relay Wings cross-host restore_ms=${Date.now() - Number(process.env.RELAY_OFFHOST_STARTED)} checkpoint_file_verified=true checkpoint_grant_restored=true`,
+      `::notice::Relay Wings cross-host restore_ms=${elapsed} checkpoint_to_loss_ms=${runtime.checkpointToSimulatedLossMs} payload_bytes=134217728 files=512 revocation_reapplied=true`,
     );
   } finally {
     await app.close();
