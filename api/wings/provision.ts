@@ -78,6 +78,7 @@ export function createProvisioner(
   pepper: Buffer,
   origin: string,
   applicationDispatchRequest?: typeof fetch,
+  verifyApplicationDeletion?: (id: string) => Promise<boolean>,
 ) {
   const node = validateNode(rawNode);
   const crypt = cryptoContext(key, pepper, "node-token");
@@ -395,6 +396,22 @@ export function createProvisioner(
     );
     return (await load(pool, id))?.phase ?? next;
   }
+  async function releaseApplicationAllocation(
+    db: Executor,
+    id: string,
+    actor: string,
+    phase: Phase,
+  ) {
+    const current = await load(db, id, true);
+    if (current?.phase !== phase)
+      throw new ProvisionError(409, "delete_reservation_changed");
+    await db.execute("DELETE FROM wings_provisions WHERE server_id=?", [id]);
+    await db.execute("DELETE FROM servers WHERE id=?", [id]);
+    await db.execute(
+      "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'wings.application_deleted',?)",
+      [actor, id],
+    );
+  }
   return {
     provider,
     applicationCreate: {
@@ -476,20 +493,9 @@ export function createProvisioner(
             await appDispatch.remove(id);
             if ((await observe(id)).presence !== "absent")
               throw new Error("Wings absence not confirmed");
-            await transaction(pool, async (db) => {
-              const current = await load(db, id, true);
-              if (current?.phase !== "deleting")
-                throw new Error("Delete reservation changed");
-              await db.execute(
-                "DELETE FROM wings_provisions WHERE server_id=?",
-                [id],
-              );
-              await db.execute("DELETE FROM servers WHERE id=?", [id]);
-              await db.execute(
-                "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'wings.application_deleted',?)",
-                [actor, id],
-              );
-            });
+            await transaction(pool, (db) =>
+              releaseApplicationAllocation(db, id, actor, "deleting"),
+            );
             return "deleted" as const;
           } catch {
             await transaction(pool, async (db) => {
@@ -504,6 +510,69 @@ export function createProvisioner(
             });
             return "delete_uncertain" as const;
           }
+        });
+      },
+      async reconcileDeletion(
+        id: string,
+        authorize: (db: Executor) => Promise<string | false>,
+      ) {
+        return exclusive(id, async () => {
+          async function check(db: Executor, lock = false) {
+            const current = await load(db, id, lock);
+            const [marker] = await rows<{ application_origin: number }>(
+              db,
+              "SELECT application_origin FROM wings_provisions WHERE server_id=?",
+              [id],
+            );
+            if (
+              !current ||
+              !marker?.application_origin ||
+              !fromNode(current) ||
+              !current.document.equals(Buffer.from(disposableEgg))
+            )
+              throw new ProvisionError(404, "fixture_not_found");
+            if (current.phase !== "delete_uncertain")
+              throw new ProvisionError(
+                409,
+                "delete_reconciliation_not_applicable",
+              );
+          }
+          await check(pool);
+          const observed = await observe(id);
+          let verified = false;
+          if (observed.presence === "absent" && verifyApplicationDeletion) {
+            try {
+              verified = (await verifyApplicationDeletion(id)) === true;
+            } catch {
+              /* fail closed */
+            }
+          }
+          return transaction(pool, async (db) => {
+            const actor = await authorize(db);
+            if (!actor) return null;
+            await check(db, true);
+            await db.execute(
+              "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,?,?)",
+              [
+                actor,
+                `wings.application_delete_reconcile_${observed.presence}`,
+                id,
+              ],
+            );
+            if (verified)
+              await releaseApplicationAllocation(
+                db,
+                id,
+                actor,
+                "delete_uncertain",
+              );
+            return {
+              phase: verified ? "deleted" : "delete_uncertain",
+              ...observed,
+              cleanup_verified: verified,
+              allocation_released: verified,
+            };
+          });
         });
       },
       async probe(id: string) {

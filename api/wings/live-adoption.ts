@@ -7,7 +7,8 @@ import { readLegacySnapshot } from "../import/legacy-snapshot";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { copyFile, readFile, writeFile } from "node:fs/promises";
+import { copyFile, lstat, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import Fastify from "fastify";
 import { createApp } from "../app";
@@ -15,7 +16,7 @@ import { rows, stagingPool } from "../db";
 import { canServer } from "../policy";
 import { migrate } from "../migrate";
 import { cryptoContext } from "../security";
-import { WingsClient, WingsUnavailable } from "./client";
+import { UUID_V4, WingsClient, WingsUnavailable } from "./client";
 import { lifecycleFixture } from "./lifecycle-fixture";
 import { disposableEgg } from "./provision";
 import { registerRemote } from "./remote";
@@ -122,6 +123,33 @@ async function main() {
   let interceptedDispatches = 0;
   let blockNextApplicationDelete: string | undefined;
   let interceptedDeletes = 0;
+  let heldDelete: (() => Promise<Response>) | undefined;
+  let deletionEvidenceAvailable = false;
+  let deletionEvidenceChecks = 0;
+  async function verifyApplicationDeletion(id: string) {
+    deletionEvidenceChecks++;
+    const root = process.env.RELAY_WINGS_CONTRACT_DATA;
+    if (
+      !deletionEvidenceAvailable ||
+      !root ||
+      !UUID_V4.test(id) ||
+      !(await lstat(root)).isDirectory()
+    )
+      return false;
+    const target = join(root, id);
+    try {
+      await lstat(target);
+      return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
+    }
+    const containers = await docker(
+      "docker",
+      ["ps", "-a", "-q", "--filter", `name=^/${id}$`],
+      { timeout: 5000 },
+    );
+    return containers.stdout.trim() === "";
+  }
   const applicationDispatchRequest: typeof fetch = async (input, init) => {
     if (blockNextApplicationDelete && init?.method === "DELETE") {
       assert.equal(
@@ -130,6 +158,8 @@ async function main() {
       );
       blockNextApplicationDelete = undefined;
       interceptedDeletes++;
+      heldDelete = () =>
+        fetch(input, { ...init, signal: AbortSignal.timeout(5000) });
       throw new Error("Disposable delete transport timeout");
     }
     if (!interceptNextApplicationCreate) return fetch(input, init);
@@ -156,7 +186,9 @@ async function main() {
       catalogNodeKey: key,
       allowedCatalogNodeOrigins: [configured.origin],
       wingsTestNode: configured,
-      ...(configured === node ? { applicationDispatchRequest } : {}),
+      ...(configured === node
+        ? { applicationDispatchRequest, verifyApplicationDeletion }
+        : {}),
       enableDisposableProvisioning: true,
       deliverReset: mail.deliverReset,
     });
@@ -1232,12 +1264,14 @@ async function main() {
           return result.json<{ token: string }>().token;
         };
         try {
-          const [writer, reader, reconciler, deleter] = await Promise.all([
-            newKey(true),
-            newKey(false),
-            newKey(false, true),
-            newKey(false, false, true),
-          ]);
+          const [writer, reader, reconciler, deleter, deletionReconciler] =
+            await Promise.all([
+              newKey(true),
+              newKey(false),
+              newKey(false, true),
+              newKey(false, false, true),
+              newKey(false, true, true),
+            ]);
           const [nodeRow] = await rows<{ id: number }>(
             pool,
             "SELECT application_id AS id FROM nodes WHERE id=?",
@@ -1549,6 +1583,108 @@ async function main() {
             [late.uuid],
           );
           assert.equal(deletes.length, 1);
+          const reconcileDeletion = (key = deletionReconciler) =>
+            appRequest(
+              base,
+              `${appServerPath}/${late.id}/reconcile-deletion`,
+              key,
+              undefined,
+              "POST",
+            );
+          assert.equal((await reconcileDeletion(reconciler)).status, 403);
+          assert.equal((await reconcileDeletion(deleter)).status, 403);
+          const inspectDeletion = async () => {
+            const response = await reconcileDeletion();
+            assert.equal(response.status, 200);
+            return (
+              (await response.json()) as {
+                object: string;
+                attributes: Record<string, unknown>;
+              }
+            ).attributes;
+          };
+          const expected = (presence: string, verified: boolean) => ({
+            uuid: late.uuid,
+            phase: verified ? "deleted" : "delete_uncertain",
+            presence,
+            state: presence === "present" ? "offline" : null,
+            cleanup_verified: verified,
+            allocation_released: verified,
+          });
+          assert.deepEqual(await inspectDeletion(), expected("present", false));
+          assert.equal(deletionEvidenceChecks, 0);
+          const deliver = heldDelete;
+          heldDelete = undefined;
+          assert.ok(deliver);
+          // Send the original captured DELETE exactly once. Relay never sees the result.
+          const lost = await deliver();
+          assert.equal(lost.status, 204);
+          await lost.body?.cancel();
+          assert.deepEqual(await inspectDeletion(), expected("absent", false));
+          assert.equal(deletionEvidenceChecks, 1);
+          assert.equal(
+            (
+              await post(
+                writer,
+                createBody(
+                  ownerRow.id,
+                  eggRow.id,
+                  late.allocation,
+                  "cannot-reuse-404-alone",
+                ),
+              )
+            ).status,
+            409,
+          );
+          deletionEvidenceAvailable = true;
+          await until("deleted fixture volume and container absent", () =>
+            verifyApplicationDeletion(late.uuid),
+          );
+          assert.deepEqual(await inspectDeletion(), expected("absent", true));
+          assert.equal((await detail(late.id)).status, 404);
+          assert.equal((await reconcileDeletion()).status, 404);
+          assert.equal(
+            (
+              await rows(
+                pool,
+                "SELECT id FROM audit_log WHERE event='wings.application_delete_requested' AND subject_id=?",
+                [late.uuid],
+              )
+            ).length,
+            1,
+          );
+          assert.equal(
+            (
+              await rows(
+                pool,
+                "SELECT id FROM audit_log WHERE event='wings.application_deleted' AND subject_id=?",
+                [late.uuid],
+              )
+            ).length,
+            1,
+          );
+          const afterRecovery = await post(
+            writer,
+            createBody(
+              ownerRow.id,
+              eggRow.id,
+              late.allocation,
+              "reused-after-delete-reconciliation",
+            ),
+          );
+          assert.equal(afterRecovery.status, 201);
+          const recovered = ((await afterRecovery.json()) as AppFixture)
+            .attributes;
+          assert.notEqual(recovered.uuid, late.uuid);
+          assert.equal(recovered.allocation, late.allocation);
+          await until(
+            "reconciled allocation replacement installed",
+            async () =>
+              ((await (await detail(recovered.id)).json()) as AppFixture)
+                .attributes.status === null,
+          );
+          assert.equal((await destroy(recovered.id)).status, 204);
+          assert.equal(await checksum(), otherBefore);
         } finally {
           await pool.execute(
             "UPDATE users SET is_admin=FALSE WHERE email='outsider@example.test'",

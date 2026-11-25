@@ -58,6 +58,16 @@ export function registerApplicationInventory(
       id: string,
       authorize: (db: Executor) => Promise<string | false>,
     ): Promise<"denied" | "deleted" | "delete_uncertain">;
+    reconcileDeletion(
+      id: string,
+      authorize: (db: Executor) => Promise<string | false>,
+    ): Promise<{
+      phase: string;
+      presence: string;
+      state: string | null;
+      cleanup_verified: boolean;
+      allocation_released: boolean;
+    } | null>;
     probe(id: string): Promise<{
       presence: "present" | "absent" | "unreachable";
       state: string | null;
@@ -333,6 +343,65 @@ export function registerApplicationInventory(
       } catch (error) {
         if (error instanceof ProvisionError)
           return deny(reply, error.status, "ProvisionException", error.code);
+        throw error;
+      }
+    },
+  );
+  app.post<{ Params: { id: string }; Querystring: Record<string, unknown> }>(
+    `${path}/:id/reconcile-deletion`,
+    {
+      bodyLimit: 1024,
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+    },
+    async (req, reply) => {
+      const auth = req.headers.authorization ?? "";
+      const authBoth = async (db: Executor) => {
+        if (!(await authorize(db, auth, reply, "reconcile_servers")))
+          return false;
+        return authorize(db, auth, reply, "delete_servers");
+      };
+      if (!(await authBoth(pool))) return reply;
+      if (Object.keys(req.query).length || req.body !== undefined)
+        return deny(
+          reply,
+          400,
+          "BadRequestHttpException",
+          "Reconciliation takes no input.",
+        );
+      const id = Number(req.params.id);
+      const [server] =
+        /^[1-9]\d{0,9}$/.test(req.params.id) && validId(id)
+          ? await rows<{ uuid: string }>(
+              pool,
+              "SELECT id AS uuid FROM servers WHERE application_id=?",
+              [id],
+            )
+          : [];
+      if (!server || !create)
+        return deny(
+          reply,
+          404,
+          "NotFoundHttpException",
+          "Application fixture not found.",
+        );
+      try {
+        const result = await create.reconcileDeletion(server.uuid, authBoth);
+        return result
+          ? {
+              object: "server_deletion_reconciliation",
+              attributes: { uuid: server.uuid, ...result },
+            }
+          : reply;
+      } catch (error) {
+        if (error instanceof ProvisionError)
+          return deny(
+            reply,
+            error.status,
+            error.status === 409
+              ? "ConflictHttpException"
+              : "ProvisionException",
+            error.code,
+          );
         throw error;
       }
     },

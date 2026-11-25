@@ -38,6 +38,7 @@ export type Options = {
   deliverReset: (message: ResetMessage) => Promise<void>;
   wingsTestNode?: WingsNode;
   applicationDispatchRequest?: typeof fetch;
+  verifyApplicationDeletion?: (id: string) => Promise<boolean>;
   enableDisposableProvisioning?: boolean;
   catalogNodeKey?: Buffer;
   allowedCatalogNodeOrigins?: readonly string[];
@@ -103,6 +104,7 @@ export async function createApp({
   deliverReset,
   wingsTestNode,
   applicationDispatchRequest,
+  verifyApplicationDeletion,
   enableDisposableProvisioning,
   catalogNodeKey,
   allowedCatalogNodeOrigins,
@@ -133,6 +135,7 @@ export async function createApp({
           pepper,
           origin,
           applicationDispatchRequest,
+          verifyApplicationDeletion,
         )
       : undefined;
   const receiver =
@@ -192,8 +195,9 @@ export async function createApp({
       !(
         ((req.method === "POST" &&
           (req.routeOptions.url === "/api/application/servers" ||
+            req.routeOptions.url === "/api/application/servers/:id/reconcile" ||
             req.routeOptions.url ===
-              "/api/application/servers/:id/reconcile")) ||
+              "/api/application/servers/:id/reconcile-deletion")) ||
           (req.method === "DELETE" &&
             req.routeOptions.url === "/api/application/servers/:id")) &&
         req.headers.origin === undefined &&
