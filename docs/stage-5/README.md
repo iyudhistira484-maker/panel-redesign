@@ -47,3 +47,9 @@ Cuplikan kini juga mengenali pesan konstan `RELAY_DIAGNOSTIC runtime=ready confi
 **Detail server → Baca aktivitas server** menampilkan hingga 100 event audit terbaru dari backend, dengan nama tampilan pelaku jika tersedia dan waktu kejadian. Izin baca mengikuti endpoint aktivitas yang sudah ada: pemilik, admin, atau subuser dengan `activity.read`. Permintaan Start/Stop dan hasil tidak diketahui adalah event berbeda; riwayat tidak menganggap HTTP 202 sebagai keberhasilan.
 
 [CI 45538583110](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45538583110) lulus seluruh 14 job. Chromium dengan Wings sungguhan menampilkan riwayat untuk pemilik dan subuser `activity.read`, termasuk hasil Start yang tidak diketahui saat daemon dijeda. Pengujian HTTPS dengan sesi asli juga membuktikan akun tanpa izin mendapat 404.
+
+## Penutupan cakupan UI staging
+
+Pengujian Chromium pada 360px dan 1280px memeriksa detail terpadu: tombol dapat dibuka dengan Enter/Spasi, Tab mencapai kontrol status, nama panjang tidak menimbulkan overflow horizontal, dan metrik, konsol serta aktivitas dari server lama hilang ketika berpindah server atau logout. Tes tata letak memakai respons API terkontrol; kontrak browser dengan Wings sungguhan tetap dijalankan terpisah dan mencakup Start/Stop, outage, metrik, konsol dan aktivitas. Job `verify` dan `legacy-panel` [CI 45539442943](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45539442943) lulus. Matriks keseluruhan tidak hijau: `same-pair` gagal pada run ini.
+
+Cakupan UI staging yang disepakati untuk Tahap 5 selesai. Ini bukan klaim audit aksesibilitas penuh atau persetujuan cutover produksi. Tahap 6 akan menangani pengelolaan subuser dan pencabutan izin dari UI.
