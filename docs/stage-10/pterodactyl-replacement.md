@@ -11,7 +11,7 @@ Target: Relay mengambil alih fungsi Panel Pterodactyl; Wings tetap menjalankan w
 
 ## Urutan kerja
 
-1. Tutup uji HTTP staging: baca checkpoint, tulis, baca ulang setelah restart. Verifikasi dari client lain dalam jaringan staging, bukan hanya dari dalam workload.
+1. **Lulus di staging:** [uji HTTP lintas runner](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45657665682) membuktikan baca checkpoint, tulis, dan baca ulang setelah restart dari client lain di jaringan staging. Bukti terbatas pada fixture HTTP sintetis.
 2. Pilih satu workload staging representatif dan buat daftar fitur yang digunakan berdasarkan [inventaris Client](../stage-0/api-client.md), [Application](../stage-0/api-application.md), dan [checklist upstream](../stage-0/parity.md). Tandai tiap fitur **terbukti**, **belum diuji**, **belum tersedia**, atau **tidak digunakan**. Jangan menandai kemampuan Relay hanya karena endpoint upstream tercatat.
 3. Uji migrasi dan rollback workload itu sebelum menjadwalkan produksi. Catat batas downtime/kehilangan data, langkah penerapan ulang pencabutan akses, penanggung jawab, dan mekanisme observasi layanan. Jalankan backup/restore dan rollback sebagai latihan operasi, bukan sekadar proses CI hijau.
 4. Jika semua fitur yang diperlukan lulus dan pemilik menyetujui, pilot produksi satu server berisiko rendah; Pterodactyl tetap tersedia untuk rollback. Perlu persetujuan eksplisit sebelum rollout. Migrasi bertahap setelah pilot stabil. Untuk mengklaim **setara penuh**, tuntaskan pula fitur upstream di luar cakupan pilot atau dokumentasikan pengecualiannya.
