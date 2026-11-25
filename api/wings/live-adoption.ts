@@ -718,16 +718,19 @@ async function main() {
           clientDownload?: boolean;
           clientEditFile?: boolean;
           clientUploadFile?: boolean;
+          clientDeleteFile?: boolean;
         } = {},
       ) {
         const key = `rly_${randomBytes(32).toString("base64url")}`;
         const result = await relay.inject({
           method: "POST",
-          remoteAddress: fileScopes.clientUploadFile
-            ? "127.0.0.9"
-            : fileScopes.clientEditFile
-              ? "127.0.0.8"
-              : "127.0.0.1",
+          remoteAddress: fileScopes.clientDeleteFile
+            ? "127.0.0.10"
+            : fileScopes.clientUploadFile
+              ? "127.0.0.9"
+              : fileScopes.clientEditFile
+                ? "127.0.0.8"
+                : "127.0.0.1",
           url: "/api/v1/account/keys",
           headers: { ...headers, ...session },
           payload: {
@@ -2168,6 +2171,121 @@ async function main() {
           "extra.txt",
         ])
           assert.ok(!names.includes(rejected));
+        const deleteKey = await issueKey(ownerSession, false, false, false, {
+          clientDeleteFile: true,
+        });
+        const deleteFiles = (
+          base: string,
+          key: string,
+          files: string[],
+          root = directory,
+        ) =>
+          fetch(`${base}/api/client/servers/${identifier}/files/delete`, {
+            method: "POST",
+            headers: { ...auth(key), "content-type": "application/json" },
+            body: JSON.stringify({ root, files }),
+          });
+        for (const denied of [uploadKey, editKey, downloadKey])
+          assert.equal(
+            (await deleteFiles(relayBase, denied, [relayName])).status,
+            403,
+          );
+        for (const target of ["example.txt", "link.txt", legacyName])
+          assert.equal(
+            (await deleteFiles(relayBase, deleteKey, [target])).status,
+            404,
+          );
+        assert.equal(
+          (await deleteFiles(relayBase, deleteKey, [relayName, legacyName]))
+            .status,
+          400,
+        );
+        assert.equal(
+          (await deleteFiles(relayBase, deleteKey, ["fixture-docs"], "/"))
+            .status,
+          400,
+        );
+        assert.equal(
+          (await deleteFiles(relayBase, deleteKey, ["../example.txt"])).status,
+          400,
+        );
+        const secondWings = clientFor(second);
+        const isolated = "Other server must survive\r\n";
+        await secondWings.uploadFixtureText(second, relayName, isolated);
+        await wingClient.uploadFixtureText(
+          uuid,
+          relayName,
+          "Externally changed",
+        );
+        assert.equal(
+          (await deleteFiles(relayBase, deleteKey, [relayName])).status,
+          409,
+        );
+        assert.deepEqual(
+          await wingClient.fixtureDownload(uuid, ["fixture-docs"], relayName),
+          Buffer.from("Externally changed"),
+        );
+        await wingClient.uploadFixtureText(uuid, relayName, payload);
+        assert.equal(
+          (await deleteFiles(legacyBase, legacyKey, [legacyName])).status,
+          204,
+        );
+        assert.equal(
+          await wingClient.fixtureUploadTargetExists(uuid, legacyName),
+          false,
+        );
+        const neighboring = await wingClient.fixtureDownload(
+          uuid,
+          ["fixture-docs"],
+          "binary.txt",
+        );
+        assert.equal(
+          (await deleteFiles(relayBase, deleteKey, [relayName])).status,
+          204,
+        );
+        assert.equal(
+          await wingClient.fixtureUploadTargetExists(uuid, relayName),
+          false,
+        );
+        assert.equal(
+          (
+            await fileApi(
+              relayBase,
+              downloadKey,
+              "download",
+              `${directory}/${relayName}`,
+            )
+          ).status,
+          404,
+        );
+        assert.equal(
+          (await deleteFiles(relayBase, deleteKey, [relayName])).status,
+          404,
+        );
+        assert.deepEqual(
+          (await readFixture(relayBase, editKey)).bytes,
+          originalText.bytes,
+        );
+        assert.deepEqual(
+          await wingClient.fixtureDownload(
+            uuid,
+            ["fixture-docs"],
+            "binary.txt",
+          ),
+          neighboring,
+        );
+        assert.equal(
+          await wingClient.fixtureUploadTargetExists(uuid, "link.txt"),
+          true,
+        );
+        assert.deepEqual(
+          await secondWings.fixtureDownload(
+            second,
+            ["fixture-docs"],
+            relayName,
+          ),
+          Buffer.from(isolated),
+        );
         await new Promise((resolve) => setTimeout(resolve, 15_100));
         assert.equal(
           (await sendUpload(expiredUpload, "expired.txt", payload)).status,

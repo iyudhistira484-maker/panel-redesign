@@ -349,7 +349,11 @@ export function createProvisioner(
       }
     });
   }
-  async function uploadAllowed(id: string, actor: Actor) {
+  async function ownerFileScope(
+    id: string,
+    actor: Actor,
+    scope: "upload" | "delete",
+  ) {
     const server = await load(pool, id);
     if (
       !server ||
@@ -365,12 +369,14 @@ export function createProvisioner(
       (
         await rows(
           pool,
-          "SELECT id FROM api_keys WHERE id=? AND user_id=? AND client_upload_file=TRUE AND expires_at>UTC_TIMESTAMP(3)",
+          `SELECT id FROM api_keys WHERE id=? AND user_id=? AND ${scope === "upload" ? "client_upload_file" : "client_delete_file"}=TRUE AND expires_at>UTC_TIMESTAMP(3)`,
           [actor.keyId, actor.id],
         )
       ).length === 1
     );
   }
+  const uploadAllowed = (id: string, actor: Actor) =>
+    ownerFileScope(id, actor, "upload");
   return {
     provider,
     async files(
@@ -420,6 +426,63 @@ export function createProvisioner(
     },
     editFixtureText,
     compatFiles: {
+      async deleteUpload(id: string, actor: Actor, name: string) {
+        return exclusive(id, async () => {
+          if (!fixturePathSegment(name) || !name.endsWith(".txt"))
+            throw new ProvisionError(400, "invalid_delete_target");
+          if (!(await ownerFileScope(id, actor, "delete")))
+            throw new ProvisionError(403, "delete_scope_required");
+          const [record] = await rows<{ digest: string }>(
+            pool,
+            "SELECT digest FROM client_uploaded_files WHERE server_id=? AND name=?",
+            [id, name],
+          );
+          if (!record) throw new ProvisionError(404, "upload_not_found");
+          if ((await client.state(id)) !== "offline")
+            throw new ProvisionError(409, "server_not_offline");
+          const current = await client.fixtureDownload(
+            id,
+            ["fixture-docs"],
+            name,
+          );
+          if (
+            createHash("sha256").update(current).digest("hex") !== record.digest
+          )
+            throw new ProvisionError(409, "uploaded_file_changed");
+          if (!(await ownerFileScope(id, actor, "delete")))
+            throw new ProvisionError(403, "delete_scope_required");
+          // Consume provenance before dispatch: an uncertain delete must not be replayed.
+          const consumed = await transaction(pool, async (db) => {
+            const [locked] = await rows<{ digest: string }>(
+              db,
+              "SELECT digest FROM client_uploaded_files WHERE server_id=? AND name=? FOR UPDATE",
+              [id, name],
+            );
+            if (locked?.digest !== record.digest) return false;
+            await db.execute(
+              "DELETE FROM client_uploaded_files WHERE server_id=? AND name=?",
+              [id, name],
+            );
+            await db.execute(
+              "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,?,?)",
+              [actor.id, "wings.fixture_file_delete_requested", id],
+            );
+            return true;
+          });
+          if (!consumed) throw new ProvisionError(404, "upload_not_found");
+          try {
+            await client.deleteUploadedFixture(id, name);
+            if (await client.fixtureUploadTargetExists(id, name))
+              throw new ProvisionError(502, "file_delete_unverified");
+          } catch {
+            await pool.execute(
+              "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,?,?)",
+              [actor.id, "wings.fixture_file_delete_unverified", id],
+            );
+            throw new ProvisionError(502, "file_delete_unverified");
+          }
+        });
+      },
       uploadAllowed,
       async upload(
         id: string,
@@ -456,6 +519,10 @@ export function createProvisioner(
             expires <= Date.now()
           )
             throw new ProvisionError(403, "upload_ticket_expired_or_revoked");
+          await pool.execute(
+            "DELETE FROM client_uploaded_files WHERE server_id=? AND name=?",
+            [id, name],
+          );
           await client.uploadFixtureText(id, name, text);
           if (
             !(await client.fixtureDownload(id, ["fixture-docs"], name)).equals(
@@ -463,6 +530,10 @@ export function createProvisioner(
             )
           )
             throw new ProvisionError(502, "file_upload_unverified");
+          await pool.execute(
+            "INSERT INTO client_uploaded_files (server_id,name,digest) VALUES (?,?,?)",
+            [id, name, createHash("sha256").update(bytes).digest("hex")],
+          );
         });
       },
       contents: async (id: string) => {

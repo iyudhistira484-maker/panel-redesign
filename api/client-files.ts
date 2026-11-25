@@ -15,6 +15,7 @@ type Entry = {
   modified_at: unknown;
 };
 export type FileBinding = {
+  deleteUpload(id: string, actor: Actor, name: string): Promise<void>;
   uploadAllowed(id: string, actor: Actor): Promise<boolean>;
   upload(
     id: string,
@@ -263,6 +264,51 @@ export function registerClientFiles(
       },
     );
   });
+  app.post<{
+    Params: { identifier: string };
+    Body: { root?: unknown; files?: unknown };
+  }>(
+    "/api/client/servers/:identifier/files/delete",
+    {
+      bodyLimit: 1024,
+      config: { rateLimit: { max: 12, timeWindow: "1 minute" } },
+    },
+    async (req, reply) => {
+      const actor = await authenticate(req.headers.authorization ?? "");
+      if (!actor) return failure(reply, 401);
+      const server = await resolve(req.params.identifier, actor.id);
+      if (!server) return failure(reply, 404);
+      if (!binding) return failure(reply, 503);
+      const { root, files } = req.body ?? {};
+      if (
+        root !== "/fixture-docs" ||
+        Object.keys(req.body ?? {}).length !== 2 ||
+        !Array.isArray(files) ||
+        files.length !== 1 ||
+        typeof files[0] !== "string" ||
+        !fixturePathSegment(files[0]) ||
+        !files[0].endsWith(".txt")
+      )
+        return failure(reply, 400);
+      try {
+        await binding.deleteUpload(server.id, actor, files[0]);
+        return reply.code(204).send();
+      } catch (error) {
+        if (error instanceof ProvisionError && error.status === 409)
+          return reply.code(409).send({
+            errors: [
+              {
+                code: "ConflictHttpException",
+                status: "409",
+                detail:
+                  "The uploaded file changed or the server is not ready for deletion.",
+              },
+            ],
+          });
+        return textError(error, reply);
+      }
+    },
+  );
   const uploadTickets = new Map<
     string,
     { id: string; actor: Actor; expires: number }

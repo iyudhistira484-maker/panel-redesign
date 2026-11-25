@@ -239,6 +239,17 @@ export class WingsClient {
       throw new WingsUnavailable("payload");
     return entries.some((entry) => entry.name === name);
   }
+  async deleteUploadedFixture(id: string, name: string) {
+    if (!fixturePathSegment(name) || !name.endsWith(".txt"))
+      throw new WingsUnavailable("payload");
+    const response = await this.#send(
+      `${this.#server(id)}/files/delete`,
+      204,
+      "POST",
+      { root: "/fixture-docs", files: [name] },
+    );
+    await response.body?.cancel();
+  }
   async uploadFixtureText(id: string, name: string, text: string) {
     const response = await this.#send(
       `${this.#server(id)}/files/write?file=${encodeURIComponent(`/fixture-docs/${name}`)}`,
