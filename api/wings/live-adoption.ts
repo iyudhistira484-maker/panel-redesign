@@ -776,6 +776,10 @@ async function main() {
             "INSERT INTO server_grants (server_id,user_id,permissions) SELECT ?,id,JSON_ARRAY('activity.read') FROM users WHERE email='collaborator@example.test'",
             [uuid],
           );
+          await pool.execute(
+            "INSERT INTO server_grants (server_id,user_id,permissions) SELECT ?,id,JSON_ARRAY('activity.read','control.stop') FROM users WHERE email='outsider@example.test'",
+            [uuid],
+          );
           try {
             const run = await docker(
               "./node_modules/.bin/playwright",

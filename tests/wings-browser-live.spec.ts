@@ -195,6 +195,17 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   await expect(page.getByText("Akses aktivitas dicabut.")).toBeVisible();
   await page.getByRole("button", { name: "Beri akses aktivitas" }).click();
   await expect(page.getByText("Akses aktivitas diberikan.")).toBeVisible();
+  await page.getByRole("button", { name: "Muat daftar subuser" }).click();
+  const subusers = page.getByRole("list", { name: "Subuser aktif" });
+  const removable = subusers
+    .getByRole("listitem")
+    .filter({ hasText: collaborator });
+  const mixed = subusers
+    .getByRole("listitem")
+    .filter({ hasText: "outsider@example.test" });
+  await expect(removable).toContainText("activity.read");
+  await expect(mixed).toContainText("control.stop");
+  await expect(mixed.getByRole("button")).toHaveCount(0);
   const browser = page.context().browser();
   assert.ok(browser);
   const subuser = await browser.newContext({ ignoreHTTPSErrors: true });
@@ -208,6 +219,11 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
         })
       ).status(),
     ).toBe(200);
+    expect(
+      (
+        await subuser.request.get(`${origin}/api/v1/servers/${id}/subusers`)
+      ).status(),
+    ).toBe(404);
     const history = `${origin}/api/v1/servers/${id}/activity`;
     expect((await subuser.request.get(history)).status()).toBe(200);
     expect(
@@ -227,8 +243,16 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
           })
         ).status(),
       ).toBe(404);
-    await page.getByRole("button", { name: "Cabut akses aktivitas" }).click();
+    await removable
+      .getByRole("button", { name: "Cabut akses", exact: true })
+      .click();
+    expect((await subuser.request.get(history)).status()).toBe(200);
+    await removable
+      .getByRole("button", { name: "Konfirmasi cabut akses" })
+      .click();
     await expect(page.getByText("Akses aktivitas dicabut.")).toBeVisible();
+    await expect(mixed).toContainText("control.stop");
+    await expect(removable).toHaveCount(0);
     expect(
       (await subuser.request.get(`${origin}/api/v1/account`)).status(),
     ).toBe(200);

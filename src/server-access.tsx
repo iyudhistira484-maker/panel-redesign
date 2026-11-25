@@ -2,11 +2,55 @@ import { useId, useState, type FormEvent } from "react";
 import type { Locale } from "./i18n";
 import { Button, TextInput } from "./ui";
 
+type Subuser = { id: string; email: string; permissions: string[] };
+type Snapshot = { items: Subuser[]; truncated: boolean };
 export function ServerAccess({ id, locale }: { id: string; locale: Locale }) {
   const en = locale === "en",
     input = useId();
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
+  const [list, setList] = useState<Snapshot | null>(null);
+  const [listError, setListError] = useState(false);
+  const [confirm, setConfirm] = useState<string | null>(null);
+  const base = `/api/v1/servers/${encodeURIComponent(id)}`;
+  async function readList() {
+    setList(null);
+    setListError(false);
+    try {
+      const response = await fetch(`${base}/subusers`, {
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!response.ok) throw new Error("Subusers unavailable");
+      const data = (await response.json()) as Snapshot;
+      if (
+        !Array.isArray(data?.items) ||
+        data.items.length > 100 ||
+        typeof data.truncated !== "boolean" ||
+        !data.items.every(
+          (row) =>
+            typeof row?.id === "string" &&
+            typeof row.email === "string" &&
+            Array.isArray(row.permissions) &&
+            row.permissions.every((value) => typeof value === "string"),
+        )
+      )
+        throw new Error("Invalid subusers");
+      setList(data);
+    } catch {
+      setListError(true);
+    }
+  }
+  async function load() {
+    setBusy(true);
+    setConfirm(null);
+    try {
+      await readList();
+    } finally {
+      setBusy(false);
+    }
+  }
   const [result, setResult] = useState<"grant" | "revoke" | "error" | null>(
     null,
   );
@@ -15,24 +59,26 @@ export function ServerAccess({ id, locale }: { id: string; locale: Locale }) {
     const action = (event.nativeEvent as SubmitEvent).submitter?.getAttribute(
       "value",
     );
-    if (busy || (action !== "grant" && action !== "revoke")) return;
+    if (action === "grant" || action === "revoke") await change(email, action);
+  }
+  async function change(address: string, action: "grant" | "revoke") {
+    if (busy) return;
+    setConfirm(null);
     setBusy(true);
     setResult(null);
     try {
-      const response = await fetch(
-        `/api/v1/servers/${encodeURIComponent(id)}/activity-access`,
-        {
-          method: "POST",
-          credentials: "same-origin",
-          headers: {
-            "content-type": "application/json",
-            "x-relay-request": "1",
-          },
-          body: JSON.stringify({ email, action }),
-          signal: AbortSignal.timeout(10000),
+      const response = await fetch(`${base}/activity-access`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "content-type": "application/json",
+          "x-relay-request": "1",
         },
-      );
+        body: JSON.stringify({ email: address, action }),
+        signal: AbortSignal.timeout(10000),
+      });
       setResult(response.status === 204 ? action : "error");
+      if (list) await readList();
     } catch {
       setResult("error");
     } finally {
@@ -40,50 +86,111 @@ export function ServerAccess({ id, locale }: { id: string; locale: Locale }) {
     }
   }
   return (
-    <form className="recovery-form" onSubmit={submit} aria-busy={busy}>
-      <h3>{en ? "Manage activity access" : "Kelola akses aktivitas"}</h3>
-      <p>
-        {en
-          ? "Share activity only with an existing account. Other grants are not changed."
-          : "Bagikan akses aktivitas saja ke akun yang sudah ada. Izin lain tidak diubah."}
-      </p>
-      <label htmlFor={input}>{en ? "Subuser email" : "Email subuser"}</label>
-      <TextInput
-        id={input}
-        type="email"
-        required
-        maxLength={254}
-        value={email}
-        onChange={(event) => {
-          setEmail(event.currentTarget.value);
-          setResult(null);
-        }}
-        disabled={busy}
-      />
-      <Button type="submit" value="grant" disabled={busy}>
-        {en ? "Grant activity access" : "Beri akses aktivitas"}
-      </Button>
-      <Button type="submit" value="revoke" disabled={busy}>
-        {en ? "Revoke activity access" : "Cabut akses aktivitas"}
-      </Button>
-      {result === "error" && (
-        <p role="alert">
+    <>
+      <form className="recovery-form" onSubmit={submit} aria-busy={busy}>
+        <h3>{en ? "Manage activity access" : "Kelola akses aktivitas"}</h3>
+        <p>
           {en
-            ? "Access could not be changed. Check the account and its existing grant."
-            : "Akses tidak dapat diubah. Periksa akun dan izin yang sudah ada."}
+            ? "Share activity only with an existing account. Other grants are not changed."
+            : "Bagikan akses aktivitas saja ke akun yang sudah ada. Izin lain tidak diubah."}
         </p>
-      )}
-      {(result === "grant" || result === "revoke") && (
-        <output>
-          {result === "grant"
-            ? en
-              ? "Activity access granted."
-              : "Akses aktivitas diberikan."
-            : en
-              ? "Activity access revoked."
-              : "Akses aktivitas dicabut."}
-        </output>
-      )}
-    </form>
+        <label htmlFor={input}>{en ? "Subuser email" : "Email subuser"}</label>
+        <TextInput
+          id={input}
+          type="email"
+          required
+          maxLength={254}
+          value={email}
+          onChange={(event) => {
+            setEmail(event.currentTarget.value);
+            setResult(null);
+          }}
+          disabled={busy}
+        />
+        <Button type="submit" value="grant" disabled={busy}>
+          {en ? "Grant activity access" : "Beri akses aktivitas"}
+        </Button>
+        <Button type="submit" value="revoke" disabled={busy}>
+          {en ? "Revoke activity access" : "Cabut akses aktivitas"}
+        </Button>
+        {result === "error" && (
+          <p role="alert">
+            {en
+              ? "Access could not be changed. Check the account and its existing grant."
+              : "Akses tidak dapat diubah. Periksa akun dan izin yang sudah ada."}
+          </p>
+        )}
+        {(result === "grant" || result === "revoke") && (
+          <output>
+            {result === "grant"
+              ? en
+                ? "Activity access granted."
+                : "Akses aktivitas diberikan."
+              : en
+                ? "Activity access revoked."
+                : "Akses aktivitas dicabut."}
+          </output>
+        )}
+      </form>
+      <section aria-busy={busy}>
+        <Button onClick={() => void load()} disabled={busy}>
+          {en ? "Load subusers" : "Muat daftar subuser"}
+        </Button>
+        {listError && (
+          <p role="alert">
+            {en ? "Could not load subusers." : "Daftar subuser gagal dimuat."}
+          </p>
+        )}
+        {list?.items.length === 0 && (
+          <output>
+            {en ? "No active subusers." : "Tidak ada subuser aktif."}
+          </output>
+        )}
+        {!!list?.items.length && (
+          <ul aria-label={en ? "Active subusers" : "Subuser aktif"}>
+            {list.items.map((row) => (
+              <li key={row.id}>
+                <strong>{row.email}</strong>
+                <p>{row.permissions.join(", ")}</p>
+                {row.permissions.length === 1 &&
+                  row.permissions[0] === "activity.read" &&
+                  (confirm === row.email ? (
+                    <>
+                      <p>
+                        {en
+                          ? `Revoke activity access for ${row.email}?`
+                          : `Cabut akses aktivitas untuk ${row.email}?`}
+                      </p>
+                      <Button
+                        onClick={() => void change(row.email, "revoke")}
+                        disabled={busy}
+                      >
+                        {en ? "Confirm revocation" : "Konfirmasi cabut akses"}
+                      </Button>
+                      <Button onClick={() => setConfirm(null)} disabled={busy}>
+                        {en ? "Cancel" : "Batal"}
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      onClick={() => setConfirm(row.email)}
+                      disabled={busy}
+                    >
+                      {en ? "Revoke access" : "Cabut akses"}
+                    </Button>
+                  ))}
+              </li>
+            ))}
+          </ul>
+        )}
+        {list?.truncated && (
+          <p>
+            {en
+              ? "Showing the first 100 subusers."
+              : "Menampilkan 100 subuser pertama."}
+          </p>
+        )}
+      </section>
+    </>
   );
 }

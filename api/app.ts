@@ -846,6 +846,46 @@ export async function createApp({
       };
     },
   );
+  app.get<{ Params: { id: string } }>(
+    "/api/v1/servers/:id/subusers",
+    async (req, reply) => {
+      reply.header("cache-control", "no-store");
+      const principal = await actor(
+        req.cookies[sessionCookie],
+        req.headers.authorization,
+      );
+      if (!principal || principal.channel !== "session")
+        return reply.code(401).send({ error: "unauthenticated" });
+      if (!UUID_V4.test(req.params.id))
+        return reply.code(404).send({ error: "not_found" });
+      const result = await rows<{
+        id: string | null;
+        email: string | null;
+        permissions: string[] | string | null;
+      }>(
+        pool,
+        `SELECT u.id,u.email,g.permissions FROM servers s
+      LEFT JOIN server_grants g ON g.server_id=s.id AND JSON_LENGTH(g.permissions)>0
+      LEFT JOIN users u ON u.id=g.user_id
+      WHERE s.id=? AND s.owner_id=? ORDER BY u.email,u.id LIMIT 101`,
+        [req.params.id, principal.id],
+      );
+      if (!result.length) return reply.code(404).send({ error: "not_found" });
+      return {
+        items: result
+          .slice(0, 100)
+          .filter((row) => row.id !== null)
+          .map((row) => ({
+            ...row,
+            permissions:
+              typeof row.permissions === "string"
+                ? JSON.parse(row.permissions)
+                : row.permissions,
+          })),
+        truncated: result.length > 100,
+      };
+    },
+  );
   app.post<{
     Params: { id: string };
     Body: { email: string; action: "grant" | "revoke" };
