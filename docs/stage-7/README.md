@@ -9,3 +9,9 @@ Irisan awal **Detail server → Buka daftar file**: pemilik fixture Wings terpas
 Pemilik bisa membuka file `.txt` reguler hingga 16 KiB dari daftar file. Relay memverifikasi folder dan entri di Wings, membatasi pembacaan aktual, menolak UTF-8 tidak valid dan karakter kontrol biner, lalu mengirim JSON tanpa cache. Browser menampilkan teks literal, bukan HTML. Mengganti file atau folder membersihkan pratinjau lama; berpindah server melepas komponen detail. Tidak ada endpoint unduh, edit, unggah, atau hapus dalam irisan ini.
 
 [CI 45544964048](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45544964048) lulus semua 14 job. Chromium/HTTPS dengan Wings sungguhan membuktikan markup tampil literal dan pembacaan file biner membersihkan pratinjau sebelumnya. Permintaan subuser, symlink, traversal, serta file terlalu besar ditolak. Isolasi filesystem tetap bergantung pada Wings; ini bukan klaim terhadap semua perubahan filesystem serentak.
+
+## Unduhan lampiran teks
+
+**Unduh file teks** mengambil byte asli file `.txt` yang sudah lolos validasi pratinjau (maksimal 16 KiB). API mengirim lampiran `application/octet-stream` dengan `nosniff` dan `no-store`; tidak melakukan konversi encoding. Tidak ada penambahan akses tulis.
+
+[CI 45548625075](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45548625075) lulus 14 job. Chromium membandingkan byte dari file tersimpan dengan fixture Wings, serta menolak subuser, symlink, traversal, dan file di atas batas. Uji API dua node Wings menggunakan `example.txt` dengan byte berbeda dan membuktikan masing-masing binding mengembalikan file yang benar (termasuk BOM dan CRLF pada server kedua), sementara binding salah menolak.
