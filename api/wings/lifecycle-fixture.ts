@@ -2,7 +2,13 @@ import { randomUUID } from "node:crypto";
 import type { ContractWorkload } from "./remote";
 export function lifecycleFixture(
   onResult: ContractWorkload["installed"],
-  server: { uuid: string; port: number; name: string; eggId: string } = {
+  server: {
+    uuid: string;
+    port: number;
+    name: string;
+    eggId: string;
+    diskMiB?: number;
+  } = {
     uuid: randomUUID(),
     port: 25610,
     name: "Relay CI fixture",
@@ -27,7 +33,7 @@ export function lifecycleFixture(
           swap: 0,
           io_weight: 500,
           cpu_limit: 50,
-          disk_space: 64,
+          disk_space: server.diskMiB ?? 64,
           oom_disabled: false,
         },
         container: {

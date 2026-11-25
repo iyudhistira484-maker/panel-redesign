@@ -146,7 +146,17 @@ export function createProvisioner(
       result,
     ) => installStatus(s, result);
     if (s.document.equals(approvedDocuments[0]))
-      return lifecycleFixture(installed, s);
+      return lifecycleFixture(installed, {
+        ...s,
+        diskMiB:
+          process.env.RELAY_BOOTSTRAP_SCENARIO === "offhost-restore" &&
+          process.env.RELAY_DISPOSABLE_WINGS_CI === "1" &&
+          process.env.RUNNER_ENVIRONMENT === "github-hosted" &&
+          process.env.GITHUB_EVENT_NAME === "workflow_dispatch" &&
+          process.env.GITHUB_WORKFLOW === "Relay Wings off-host staging"
+            ? 256
+            : 64,
+      });
     if (s.document.equals(Buffer.from(mumbleEgg)))
       return upstreamWorkload(installed, s, s.mumbleMaxUsers);
     const profile =
