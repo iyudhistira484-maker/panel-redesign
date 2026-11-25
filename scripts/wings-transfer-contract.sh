@@ -142,3 +142,9 @@ if ! wait "$pid"; then
   done
   exit 1
 fi
+if [[ "${RELAY_TRANSFER_SCENARIO:-}" == corrupt-archive ]]; then
+  # Confirm the real receiver refused the checksum, not authorization or extraction.
+  receiver_log=$(docker logs "$dst" 2>&1)
+  grep -qF "checksums don't match" <<< "$receiver_log"
+  echo 'Wings receiver rejected the deliberately changed gzip header checksum'
+fi
