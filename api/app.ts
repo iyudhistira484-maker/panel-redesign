@@ -6,6 +6,7 @@ import {
 } from "./wings/transfer-receiver";
 import { createProvisioner, ProvisionError } from "./wings/provision";
 import { registerCatalog, type FixtureTransfer } from "./catalog/routes";
+import { stagingSftpAuth } from "./wings/sftp-auth";
 import { registerRemote } from "./wings/remote";
 import { UUID_V4, type WingsNode } from "./wings/client";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -1478,6 +1479,13 @@ export async function createApp({
           undefined,
           receiver?.provider ?? provisioner?.provider,
           receiver?.onTransfer,
+          provisioner &&
+            catalogNodeKey &&
+            process.env.RELAY_DISPOSABLE_WINGS_CI === "1" &&
+            process.env.RUNNER_ENVIRONMENT === "github-hosted" &&
+            process.env.RELAY_BOOTSTRAP_SCENARIO === "legacy-panel"
+            ? stagingSftpAuth(pool, wingsTestNode, catalogNodeKey, pepper)
+            : undefined,
         ),
       { prefix: "/api/remote" },
     );

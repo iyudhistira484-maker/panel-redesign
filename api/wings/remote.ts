@@ -1,3 +1,4 @@
+import type { stagingSftpAuth } from "./sftp-auth";
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { UUID_V4, validateNode, type WingsNode } from "./client";
@@ -38,6 +39,7 @@ export async function registerRemote(
   fixture?: ContractWorkload,
   provider?: WorkloadProvider,
   onTransfer?: (id: string, successful: boolean) => boolean | Promise<boolean>,
+  authenticateSftp?: ReturnType<typeof stagingSftpAuth>,
 ) {
   if (fixture && !UUID_V4.test(fixture.uuid))
     throw new Error("Invalid test fixture UUID");
@@ -47,6 +49,34 @@ export async function registerRemote(
     if (!timingSafeEqual(expected, digest(req.headers.authorization ?? "")))
       return reply.code(401).send({ error: "node_unauthorized" });
   });
+  if (authenticateSftp)
+    app.post<{ Body: { type: string; username: string; password: string } }>(
+      "/sftp/auth",
+      {
+        bodyLimit: 8192,
+        config: { rateLimit: { max: 12, timeWindow: "1 minute" } },
+        schema: {
+          body: {
+            type: "object",
+            additionalProperties: false,
+            required: ["type", "username", "password"],
+            properties: {
+              type: { type: "string", enum: ["password", "public_key"] },
+              username: { type: "string", maxLength: 228 },
+              password: { type: "string", minLength: 1, maxLength: 4096 },
+              ip: { type: "string", maxLength: 64 },
+              session_id: { type: "string", maxLength: 1024 },
+              client_version: { type: "string", maxLength: 1024 },
+            },
+          },
+        },
+      },
+      async (req, reply) => {
+        reply.header("cache-control", "no-store");
+        const approved = await authenticateSftp(req.body);
+        return approved ?? reply.code(403).send({ error: "sftp_denied" });
+      },
+    );
   app.get<{ Querystring: { page?: string; per_page?: string } }>(
     "/servers",
     {

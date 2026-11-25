@@ -7,7 +7,7 @@ import { readLegacySnapshot } from "../import/legacy-snapshot";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { copyFile, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import Fastify from "fastify";
 import { createApp } from "../app";
@@ -1056,6 +1056,88 @@ async function main() {
       assert.deepEqual(await relayAccount.json(), await legacyAccount.json());
       assert.equal(anonymousAccount.statusCode, 401);
       assert.equal(otherAccount.statusCode, 404);
+      const authRequest = (token: string, body: object) =>
+        relay.inject({
+          method: "POST",
+          url: "/api/remote/sftp/auth",
+          headers: { authorization: token },
+          payload: body,
+        });
+      const validSftp = {
+        type: "password",
+        username: `${profile.username}.${uuid.slice(0, 8)}`,
+        password,
+      };
+      const nodeBearer = `Bearer ${node.tokenId}.${node.token}`;
+      assert.equal(
+        (await authRequest("Bearer wrong", validSftp)).statusCode,
+        401,
+      );
+      assert.equal(
+        (await authRequest(nodeBearer, { ...validSftp, password: "incorrect" }))
+          .statusCode,
+        403,
+      );
+      assert.equal(
+        (await authRequest(nodeBearer, { ...validSftp, type: "public_key" }))
+          .statusCode,
+        403,
+      );
+      assert.equal(
+        (
+          await authRequest(nodeBearer, {
+            ...validSftp,
+            username: `${profile.username}.${second?.slice(0, 8)}`,
+          })
+        ).statusCode,
+        403,
+      );
+      const sftpWork = await mkdtemp("/tmp/relay-sftp-");
+      try {
+        const askpass = `${sftpWork}/askpass`;
+        await writeFile(
+          askpass,
+          '#!/bin/sh\nprintf "%s\\n" "$RELAY_FIXTURE_SFTP_PASSWORD"\n',
+          { mode: 0o700 },
+        );
+        try {
+          await docker(
+            "bash",
+            [
+              "-ec",
+              `printf 'get fixture-docs/example.txt received.txt\nput received.txt unwanted.txt\nbye\n' |
+            sftp -q -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=known_hosts -o PreferredAuthentications=password -o PubkeyAuthentication=no -o NumberOfPasswordPrompts=1 -P 12022 "$1"`,
+              "sftp",
+              `${validSftp.username}@127.0.0.1`,
+            ],
+            {
+              cwd: sftpWork,
+              timeout: 10000,
+              env: {
+                ...process.env,
+                DISPLAY: ":0",
+                SSH_ASKPASS_REQUIRE: "force",
+                SSH_ASKPASS: askpass,
+                RELAY_FIXTURE_SFTP_PASSWORD: password,
+              },
+            },
+          );
+        } catch {
+          throw new Error("Disposable OpenSSH SFTP transfer did not complete");
+        }
+        assert.deepEqual(
+          await readFile(`${sftpWork}/received.txt`),
+          await client.fixtureDownload(uuid, ["fixture-docs"], "example.txt"),
+        );
+        assert.equal(
+          (await client.fixtureDirectory(uuid, [])).some(
+            (entry) => entry.name === "unwanted.txt",
+          ),
+          false,
+        );
+      } finally {
+        await rm(sftpWork, { recursive: true, force: true });
+      }
       const permissionPath = "/api/client/permissions";
       const [legacyPermissions, relayPermissions, unauthenticatedPermissions] =
         await Promise.all([
