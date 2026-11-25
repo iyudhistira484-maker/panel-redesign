@@ -1,3 +1,4 @@
+import { SignIn } from "./sign-in";
 import { PasswordRecovery } from "./reset-password";
 import { AuthFlow } from "./auth-flow";
 import { useEffect, useId, useState } from "react";
@@ -408,19 +409,7 @@ function App() {
           {brand}
           {page === "authView" ? (
             <>
-              <h1>{t("auth")}</h1>
-              <p>{t("authDesc")}</p>
-              <fieldset disabled>
-                <label htmlFor={`${contentId}-email`}>
-                  {t("email")}
-                  <TextInput id={`${contentId}-email`} type="email" />
-                </label>
-                <label htmlFor={`${contentId}-password`}>
-                  {t("password")}
-                  <TextInput id={`${contentId}-password`} type="password" />
-                </label>
-                <Button variant="primary">{t("auth")}</Button>
-              </fieldset>
+              <SignIn locale={locale} />
               <a className="button ghost" href="#forgot-password">
                 {locale === "id" ? "Lupa kata sandi" : "Forgot password"}
               </a>
