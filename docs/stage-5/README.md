@@ -35,3 +35,9 @@ Kode penerima Wings v1.13.5 menghitung SHA-256 lewat `TeeReader` selama ekstraks
 ### Penolakan arsip rusak oleh Wings sungguhan
 
 [CI 45537149484](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45537149484) lulus seluruh 14 job. `corrupt-archive` mengubah satu byte MTIME header gzip pada multipart dari pengirim resmi, tanpa mengubah checksum. Perubahan tidak menghalangi ekstraksi, tetapi receiver berpatch mengembalikan HTTP 500, mencatat `checksums don't match`, dan mengirim callback kegagalan. Server tidak tersedia di tujuan. Rekonsiliasi menempatkan transfer ke `uncertain` tanpa finalisasi atau pengiriman ulang, mempertahankan node/alokasi sumber dan reservasi tujuan, serta memverifikasi bahwa file penanda sumber tetap sama. Skenario `reported` adalah pembanding transfer valid. Bukti ini melengkapi reproduksi Go, bukan persetujuan deployment patch atau pengajuan upstream.
+
+### Diagnostik yang diizinkan
+
+Cuplikan kini juga mengenali pesan konstan `RELAY_DIAGNOSTIC runtime=ready config=loaded` dari fixture adopsi. Filter kecocokan persis menolak varian yang membawa suffix, termasuk token sintetis uji, sebelum respons mencapai browser. Batas tetap 20 baris; tidak ada log mentah atau klaim penyamaran rahasia umum. [CI 45537872126](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45537872126) lulus seluruh 14 job, dengan browser/Wings membuktikan tampilan diagnostik, pemeriksaan payload dan DOM untuk token sintetis, penolakan subuser, serta pembersihan hasil saat daemon tidak merespons.
+
+[Draf laporan upstream checksum](../../patches/wings/UPSTREAM.md) siap ditinjau; belum dikirim.
