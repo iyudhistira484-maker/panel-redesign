@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { legacyPreflight } from "../import/legacy-preflight";
 import { stagingMail } from "../staging-mail";
 import { applyLegacyFixture } from "../import/legacy-fixture-apply";
@@ -677,6 +678,147 @@ async function main() {
       const collaborator = await activate("collaborator@example.test");
       const outsider = await activate("outsider@example.test");
       const ownerSession = await activate("adoption@example.test");
+      type Integration = {
+        getAllServers(): Promise<{
+          object: string;
+          data: {
+            object: string;
+            attributes: {
+              uuid: string;
+              name: string;
+              identifier: string;
+              server_owner: boolean;
+            };
+          }[];
+          meta: { pagination: { total: number } };
+        }>;
+        getServerDetails(id: string): Promise<{ uuid: string; name: string }>;
+        getServerPage(page: number): Promise<unknown[]>;
+      };
+      const { NodeactylClient } = createRequire(import.meta.url)(
+        "nodeactyl",
+      ) as { NodeactylClient: new (url: string, key: string) => Integration };
+      async function issueKey(session: typeof ownerSession) {
+        const key = `rly_${randomBytes(32).toString("base64url")}`;
+        const result = await relay.inject({
+          method: "POST",
+          url: "/api/v1/account/keys",
+          headers: { ...headers, ...session },
+          payload: { label: "Disposable client comparison", key },
+        });
+        assert.equal(result.statusCode, 201);
+        return `${key}.${result.json<{ suffix: string }>().suffix}`;
+      }
+      const [relayKey, sharedKey, outsiderKey, legacyKeyResult] =
+        await Promise.all([
+          issueKey(ownerSession),
+          issueKey(collaborator),
+          issueKey(outsider),
+          docker(
+            "docker",
+            [
+              "exec",
+              "relay-adoption-panel",
+              "php",
+              "/tmp/relay-fixture.php",
+              "client-key",
+            ],
+            { timeout: 10000 },
+          ),
+        ]);
+      const legacyKey = legacyKeyResult.stdout.trim();
+      assert.match(legacyKey, /^ptlc_[A-Za-z0-9]+$/);
+      const legacyBase = "http://127.0.0.1:13202",
+        relayBase = "http://127.0.0.1:13200";
+      async function probe(url: string, key: string) {
+        // The exact same upstream SDK calls run against either configured panel.
+        const client = new NodeactylClient(url, key);
+        try {
+          const result = await client.getAllServers();
+          assert.equal(result.object, "list");
+          const records = result.data
+            .map(({ object, attributes }) => ({
+              object,
+              uuid: attributes.uuid,
+              name: attributes.name,
+              identifier: attributes.identifier,
+              owner: attributes.server_owner,
+            }))
+            .sort((a, b) => a.uuid.localeCompare(b.uuid));
+          const detail = await client.getServerDetails(uuid.slice(0, 8));
+          return {
+            records,
+            total: result.meta.pagination.total,
+            detail: { uuid: detail.uuid, name: detail.name },
+            emptyPage: await client.getServerPage(2),
+          };
+        } catch {
+          throw new Error(
+            `Nodeactyl read-only contract failed at loopback port ${new URL(url).port}`,
+          );
+        }
+      }
+      assert.deepEqual(
+        await probe(relayBase, relayKey),
+        await probe(legacyBase, legacyKey),
+      );
+      const auth = (key: string) => ({
+        authorization: `Bearer ${key}`,
+        accept: "application/vnd.pterodactyl.v1+json",
+      });
+      const listPath = "/api/client?per_page=1&page=1";
+      const [nativePage, compatPage] = await Promise.all([
+        fetch(`${legacyBase}${listPath}`, { headers: auth(legacyKey) }),
+        fetch(`${relayBase}${listPath}`, { headers: auth(relayKey) }),
+      ]);
+      assert.equal(nativePage.status, 200);
+      assert.equal(compatPage.status, 200);
+      const pageInfo = (value: {
+        meta: {
+          pagination: {
+            links: unknown;
+            total: number;
+            count: number;
+            per_page: number;
+            current_page: number;
+            total_pages: number;
+          };
+        };
+      }) => {
+        const { links, ...numbers } = value.meta.pagination;
+        return { numbers, links: Object.keys(links as object) };
+      };
+      assert.deepEqual(
+        pageInfo(await compatPage.json()),
+        pageInfo(await nativePage.json()),
+      );
+      for (const [token, allowed, denied] of [
+        [sharedKey, uuid, second],
+        [outsiderKey, undefined, uuid],
+      ] as const) {
+        assert.ok(denied);
+        const index = await relay.inject({
+          url: "/api/client",
+          headers: auth(token),
+        });
+        assert.equal(index.statusCode, 200);
+        const data = index.json<{ data: { attributes: { uuid: string } }[] }>()
+          .data;
+        assert.ok(!data.some((item) => item.attributes.uuid === denied));
+        if (allowed)
+          assert.ok(data.some((item) => item.attributes.uuid === allowed));
+        const deniedResult = await relay.inject({
+          url: `/api/client/servers/${denied}`,
+          headers: auth(token),
+        });
+        assert.equal(deniedResult.statusCode, 404);
+        assert.equal(deniedResult.json().errors[0].status, "404");
+      }
+      assert.equal(
+        (await relay.inject({ url: "/api/client", headers: ownerSession }))
+          .statusCode,
+        401,
+      );
       await pool.execute(
         "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'catalog.fixture_checked',?)",
         [owner, uuid],
