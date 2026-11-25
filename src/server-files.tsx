@@ -89,7 +89,9 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
       if (
         data?.name !== name ||
         typeof data.text !== "string" ||
-        data.text.length > 16384
+        data.text.length > 16384 ||
+        typeof data.version !== "string" ||
+        !/^[a-f0-9]{64}$/.test(data.version)
       )
         throw new Error("Invalid preview");
       setPreview(data);
@@ -287,7 +289,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
                 <Button
                   disabled={
                     busy ||
-                    saveStatus === "conflict" ||
+                    saveStatus !== null ||
                     new TextEncoder().encode(draft).length > 16384
                   }
                   onClick={() => void save()}
