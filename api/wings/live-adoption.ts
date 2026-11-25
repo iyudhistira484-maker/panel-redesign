@@ -707,6 +707,16 @@ async function main() {
             headers: { ...headers, ...session },
             payload: { confirm: true, action },
           });
+        const runtime = (session: typeof collaborator) =>
+          relay.inject({
+            method: "GET",
+            url: `/api/v1/servers/${uuid}/runtime`,
+            headers: session,
+          });
+        assert.equal((await runtime(outsider)).statusCode, 404);
+        const shared = await runtime(collaborator);
+        assert.equal(shared.statusCode, 200);
+        assert.equal(shared.json().presence, "present");
         const powerEvents = () =>
           rows(
             pool,
@@ -738,8 +748,25 @@ async function main() {
         );
         assert.equal((await power(uuid, "start")).statusCode, 404);
         assert.equal(await clientFor(uuid).state(uuid), "offline");
+        assert.equal((await runtime(collaborator)).statusCode, 404);
+        assert.equal((await runtime(ownerSession)).json().state, "offline");
+        assert.equal(
+          (await power(uuid, "start", ownerSession)).statusCode,
+          202,
+        );
+        await until(
+          "owner sees running through user API",
+          async () => (await runtime(ownerSession)).json().state === "running",
+        );
+        assert.equal((await power(uuid, "stop", ownerSession)).statusCode, 202);
+        await until(
+          "owner sees offline through user API",
+          async () => (await runtime(ownerSession)).json().state === "offline",
+        );
         assert.deepEqual(await powerEvents(), [
           { event: "wings.power_start_requested", subject_id: uuid },
+          { event: "wings.power_start_requested", subject_id: uuid },
+          { event: "wings.power_stop_requested", subject_id: uuid },
         ]);
       };
     }
