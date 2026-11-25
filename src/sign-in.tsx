@@ -1,3 +1,4 @@
+import { TotpEnrollment } from "./totp-enrollment";
 import { useEffect, useId, useState, type FormEvent } from "react";
 import type { Locale } from "./i18n";
 import { Button, TextInput } from "./ui";
@@ -59,7 +60,10 @@ async function account(signal?: AbortSignal) {
     typeof data.displayName !== "string"
   )
     return null;
-  return data.displayName;
+  return {
+    name: data.displayName,
+    canEnroll: "twoFactor" in data && data.twoFactor === false,
+  };
 }
 export function SignIn({ locale }: { locale: Locale }) {
   const t = copy[locale],
@@ -68,6 +72,8 @@ export function SignIn({ locale }: { locale: Locale }) {
     "checking" | "login" | "challenge" | "signed"
   >("checking");
   const [name, setName] = useState("");
+  const [canEnroll, setCanEnroll] = useState(false);
+  const [enrolling, setEnrolling] = useState(false);
   const [email, setEmail] = useState("");
   const [secret, setSecret] = useState("");
   const [busy, setBusy] = useState(false);
@@ -80,7 +86,8 @@ export function SignIn({ locale }: { locale: Locale }) {
       .then((value) => {
         if (abort.signal.aborted) return;
         if (value !== null) {
-          setName(value);
+          setName(value.name);
+          setCanEnroll(value.canEnroll);
           setPhase("signed");
         } else setPhase("login");
       })
@@ -126,7 +133,8 @@ export function SignIn({ locale }: { locale: Locale }) {
         setPhase("login");
         return;
       }
-      setName(profile);
+      setName(profile.name);
+      setCanEnroll(profile.canEnroll);
       setPhase("signed");
     } catch {
       setSecret("");
@@ -166,7 +174,10 @@ export function SignIn({ locale }: { locale: Locale }) {
       {phase === "signed" ? (
         <>
           <p>{name}</p>
-          <Button onClick={leave} disabled={busy}>
+          {canEnroll && (
+            <TotpEnrollment locale={locale} onBusy={setEnrolling} />
+          )}
+          <Button onClick={leave} disabled={busy || enrolling}>
             {t.logout}
           </Button>
         </>

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import { stagingPool } from "../api/db";
-import { cryptoContext, keyFrom, passwordHash, totpAt } from "../api/security";
+import { base32, passwordHash, totpAt } from "../api/security";
 
 test.use({
   ignoreHTTPSErrors: true,
@@ -22,22 +22,11 @@ test("HTTPS browser, Mailpit, MySQL and real API complete account recovery and 2
   assert.equal(process.env.RUNNER_ENVIRONMENT, "github-hosted");
   const origin = "https://127.0.0.1:4443";
   const email = `browser-${randomUUID()}@example.test`;
-  const secret = randomBytes(20),
-    user = randomUUID();
-  const crypt = cryptoContext(
-    keyFrom(process.env.RELAY_TOTP_KEY, "RELAY_TOTP_KEY"),
-    keyFrom(process.env.RELAY_TOKEN_PEPPER, "RELAY_TOKEN_PEPPER"),
-  );
   const pool = stagingPool();
   try {
     await pool.execute(
-      "INSERT INTO users (id,email,display_name,password_hash,totp_secret) VALUES (?,?,'Browser Operator',?,?)",
-      [
-        user,
-        email,
-        await passwordHash(`Initial-${randomUUID()}`),
-        crypt.seal(secret, user),
-      ],
+      "INSERT INTO users (id,email,display_name,password_hash) VALUES (?,?,'Browser Operator',?)",
+      [randomUUID(), email, await passwordHash(`Initial-${randomUUID()}`)],
     );
   } finally {
     await pool.end();
@@ -102,17 +91,50 @@ test("HTTPS browser, Mailpit, MySQL and real API complete account recovery and 2
   await page.getByLabel("Email", { exact: true }).fill(email);
   await page.getByLabel("Kata sandi", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Masuk", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Aktifkan autentikasi dua langkah" })
+    .click();
+  await page.getByLabel("Kata sandi saat ini").fill(password);
+  const begin = page.waitForResponse(
+    (response) => response.url() === `${origin}/api/v1/account/totp/begin`,
+  );
+  await page.getByRole("button", { name: "Lanjutkan", exact: true }).click();
+  const started = await begin;
+  expect(started.status()).toBe(204);
+  const secret = Buffer.from(
+    started.request().postDataJSON().seed,
+    "base64url",
+  );
+  await expect(page.getByText(base32(secret), { exact: true })).toBeVisible();
+  await page
+    .getByLabel("Kode enam digit")
+    .fill(totpAt(secret, Math.floor(Date.now() / 30000)));
+  await page
+    .getByRole("button", { name: "Konfirmasi autentikasi dua langkah" })
+    .click();
+  const codes = page.getByRole("region", { name: "Kode pemulihan" });
+  await expect(codes.getByRole("listitem")).toHaveCount(10);
+  const recovery = (
+    await codes.getByRole("listitem").first().innerText()
+  ).trim();
+  await page.getByRole("button", { name: "Saya sudah menyimpan kode" }).click();
+  await expect(codes).toHaveCount(0);
+  await page.getByRole("button", { name: "Keluar", exact: true }).click();
+  await page.getByLabel("Email", { exact: true }).fill(email);
+  await page.getByLabel("Kata sandi", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Masuk", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Verifikasi dua langkah" }),
   ).toBeVisible();
   expect((await context.request.get(`${origin}/api/v1/account`)).status()).toBe(
     401,
   );
-  await page
-    .getByLabel("Kode autentikator atau pemulihan")
-    .fill(totpAt(secret, Math.floor(Date.now() / 30_000)));
+  await page.getByLabel("Kode autentikator atau pemulihan").fill(recovery);
   await page.getByRole("button", { name: "Verifikasi", exact: true }).click();
   await expect(page.getByText("Browser Operator")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Aktifkan autentikasi dua langkah" }),
+  ).toHaveCount(0);
   const session = (await context.cookies()).find(
     (cookie) => cookie.name === "__Host-relay_session",
   );
