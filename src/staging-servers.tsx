@@ -1,3 +1,4 @@
+import { ServerActivity } from "./server-activity";
 import { ServerConsole } from "./server-console";
 import { ServerMetrics } from "./server-metrics";
 import { ServerPower } from "./server-power";
@@ -106,6 +107,7 @@ export function StagingServers({ locale }: { locale: Locale }) {
                   <ServerPower id={item.id} locale={locale} />
                   <ServerMetrics id={item.id} locale={locale} />
                   <ServerConsole id={item.id} locale={locale} />
+                  <ServerActivity id={item.id} locale={locale} />
                 </>
               )}
             </li>

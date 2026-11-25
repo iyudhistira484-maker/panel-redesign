@@ -859,12 +859,14 @@ export async function createApp({
         id: string | null;
         event: string | null;
         created_at: Date | null;
+        actor_name: string | null;
       }>(
         pool,
-        `SELECT CAST(a.id AS CHAR) AS id, a.event, a.created_at
+        `SELECT CAST(a.id AS CHAR) AS id, a.event, a.created_at, performer.display_name AS actor_name
       FROM servers s JOIN users u ON u.id=?
       LEFT JOIN server_grants g ON g.server_id=s.id AND g.user_id=u.id
-      LEFT JOIN audit_log a ON a.subject_id=s.id AND a.event LIKE 'catalog.%'
+      LEFT JOIN audit_log a ON a.subject_id=s.id AND (a.event LIKE 'catalog.%' OR a.event IN ('wings.power_start_requested','wings.power_stop_requested','wings.power_start_uncertain','wings.power_stop_uncertain'))
+      LEFT JOIN users performer ON performer.id=a.actor_id
       WHERE s.id=? AND (s.owner_id=u.id OR u.is_admin=1 OR JSON_CONTAINS(g.permissions,JSON_QUOTE('activity.read'))=1)
       ORDER BY a.id DESC LIMIT 100`,
         [principal.id, req.params.id],

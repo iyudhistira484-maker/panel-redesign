@@ -97,7 +97,17 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     if (status === 200)
       expect(await result.text()).not.toContain("fixture-console-secret");
   }
+  const activity = page.getByRole("list", {
+    name: "Aktivitas server",
+    exact: true,
+  });
+  const readActivity = page.getByRole("button", {
+    name: "Baca aktivitas server",
+  });
   await open("collaborator@example.test");
+  await readActivity.click();
+  await expect(activity).toContainText("catalog.fixture_checked");
+  await expect(activity.locator("time").first()).toBeVisible();
   await readConsole(404);
   await expect(
     page.getByText("Cuplikan konsol tidak tersedia", { exact: false }),
@@ -173,5 +183,9 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   await expect(
     page.getByText(/^Status Wings: (offline|starting|running)$/),
   ).toBeVisible();
+  await readActivity.click();
+  await expect(activity).toContainText("Hasil Start tidak diketahui");
+  await expect(activity).toContainText("Start diminta");
+  await expect(activity).toContainText("Stop diminta");
   expect(requests).toHaveLength(1);
 });
