@@ -17,6 +17,7 @@ jobs:
       - run: npm run lint
       - run: bash scripts/test-relay-offhost-bundle.sh
       - run: npx tsx --test api/wings/offhost-keys.test.ts
+      - run: npx tsx api/parity-audit.ts
       - run: npm run test:eggs
       - run: npm run build
       - run: npm run budget
