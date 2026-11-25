@@ -30,8 +30,7 @@ export async function transaction<T>(
     c.release();
   }
 }
-export function stagingPool() {
-  const address = process.env.RELAY_STAGING_DATABASE_URL;
+export function stagingPool(address = process.env.RELAY_STAGING_DATABASE_URL) {
   if (!address || process.env.RELAY_ENV !== "staging")
     throw new Error("A dedicated staging database is required");
   const url = new URL(address);

@@ -7,7 +7,7 @@ import { readLegacySnapshot } from "../import/legacy-snapshot";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { copyFile, readFile, writeFile } from "node:fs/promises";
+import { copyFile, readFile, rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import Fastify from "fastify";
 import { createApp } from "../app";
@@ -48,7 +48,8 @@ async function main() {
   const client = new WingsClient(node);
   const pool = stagingPool(),
     pepper = randomBytes(32),
-    key = randomBytes(32);
+    key = randomBytes(32),
+    identityKey = randomBytes(32);
   const actual = process.env.RELAY_BOOTSTRAP_SCENARIO === "legacy-panel";
   const legacyId = (name: string) => {
     const value = actual
@@ -179,11 +180,11 @@ async function main() {
     assert.ok(deliver);
     assert.equal((await deliver()).status, 202);
   }
-  const relayFor = (configured: typeof node) =>
+  const relayFor = (configured: typeof node, database = pool) =>
     createApp({
-      pool,
+      pool: database,
       origin,
-      key: randomBytes(32),
+      key: identityKey,
       pepper,
       catalogNodeKey: key,
       allowedCatalogNodeOrigins: [configured.origin],
@@ -796,6 +797,8 @@ async function main() {
     );
     let verifyPower: (() => Promise<void>) | undefined;
     let verifyCreate: (() => Promise<void>) | undefined;
+    let verifyRecovery: (() => Promise<void>) | undefined;
+    let recoveryOnly: AppFixture["attributes"] | undefined;
     if (actual) {
       const headers = {
         origin,
@@ -1227,6 +1230,194 @@ async function main() {
       assert.ok(second);
       assert.equal((await activity(second, collaborator)).statusCode, 404);
       assert.equal((await activity(uuid)).statusCode, 401);
+      verifyRecovery = async () => {
+        assert.ok(recoveryOnly && secondConfig && second && relay2);
+        const standalone = recoveryOnly;
+        const backup = config.replace(
+          "/config/config.yml",
+          "/relay-recovery.sql",
+        );
+        const script = (operation: string) =>
+          docker("bash", ["scripts/relay-recovery-ci.sh", operation, backup], {
+            timeout: 30_000,
+          });
+        const [collaboratorId] = await rows<{ id: string }>(
+          pool,
+          "SELECT id FROM users WHERE email='collaborator@example.test'",
+        );
+        await pool.execute(
+          "INSERT INTO server_grants (server_id,user_id,permissions) VALUES (?,?,JSON_ARRAY('activity.read'))",
+          [uuid, collaboratorId.id],
+        );
+        const placement = (db: typeof pool) =>
+          rows(
+            db,
+            `SELECT s.id,s.application_id,s.external_id,s.name,s.owner_id,s.node_id,a.id AS allocation,a.ip,a.port,p.phase FROM servers s JOIN allocations a ON a.id=s.allocation_id JOIN wings_provisions p ON p.server_id=s.id WHERE s.id IN (?,?,?) ORDER BY s.id`,
+            [uuid, second, standalone.uuid],
+          );
+        const expectedPlacement = await placement(pool);
+        assert.equal(expectedPlacement.length, 3);
+        const startBackup = performance.now();
+        await script("backup");
+        const checkpoint = performance.now();
+        await pool.execute(
+          "UPDATE servers SET name='Post-backup metadata' WHERE id=?",
+          [uuid],
+        );
+        await pool.execute(
+          "DELETE FROM server_grants WHERE server_id=? AND user_id=?",
+          [uuid, collaboratorId.id],
+        );
+        const currentVolume = "\uFEFFPost-backup Wings volume bytes\r\n";
+        await client.writeFixtureText(uuid, currentVolume);
+        for (const id of workloadIds) {
+          if ((await clientFor(id).state(id)) !== "running")
+            await clientFor(id).power(id, "start");
+        }
+        await until("recovery baseline running", async () =>
+          (
+            await Promise.all(workloadIds.map((id) => clientFor(id).state(id)))
+          ).every((state) => state === "running"),
+        );
+        const beforeRecovery = await Promise.all(workloadIds.map(inspect));
+        const hashes = await Promise.all(workloadIds.map(checksum));
+        const outageStart = performance.now();
+        await Promise.all([relay.close(), relay2.close()]);
+        let db: typeof pool | undefined;
+        let restored: typeof relay | undefined;
+        let restoredSecond: typeof relay | undefined;
+        try {
+          await script("restore");
+          const destination = new URL(
+            process.env.RELAY_STAGING_DATABASE_URL ?? "",
+          );
+          destination.pathname = "/relay_test_recovery";
+          db = stagingPool(destination.href);
+          await migrate(db, "up");
+          assert.deepEqual(await placement(db), expectedPlacement);
+          assert.deepEqual(
+            await rows(
+              db,
+              "SELECT permissions FROM server_grants WHERE server_id=? AND user_id=?",
+              [uuid, collaboratorId.id],
+            ),
+            [{ permissions: ["activity.read"] }],
+          );
+          restored = await relayFor(node, db);
+          restoredSecond = await relayFor(secondNode, db);
+          await restored.listen({ host: "127.0.0.1", port: 13200 });
+          await restoredSecond.listen({ host: "127.0.0.1", port: 13201 });
+          const connectRemote = async (file: string, port: number) => {
+            const original = await readFile(`${file}.backup`, "utf8");
+            await writeFile(
+              file,
+              original.replace(
+                "remote: http://127.0.0.1:13202",
+                `remote: http://127.0.0.1:${port}`,
+              ),
+            );
+          };
+          await connectRemote(config, 13200);
+          await connectRemote(secondConfig, 13201);
+          await restart();
+          assert.deepEqual(
+            await Promise.all(workloadIds.map(inspect)),
+            beforeRecovery,
+          );
+          assert.deepEqual(
+            await Promise.all(workloadIds.map(checksum)),
+            hashes,
+          );
+          const detail = (key: string, id: string) =>
+            restored?.inject({
+              url: `/api/client/servers/${id}`,
+              headers: auth(key),
+            });
+          assert.equal((await detail(relayKey, uuid))?.statusCode, 200);
+          assert.equal((await detail(sharedKey, uuid))?.statusCode, 200);
+          assert.equal((await detail(sharedKey, second))?.statusCode, 404);
+          assert.equal((await detail(outsiderKey, uuid))?.statusCode, 404);
+          assert.equal(
+            (await detail(relayKey, standalone.uuid))?.statusCode,
+            200,
+          );
+          assert.equal(
+            (
+              await restored.inject({
+                url: "/api/v1/servers",
+                headers: ownerSession,
+              })
+            ).statusCode,
+            200,
+          );
+          const saved = await client.fixtureDownload(
+            uuid,
+            ["fixture-docs"],
+            "example.txt",
+          );
+          assert.deepEqual(saved, Buffer.from(currentVolume));
+          assert.equal(await client.state(standalone.uuid), "offline");
+          assert.ok(
+            (
+              await client.readFixtureFile(standalone.uuid, "relay-start.sh")
+            ).includes("RELAY_CONTRACT_READY"),
+          );
+          const roundtripMs = Math.round(performance.now() - outageStart);
+          const legacyApplication = (
+            await fixtureScript("application-key")
+          ).stdout.trim();
+          const rollbackStarted = performance.now();
+          await copyFile(`${config}.backup`, config);
+          await copyFile(`${secondConfig}.backup`, secondConfig);
+          await restart();
+          assert.deepEqual(
+            await Promise.all(workloadIds.map(inspect)),
+            beforeRecovery,
+          );
+          assert.deepEqual(
+            await Promise.all(workloadIds.map(checksum)),
+            hashes,
+          );
+          assert.deepEqual(
+            await client.fixtureDownload(uuid, ["fixture-docs"], "example.txt"),
+            saved,
+          );
+          assert.equal(
+            (
+              await appRequest(
+                legacyBase,
+                `${appServerPath}/external/fixture%3ALegacy%20A`,
+                legacyApplication,
+              )
+            ).status,
+            200,
+          );
+          assert.equal(
+            (
+              await appRequest(
+                legacyBase,
+                `${appServerPath}/external/${encodeURIComponent(standalone.external_id)}`,
+                legacyApplication,
+              )
+            ).status,
+            404,
+          );
+          assert.equal(
+            (await detail(relayKey, standalone.uuid))?.statusCode,
+            200,
+          );
+          console.log(
+            `::notice::Relay recovery backup_ms=${Math.round(checkpoint - startBackup)} recovery_ms=${roundtripMs} rollback_ms=${Math.round(performance.now() - rollbackStarted)} checkpoint_to_shutdown_ms=${Math.round(outageStart - checkpoint)}`,
+          );
+        } finally {
+          await copyFile(`${config}.backup`, config);
+          await copyFile(`${secondConfig}.backup`, secondConfig);
+          await restored?.close();
+          await restoredSecond?.close();
+          await db?.end();
+          await rm(backup, { force: true });
+        }
+      };
       verifyCreate = async () => {
         // Restore the Relay remote for this separate create slice, after the old-panel rollback proof.
         const legacyRemote = await readFile(config, "utf8");
@@ -1698,7 +1889,7 @@ async function main() {
               ((await (await detail(recovered.id)).json()) as AppFixture)
                 .attributes.status === null,
           );
-          assert.equal((await destroy(recovered.id)).status, 204);
+          recoveryOnly = recovered;
           assert.equal(await checksum(), otherBefore);
         } finally {
           await pool.execute(
@@ -3554,6 +3745,7 @@ async function main() {
     assert.deepEqual(await Promise.all(workloadIds.map(checksum)), hash);
     await verifyPower?.();
     await verifyCreate?.();
+    await verifyRecovery?.();
     if (!actual) assert.equal(installed, 1);
     for (const id of workloadIds) {
       await clientFor(id).power(id, "stop");

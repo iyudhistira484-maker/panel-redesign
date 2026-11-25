@@ -114,6 +114,7 @@ jobs:
           fi
       - run: bash scripts/wings-contract.sh
         env:
+          RELAY_RECOVERY_MYSQL_SERVICE: ${{ job.services.mysql.id }}
           RELAY_BOOTSTRAP_SCENARIO: ${{ matrix.scenario }}
           RELAY_EXPERIMENTAL_GITEA: ${{ matrix.scenario == 'gitea-qualification' && '1' || '' }}
           RELAY_STAGING_DATABASE_URL: mysql://relay:disposable-ci@127.0.0.1:${{ job.services.mysql.ports[3306] }}/relay_test
