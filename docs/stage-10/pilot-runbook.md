@@ -19,3 +19,7 @@
 ## Bukti pembanding
 
 [CI 45642598694](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45642598694): kedua job lulus. Payload 128 MiB / 512 file dibaca dan checksum cocok dari workload Wings yang dipulihkan. Pencabutan izin diterapkan ulang melalui API. Waktu pemulihan termasuk unduhan artefak **18.804 ms**; checkpoint ke simulasi kehilangan **62 ms**. Keduanya di bawah batas latihan. Run ini memakai mode pembanding (`independent_keys=false`); belum membuktikan mode operator dengan seed independen. [Foundation 45642599572](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45642599572) juga lulus, termasuk tes derivasi kunci.
+
+## Bukti mode kunci independen
+
+[CI 45644310891](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45644310891): kedua job lulus dengan `independent_keys=true`. Runner memperoleh kunci runtime dari secret terpisah, bukan dari artefak. Pemulihan 128 MiB / 512 file, termasuk unduhan dan pencabutan ulang, selesai dalam **23.209 ms**; checkpoint ke simulasi kehilangan **77 ms**. Keduanya memenuhi batas latihan, bukan SLA produksi. Berikutnya: pilih satu kandidat pilot, dokumentasikan ukuran dan jumlah file tanpa menyalin data produksi, lalu minta operator kedua mengulang runbook dengan fixture setara serta menyepakati batas end-to-end dan kondisi rollback.
