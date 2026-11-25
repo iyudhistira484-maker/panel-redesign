@@ -733,6 +733,7 @@ async function main() {
       async function probe(url: string, key: string) {
         // The exact same upstream SDK calls run against either configured panel.
         const client = new NodeactylClient(url, key);
+        let stage = "list";
         try {
           const result = await client.getAllServers();
           assert.equal(result.object, "list");
@@ -745,16 +746,20 @@ async function main() {
               owner: attributes.server_owner,
             }))
             .sort((a, b) => a.uuid.localeCompare(b.uuid));
+          stage = "detail";
           const detail = await client.getServerDetails(uuid.slice(0, 8));
           return {
             records,
             total: result.meta.pagination.total,
             detail: { uuid: detail.uuid, name: detail.name },
-            emptyPage: await client.getServerPage(2),
+            emptyPage: await (async () => {
+              stage = "page 2";
+              return client.getServerPage(2);
+            })(),
           };
         } catch {
           throw new Error(
-            `Nodeactyl read-only contract failed at loopback port ${new URL(url).port}`,
+            `Nodeactyl read-only contract failed at ${stage} on loopback port ${new URL(url).port}`,
           );
         }
       }

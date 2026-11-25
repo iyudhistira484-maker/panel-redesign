@@ -51,69 +51,70 @@ export function registerClientCompatibility(
   origin: string,
   authenticate: (authorization: string) => Promise<string | null>,
 ) {
-  app.get<{ Querystring: Record<string, unknown> }>(
-    "/api/client",
-    { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
-    async (req, reply) => {
-      reply.header("cache-control", "no-store");
-      const user = await authenticate(req.headers.authorization ?? "");
-      if (!user)
-        return reply
-          .code(401)
-          .send(errors("AuthenticationException", "Unauthenticated."));
-      const page = integer(req.query.page, 1, 1_000_000),
-        size = integer(req.query.per_page, 50, 100);
-      if (
-        page === null ||
-        size === null ||
-        Object.keys(req.query).some(
-          (key) => key !== "page" && key !== "per_page",
+  for (const path of ["/api/client", "/api/client/"])
+    app.get<{ Querystring: Record<string, unknown> }>(
+      path,
+      { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
+      async (req, reply) => {
+        reply.header("cache-control", "no-store");
+        const user = await authenticate(req.headers.authorization ?? "");
+        if (!user)
+          return reply
+            .code(401)
+            .send(errors("AuthenticationException", "Unauthenticated."));
+        const page = integer(req.query.page, 1, 1_000_000),
+          size = integer(req.query.per_page, 50, 100);
+        if (
+          page === null ||
+          size === null ||
+          Object.keys(req.query).some(
+            (key) => key !== "page" && key !== "per_page",
+          )
         )
-      )
-        return reply
-          .code(400)
-          .send(
-            errors("BadRequestHttpException", "Unsupported list parameters."),
-          );
-      const scope = [user, user];
-      const { total, records } = await transaction(
-        pool,
-        async (db: Executor) => {
-          const [count] = await rows<{ total: number }>(
-            db,
-            `SELECT COUNT(*) AS total FROM servers s WHERE ${visible}`,
-            scope,
-          );
-          const records = await rows<Server>(
-            db,
-            `${projection} WHERE ${visible} ORDER BY s.name,s.id LIMIT ? OFFSET ?`,
-            [user, ...scope, size, (page - 1) * size],
-          );
-          return { total: Number(count.total), records };
-        },
-      );
-      const pages = Math.max(1, Math.ceil(total / size));
-      const link = (number: number) =>
-        `${origin}/api/client?${new URLSearchParams({ ...(req.query.per_page === undefined ? {} : { per_page: String(size) }), page: String(number) })}`;
-      const links: Record<string, string> = {};
-      if (page > 1) links.previous = link(page - 1);
-      if (page < pages) links.next = link(page + 1);
-      return {
-        object: "list",
-        data: records.map((row) => item(row, user)),
-        meta: {
-          pagination: {
-            total,
-            count: records.length,
-            per_page: size,
-            current_page: page,
-            total_pages: pages,
-            links: Object.keys(links).length ? links : [],
+          return reply
+            .code(400)
+            .send(
+              errors("BadRequestHttpException", "Unsupported list parameters."),
+            );
+        const scope = [user, user];
+        const { total, records } = await transaction(
+          pool,
+          async (db: Executor) => {
+            const [count] = await rows<{ total: number }>(
+              db,
+              `SELECT COUNT(*) AS total FROM servers s WHERE ${visible}`,
+              scope,
+            );
+            const records = await rows<Server>(
+              db,
+              `${projection} WHERE ${visible} ORDER BY s.name,s.id LIMIT ? OFFSET ?`,
+              [user, ...scope, size, (page - 1) * size],
+            );
+            return { total: Number(count.total), records };
           },
-        },
-      };
-    },
-  );
+        );
+        const pages = Math.max(1, Math.ceil(total / size));
+        const link = (number: number) =>
+          `${origin}/api/client?${new URLSearchParams({ ...(req.query.per_page === undefined ? {} : { per_page: String(size) }), page: String(number) })}`;
+        const links: Record<string, string> = {};
+        if (page > 1) links.previous = link(page - 1);
+        if (page < pages) links.next = link(page + 1);
+        return {
+          object: "list",
+          data: records.map((row) => item(row, user)),
+          meta: {
+            pagination: {
+              total,
+              count: records.length,
+              per_page: size,
+              current_page: page,
+              total_pages: pages,
+              links: Object.keys(links).length ? links : [],
+            },
+          },
+        };
+      },
+    );
   app.get<{ Params: { identifier: string } }>(
     "/api/client/servers/:identifier",
     { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
