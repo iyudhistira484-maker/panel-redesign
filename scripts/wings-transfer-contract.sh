@@ -24,7 +24,7 @@ git clone --quiet --depth 1 --branch v1.13.5 https://github.com/pterodactyl/wing
 [[ "$(git -C "$work/wings-source" rev-parse HEAD)" == 3236480d078c09b823b8a8f21dab76c4029608a5 ]]
 git -C "$work/wings-source" apply --check "$patch"
 git -C "$work/wings-source" apply "$patch"
-(cd "$work/wings-source" && go build -trimpath -o "$work/wings-target" ./wings.go)
+(cd "$work/wings-source" && CGO_ENABLED=0 go build -trimpath -o "$work/wings-target" ./wings.go)
 RELAY_TRANSFER_SOURCE_TOKEN=$(openssl rand -hex 32)
 RELAY_TRANSFER_TARGET_TOKEN=$(openssl rand -hex 32)
 export RELAY_TRANSFER_SOURCE_TOKEN RELAY_TRANSFER_TARGET_TOKEN
