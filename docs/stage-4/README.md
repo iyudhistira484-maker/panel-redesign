@@ -21,3 +21,9 @@ Halaman masuk memakai endpoint `login`, `challenge`, `logout`, dan `GET /api/v1/
 Setelah login, akun tanpa 2FA bisa mengaktifkannya dengan kata sandi saat ini, memasukkan kunci Base32 secara manual ke autentikator TOTP, lalu memasukkan kode enam digit. Sepuluh kode pemulihan ditampilkan setelah konfirmasi; setelah pengguna menutupnya, UI tidak menyimpan atau menampilkannya lagi. Tidak ada QR eksternal atau penyimpanan browser. Reload saat kode masih ditampilkan akan menghilangkannya, jadi simpan terlebih dahulu.
 
 [CI 45527498941](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45527498941) lulus seluruh 13 job. Tes HTTPS sekarang memakai akun tanpa 2FA, mendaftarkannya dari UI dengan TOTP nyata, lalu login lagi dengan satu kode pemulihan yang ditampilkan. Daftar server baca-saja masih belum tercakup.
+
+## Daftar server staging baca-saja
+
+Dari halaman sesi aktif, klik **Muat daftar server**. `GET /api/v1/servers` menerima sesi browser penuh dan hanya mengembalikan ID serta nama server milik akun atau yang dibagikan melalui grant tidak kosong. Grant kosong tidak memberi akses, dan status admin saja tidak memperluas daftar ini. Query memakai cursor UUID dan maksimal 50 server per halaman; respons tidak di-cache. Tidak ada kontrol Wings dari daftar ini. Halaman ringkasan demo tidak memakai endpoint ini dan tetap terpisah.
+
+[CI 45528908013](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45528908013) lulus semua 13 job. Browser HTTPS tanpa mock membuktikan pemilik melihat dua server, subuser hanya server yang dibagikan, pengguna dengan grant kosong tidak melihat server, dan sesi anonim ditolak. Tes frontend terpisah membuktikan HTTP 503 membersihkan daftar sebelumnya dan menampilkan galat tanpa fallback demo. Bersama dua bagian sebelumnya, tiga sasaran integrasi staging yang disepakati untuk Tahap 4 sudah lulus. Ini bukan persetujuan cutover produksi.
