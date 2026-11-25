@@ -1,0 +1,16 @@
+--- a/router/router_transfer.go
++++ b/router/router_transfer.go
+@@ -181,6 +181,13 @@
+ 					return
+ 				}
+ 
++				// TAR extraction can finish before the compressed multipart part
++				// reaches EOF. Hash the remainder before NextPart discards it.
++				if _, err := io.Copy(io.Discard, tee); err != nil {
++					middleware.CaptureAndAbort(c, err)
++					return
++				}
++
+ 				hasArchive = true
+ 			case "checksum":
+ 				trnsfr.Log().Debug("received checksum")

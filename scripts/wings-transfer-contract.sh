@@ -17,6 +17,14 @@ trap cleanup EXIT
 curl -fsSL --retry 2 'https://github.com/pterodactyl/wings/releases/download/v1.13.5/wings_linux_amd64' -o "$work/wings"
 printf '%s  %s\n' '231134aa6d5aa02aac4f6384b50c76860637858cbc056268b9f96ac42f7f5393' "$work/wings" | sha256sum -c -
 chmod 0755 "$work/wings"
+# Use the pinned official sender and a locally built destination candidate.
+patch="$PWD/patches/wings/v1.13.5-transfer-checksum.patch"
+go test "$PWD/patches/wings/checksum_test.go"
+git clone --quiet --depth 1 --branch v1.13.5 https://github.com/pterodactyl/wings.git "$work/wings-source"
+[[ "$(git -C "$work/wings-source" rev-parse HEAD)" == 3236480d078c09b823b8a8f21dab76c4029608a5 ]]
+git -C "$work/wings-source" apply --check "$patch"
+git -C "$work/wings-source" apply "$patch"
+(cd "$work/wings-source" && go build -trimpath -o "$work/wings-target" ./wings.go)
 RELAY_TRANSFER_SOURCE_TOKEN=$(openssl rand -hex 32)
 RELAY_TRANSFER_TARGET_TOKEN=$(openssl rand -hex 32)
 export RELAY_TRANSFER_SOURCE_TOKEN RELAY_TRANSFER_TARGET_TOKEN
@@ -108,10 +116,11 @@ fi
 RELAY_TRANSFER_CHECK_DESTINATION_RUNTIME=1 RELAY_TRANSFER_SOURCE_ROOT="$work/source-data" RELAY_TRANSFER_FIXTURE_ROOT="$work/target-data" ./node_modules/.bin/tsx api/wings/live-transfer.ts &
 pid=$!
 run_wings() {
-  local role=$1 name=$2 socket=$3
+  local role=$1 name=$2 socket=$3 binary="$work/wings"
+  if [[ "$role" == target ]]; then binary="$work/wings-target"; fi
   docker run --detach --name "$name" --network host \
     -v "$socket:/var/run/docker.sock" \
-    -v "$work/wings:/usr/local/bin/wings:ro" \
+    -v "$binary:/usr/local/bin/wings:ro" \
     -v "$work/$role-config:/etc/pterodactyl" \
     -v "$work/$role-data:$work/$role-data" \
     debian:12-slim /usr/local/bin/wings --config /etc/pterodactyl/config.yml >/dev/null
