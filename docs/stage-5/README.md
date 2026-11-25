@@ -13,3 +13,9 @@ Run ini tidak hijau penuh: job transfer `mumble-missing-report` gagal terpisah d
 ## Wings tidak merespons saat aksi dikirim
 
 [CI 45532834159](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45532834159) lulus semua 13 job. Dalam job `legacy-panel`, Chromium sudah melihat runtime `offline` sebelum harness menghentikan sementara daemon Wings disposable. Start yang dikonfirmasi mendapat HTTP 502; UI melaporkan hasil tidak diketahui, tidak mengklaim sukses, menyembunyikan tombol Start, dan tidak mengirim ulang. Pembaruan status saat daemon masih berhenti menampilkan status tidak tersedia. Setelah daemon dilanjutkan, browser membaca kembali status aktual tanpa mengasumsikan perintah lama dibatalkan. Skenario ini menutup pengujian awal kontrol power staging, bukan seluruh Tahap 5 atau gate produksi.
+
+## Cuplikan penggunaan sumber daya
+
+Pada detail server staging, **Baca penggunaan sumber daya** menampilkan cuplikan CPU, memori dan batasnya, disk, waktu aktif, serta byte jaringan yang diterima/dikirim. Satu permintaan mengambil satu cuplikan Wings; Relay tidak mengirim kredensial Wings ke browser, tidak melakukan polling, dan membersihkan cuplikan lama saat refresh. API hanya menerima sesi pemilik pada fixture disposable yang terpasang. Grant baca runtime tidak memberi akses metrik.
+
+[CI 45533251879](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45533251879) lulus semua 13 job. Chromium tanpa mock menampilkan cuplikan dari Wings saat workload aktif dan membuktikan subuser baca-saja ditolak, selain regresi Start/Stop dan timeout.
