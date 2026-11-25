@@ -7,8 +7,7 @@ import { readLegacySnapshot } from "../import/legacy-snapshot";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { copyFile, lstat, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { copyFile, readFile, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import Fastify from "fastify";
 import { createApp } from "../app";
@@ -129,20 +128,23 @@ async function main() {
   async function verifyApplicationDeletion(id: string) {
     deletionEvidenceChecks++;
     const root = process.env.RELAY_WINGS_CONTRACT_DATA;
-    if (
-      !deletionEvidenceAvailable ||
-      !root ||
-      !UUID_V4.test(id) ||
-      !(await lstat(root)).isDirectory()
-    )
-      return false;
-    const target = join(root, id);
-    try {
-      await lstat(target);
-      return false;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
-    }
+    if (!deletionEvidenceAvailable || !root || !UUID_V4.test(id)) return false;
+    // Inspect the authoritative mount from the Wings container, not the runner's credentials.
+    const volume = await docker(
+      "docker",
+      [
+        "exec",
+        "relay-wings-contract",
+        "sh",
+        "-ec",
+        'test -d "$1"; find "$1" -maxdepth 1 -mindepth 1 -name "$2" -print',
+        "verify-volume",
+        root,
+        id,
+      ],
+      { timeout: 5000 },
+    );
+    if (volume.stdout.trim() !== "") return false;
     const containers = await docker(
       "docker",
       ["ps", "-a", "-q", "--filter", `name=^/${id}$`],
