@@ -118,9 +118,9 @@ async function main() {
         uuid,
         "sh",
         "-ec",
-        `cd /home/container; set -- relay-pilot-data/*.bin; test "$#" -eq 512; sha256sum "$@" | sha256sum`,
+        `cd /home/container; set -- relay-pilot-data/*.bin; test "$#" -eq 2048; sha256sum "$@" | sha256sum`,
       ],
-      { timeout: 15000 },
+      { timeout: 25000 },
     );
     assert.match(runtime.payloadHash, /^[a-f0-9]{64}$/);
     assert.equal(payload.stdout.split(/\s/)[0], runtime.payloadHash);
@@ -144,7 +144,7 @@ async function main() {
       "Staging simulated loss window exceeded 30 seconds",
     );
     console.log(
-      `::notice::Relay Wings cross-host restore_ms=${elapsed} checkpoint_to_loss_ms=${runtime.checkpointToSimulatedLossMs} payload_bytes=134217728 files=512 revocation_reapplied=true independent_keys=${runtime.independentKeys}`,
+      `::notice::Relay Wings cross-host restore_ms=${elapsed} checkpoint_to_loss_ms=${runtime.checkpointToSimulatedLossMs} payload_bytes=268435456 files=2048 revocation_reapplied=true independent_keys=${runtime.independentKeys}`,
     );
   } finally {
     await app.close();

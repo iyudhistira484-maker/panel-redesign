@@ -154,7 +154,7 @@ export function createProvisioner(
           process.env.RUNNER_ENVIRONMENT === "github-hosted" &&
           process.env.GITHUB_EVENT_NAME === "workflow_dispatch" &&
           process.env.GITHUB_WORKFLOW === "Relay Wings off-host staging"
-            ? 256
+            ? 512
             : 64,
       });
     if (s.document.equals(Buffer.from(mumbleEgg)))

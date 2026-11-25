@@ -15,7 +15,7 @@ case ${1:-} in
     docker exec "$container" tar --sort=name -C "$root" -cf - -- "$uuid" > "$archive"
     test -s "$archive"
     limit=1048576
-    if [[ "${GITHUB_WORKFLOW:-}" == 'Relay Wings off-host staging' && -n "${RELAY_OFFHOST_EXPORT:-}" ]]; then limit=150994944; fi
+    if [[ "${GITHUB_WORKFLOW:-}" == 'Relay Wings off-host staging' && -n "${RELAY_OFFHOST_EXPORT:-}" ]]; then limit=293601280; fi
     [[ $(stat -c %s "$archive") -le $limit ]]
     sha256sum "$archive" | cut -d ' ' -f 1
     ;;

@@ -1295,9 +1295,9 @@ async function main() {
               mkdir relay-pilot-data
               chown --reference=. relay-pilot-data
               i=0
-              while [ "$i" -lt 512 ]; do
+              while [ "$i" -lt 2048 ]; do
                 file=$(printf 'relay-pilot-data/%04d.bin' "$i")
-                dd if=/dev/urandom of="$file" bs=262144 count=1 status=none
+                dd if=/dev/urandom of="$file" bs=131072 count=1 status=none
                 chown --reference=. "$file"
                 i=$((i+1))
               done
