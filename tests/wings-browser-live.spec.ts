@@ -17,7 +17,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     "Disposable Wings contract only",
   );
   assert.equal(process.env.RUNNER_ENVIRONMENT, "github-hosted");
-  test.setTimeout(65_000);
+  test.setTimeout(75_000);
   const id = process.env.RELAY_BROWSER_FIXTURE_ID,
     password = process.env.RELAY_BROWSER_FIXTURE_PASSWORD;
   assert.ok(id && password);
@@ -188,4 +188,52 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   await expect(activity).toContainText("Start diminta");
   await expect(activity).toContainText("Stop diminta");
   expect(requests).toHaveLength(1);
+  const collaborator = "collaborator@example.test";
+  const access = `${origin}/api/v1/servers/${id}/activity-access`;
+  await page.getByLabel("Email subuser").fill(collaborator);
+  await page.getByRole("button", { name: "Cabut akses aktivitas" }).click();
+  await expect(page.getByText("Akses aktivitas dicabut.")).toBeVisible();
+  await page.getByRole("button", { name: "Beri akses aktivitas" }).click();
+  await expect(page.getByText("Akses aktivitas diberikan.")).toBeVisible();
+  const browser = page.context().browser();
+  assert.ok(browser);
+  const subuser = await browser.newContext({ ignoreHTTPSErrors: true });
+  try {
+    const headers = { origin, "x-relay-request": "1" };
+    expect(
+      (
+        await subuser.request.post(`${origin}/api/v1/auth/login`, {
+          headers,
+          data: { email: collaborator, password },
+        })
+      ).status(),
+    ).toBe(200);
+    const history = `${origin}/api/v1/servers/${id}/activity`;
+    expect((await subuser.request.get(history)).status()).toBe(200);
+    expect(
+      (
+        await subuser.request.post(access, {
+          headers,
+          data: { email: collaborator, action: "revoke" },
+        })
+      ).status(),
+    ).toBe(404);
+    for (const action of ["start", "stop"])
+      expect(
+        (
+          await subuser.request.post(power, {
+            headers,
+            data: { action, confirm: true },
+          })
+        ).status(),
+      ).toBe(404);
+    await page.getByRole("button", { name: "Cabut akses aktivitas" }).click();
+    await expect(page.getByText("Akses aktivitas dicabut.")).toBeVisible();
+    expect(
+      (await subuser.request.get(`${origin}/api/v1/account`)).status(),
+    ).toBe(200);
+    expect((await subuser.request.get(history)).status()).toBe(404);
+  } finally {
+    await subuser.close();
+  }
 });

@@ -1,3 +1,4 @@
+import { ServerAccess } from "./server-access";
 import { ServerActivity } from "./server-activity";
 import { ServerConsole } from "./server-console";
 import { ServerMetrics } from "./server-metrics";
@@ -6,7 +7,7 @@ import { useState } from "react";
 import type { Locale } from "./i18n";
 import { Button } from "./ui";
 
-type ServerSummary = { id: string; name: string };
+type ServerSummary = { id: string; name: string; isOwner?: boolean };
 export function StagingServers({ locale }: { locale: Locale }) {
   const en = locale === "en";
   const [opened, setOpened] = useState<string | null>(null);
@@ -119,6 +120,9 @@ export function StagingServers({ locale }: { locale: Locale }) {
                   <ServerMetrics id={item.id} locale={locale} />
                   <ServerConsole id={item.id} locale={locale} />
                   <ServerActivity id={item.id} locale={locale} />
+                  {item.isOwner === true && (
+                    <ServerAccess id={item.id} locale={locale} />
+                  )}
                 </section>
               )}
             </li>

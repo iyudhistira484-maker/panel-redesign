@@ -831,16 +831,96 @@ export async function createApp({
         (typeof after !== "string" || !UUID_V4.test(after))
       )
         return reply.code(400).send({ error: "invalid_cursor" });
-      const result = await rows<{ id: string; name: string }>(
+      const result = await rows<{ id: string; name: string; isOwner: number }>(
         pool,
-        `SELECT s.id,s.name FROM servers s
+        `SELECT s.id,s.name,s.owner_id=? AS isOwner FROM servers s
       WHERE s.id>? AND (s.owner_id=? OR EXISTS (
         SELECT 1 FROM server_grants g WHERE g.server_id=s.id AND g.user_id=? AND JSON_LENGTH(g.permissions)>0
       )) ORDER BY s.id LIMIT 51`,
-        [after ?? "", principal.id, principal.id],
+        [principal.id, after ?? "", principal.id, principal.id],
       );
       const items = result.slice(0, 50);
-      return { items, next: result.length > 50 ? items[49].id : null };
+      return {
+        items: items.map((item) => ({ ...item, isOwner: !!item.isOwner })),
+        next: result.length > 50 ? items[49].id : null,
+      };
+    },
+  );
+  app.post<{
+    Params: { id: string };
+    Body: { email: string; action: "grant" | "revoke" };
+  }>(
+    "/api/v1/servers/:id/activity-access",
+    {
+      config: { rateLimit: { max: 20, timeWindow: "1 minute" } },
+      schema: {
+        body: object({
+          email,
+          action: { type: "string", enum: ["grant", "revoke"] },
+        }),
+      },
+    },
+    async (req, reply) => {
+      const principal = await actor(
+        req.cookies[sessionCookie],
+        req.headers.authorization,
+      );
+      if (!principal || principal.channel !== "session")
+        return reply.code(401).send({ error: "unauthenticated" });
+      if (!UUID_V4.test(req.params.id))
+        return reply.code(404).send({ error: "not_found" });
+      const status = await transaction(pool, async (db) => {
+        const [server] = await rows<{ owner_id: string }>(
+          db,
+          "SELECT owner_id FROM servers WHERE id=? FOR UPDATE",
+          [req.params.id],
+        );
+        if (server?.owner_id !== principal.id) return 404;
+        const [target] = await rows<{ id: string }>(
+          db,
+          "SELECT id FROM users WHERE email=?",
+          [req.body.email.toLowerCase()],
+        );
+        if (!target || target.id === principal.id) return 422;
+        const [existing] = await rows<{ exact: number }>(
+          db,
+          "SELECT (JSON_LENGTH(permissions)=1 AND JSON_CONTAINS(permissions,JSON_QUOTE('activity.read'))) AS exact FROM server_grants WHERE server_id=? AND user_id=? FOR UPDATE",
+          [req.params.id, target.id],
+        );
+        if (req.body.action === "grant") {
+          if (existing) return 409;
+          await db.execute(
+            "INSERT INTO server_grants (server_id,user_id,permissions) VALUES (?,?,JSON_ARRAY('activity.read'))",
+            [req.params.id, target.id],
+          );
+        } else {
+          if (!existing?.exact) return 409;
+          await db.execute(
+            "DELETE FROM server_grants WHERE server_id=? AND user_id=?",
+            [req.params.id, target.id],
+          );
+        }
+        await db.execute(
+          "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,?,?)",
+          [
+            principal.id,
+            req.body.action === "grant"
+              ? "catalog.activity_access_granted"
+              : "catalog.activity_access_revoked",
+            req.params.id,
+          ],
+        );
+        return 204;
+      });
+      if (status === 204) return reply.code(204).send();
+      return reply.code(status).send({
+        error:
+          status === 404
+            ? "not_found"
+            : status === 409
+              ? "grant_conflict"
+              : "invalid_account",
+      });
     },
   );
   app.get<{ Params: { id: string } }>(
