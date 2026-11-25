@@ -83,6 +83,47 @@ export function registerClientCompatibility(
       };
     },
   );
+  app.get(
+    "/api/client/account",
+    {
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+    },
+    async (req, reply) => {
+      reply.header("cache-control", "no-store");
+      const actor = await authenticate(req.headers.authorization ?? "");
+      if (!actor)
+        return reply
+          .code(401)
+          .send(errors("AuthenticationException", "Unauthenticated."));
+      const [profile] = await rows<{
+        id: number;
+        admin: number;
+        username: string;
+        email: string;
+        first_name: string | null;
+        last_name: string | null;
+        language: string;
+      }>(
+        pool,
+        `SELECT p.upstream_id AS id,u.is_admin AS admin,p.username,u.email,p.first_name,p.last_name,p.language
+       FROM compat_account_profiles p JOIN users u ON u.id=p.user_id WHERE p.user_id=?`,
+        [actor.id],
+      );
+      if (!profile)
+        return reply
+          .code(404)
+          .send(
+            errors(
+              "NotFoundHttpException",
+              "Account compatibility profile not found.",
+            ),
+          );
+      return {
+        object: "user",
+        attributes: { ...profile, admin: Boolean(profile.admin) },
+      };
+    },
+  );
   for (const path of ["/api/client", "/api/client/"])
     app.get<{ Querystring: Record<string, unknown> }>(
       path,

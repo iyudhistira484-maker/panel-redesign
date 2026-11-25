@@ -1013,6 +1013,49 @@ async function main() {
       assert.match(legacyKey, /^ptlc_[A-Za-z0-9]+$/);
       const legacyBase = "http://127.0.0.1:13202",
         relayBase = "http://127.0.0.1:13200";
+      const profile = JSON.parse(
+        (await fixtureScript("account-profile")).stdout,
+      );
+      assert.equal(profile.uuid, owner);
+      assert.ok(Number.isSafeInteger(profile.id) && profile.id > 0);
+      await pool.execute(
+        `INSERT INTO compat_account_profiles (user_id,upstream_id,username,first_name,last_name,language) VALUES (?,?,?,?,?,?)`,
+        [
+          owner,
+          profile.id,
+          profile.username,
+          profile.name_first,
+          profile.name_last,
+          profile.language,
+        ],
+      );
+      const accountPath = "/api/client/account";
+      const [legacyAccount, relayAccount, anonymousAccount, otherAccount] =
+        await Promise.all([
+          fetch(`${legacyBase}${accountPath}`, {
+            headers: {
+              authorization: `Bearer ${legacyKey}`,
+              accept: "application/json",
+            },
+          }),
+          fetch(`${relayBase}${accountPath}`, {
+            headers: {
+              authorization: `Bearer ${relayKey}`,
+              accept: "application/json",
+            },
+          }),
+          relay.inject({ url: accountPath }),
+          relay.inject({
+            url: accountPath,
+            headers: { authorization: `Bearer ${sharedKey}` },
+          }),
+        ]);
+      assert.equal(legacyAccount.status, 200);
+      assert.equal(relayAccount.status, 200);
+      assert.equal(relayAccount.headers.get("cache-control"), "no-store");
+      assert.deepEqual(await relayAccount.json(), await legacyAccount.json());
+      assert.equal(anonymousAccount.statusCode, 401);
+      assert.equal(otherAccount.statusCode, 404);
       const permissionPath = "/api/client/permissions";
       const [legacyPermissions, relayPermissions, unauthenticatedPermissions] =
         await Promise.all([

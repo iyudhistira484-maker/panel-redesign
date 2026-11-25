@@ -47,6 +47,7 @@ export async function migrate(pool: Pool, direction: "up" | "down") {
         { version: 22, file: "022_application_create" },
         { version: 23, file: "023_application_reconcile" },
         { version: 24, file: "024_application_delete" },
+        { version: 25, file: "025_compat_account_profile" },
       ];
       if (direction === "down") migrations.reverse();
       for (const { version, file } of migrations) {
