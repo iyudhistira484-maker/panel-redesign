@@ -831,7 +831,8 @@ async function main() {
     const calls = legacyCalls;
     const cutover = actual
       ? await observeHttpSwitch(uuid, checkpointRecord, () => restart())
-      : (await restart(), undefined);
+      : undefined;
+    if (!actual) await restart();
     if (actual) {
       assert.equal(await fixtureHttp(uuid, switchRecord), switchRecord);
       assert.equal(await fixtureHttp(uuid), switchRecord);
@@ -4050,7 +4051,8 @@ async function main() {
     };
     const rollback = actual
       ? await observeHttpSwitch(uuid, switchRecord, restoreLegacy)
-      : (await restoreLegacy(), undefined);
+      : undefined;
+    if (!actual) await restoreLegacy();
     if (actual)
       assert.deepEqual(
         await Promise.all([legacyStatus(), legacyStatus("second")]),
