@@ -1,5 +1,6 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { FastifyInstance, FastifyReply } from "fastify";
+import { ProvisionError } from "./wings/provision";
 import type { Actor } from "./policy";
 import { fixturePathSegment, WingsUnavailable } from "./wings/client";
 
@@ -14,6 +15,13 @@ type Entry = {
   modified_at: unknown;
 };
 export type FileBinding = {
+  contents(id: string): Promise<Buffer>;
+  edit(
+    id: string,
+    actor: Actor,
+    version: string,
+    text: string,
+  ): Promise<unknown>;
   allowed(id: string, actor: Actor, download: boolean): Promise<boolean>;
   list(id: string, parts: string[]): Promise<Entry[]>;
   read(
@@ -146,6 +154,107 @@ export function registerClientFiles(
       },
     );
   }
+  const fixedFile = "/fixture-docs/example.txt";
+  const textError = (error: unknown, reply: FastifyReply) => {
+    if (!(error instanceof ProvisionError)) return fileError(error, reply);
+    if (error.code === "file_version_conflict")
+      return reply.code(412).send({
+        errors: [
+          {
+            code: "PreconditionFailedHttpException",
+            status: "412",
+            detail: "File changed; reload before writing.",
+          },
+        ],
+      });
+    return failure(reply, error.status);
+  };
+  app.get<{ Params: { identifier: string }; Querystring: { file?: string } }>(
+    "/api/client/servers/:identifier/files/contents",
+    { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
+    async (req, reply) => {
+      const actor = await authenticate(req.headers.authorization ?? "");
+      if (!actor) return failure(reply, 401);
+      const server = await resolve(req.params.identifier, actor.id);
+      if (!server) return failure(reply, 404);
+      if (!binding) return failure(reply, 503);
+      if (!(await binding.allowed(server.id, actor, true)))
+        return failure(reply, 403);
+      if (req.query.file !== fixedFile || Object.keys(req.query).length !== 1)
+        return failure(reply, 400);
+      try {
+        const bytes = await binding.contents(server.id);
+        return reply
+          .type("text/plain; charset=utf-8")
+          .header(
+            "etag",
+            `"${createHash("sha256").update(bytes).digest("hex")}"`,
+          )
+          .header("x-content-type-options", "nosniff")
+          .send(bytes);
+      } catch (error) {
+        return textError(error, reply);
+      }
+    },
+  );
+  app.register(async (scope) => {
+    scope.removeContentTypeParser("text/plain");
+    scope.addContentTypeParser(
+      "text/plain",
+      { parseAs: "buffer" },
+      (_req, body, done) => done(null, body),
+    );
+    scope.post<{
+      Params: { identifier: string };
+      Querystring: { file?: string };
+      Body: Buffer;
+    }>(
+      "/api/client/servers/:identifier/files/write",
+      {
+        bodyLimit: 16384,
+        config: { rateLimit: { max: 12, timeWindow: "1 minute" } },
+      },
+      async (req, reply) => {
+        const actor = await authenticate(req.headers.authorization ?? "");
+        if (!actor) return failure(reply, 401);
+        const server = await resolve(req.params.identifier, actor.id);
+        if (!server) return failure(reply, 404);
+        if (!binding) return failure(reply, 503);
+        if (
+          req.query.file !== fixedFile ||
+          Object.keys(req.query).length !== 1 ||
+          !Buffer.isBuffer(req.body)
+        )
+          return failure(reply, 400);
+        const match = /^"([a-f0-9]{64})"$/.exec(req.headers["if-match"] ?? "");
+        if (!match)
+          return reply.code(428).send({
+            errors: [
+              {
+                code: "PreconditionRequiredHttpException",
+                status: "428",
+                detail: "Send the current strong ETag in If-Match.",
+              },
+            ],
+          });
+        let text: string;
+        try {
+          text = new TextDecoder("utf-8", {
+            fatal: true,
+            ignoreBOM: true,
+          }).decode(req.body);
+        } catch {
+          return failure(reply, 400);
+        }
+        try {
+          await binding.edit(server.id, actor, match[1], text);
+          return reply.code(204).send();
+        } catch (error) {
+          return textError(error, reply);
+        }
+      },
+    );
+  });
   if (!binding) return;
   app.get<{
     Params: { id: string; name: string };

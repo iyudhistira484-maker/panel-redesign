@@ -1,0 +1,1 @@
+ALTER TABLE api_keys ADD COLUMN client_edit_file BOOLEAN NOT NULL DEFAULT FALSE;

@@ -716,6 +716,7 @@ async function main() {
         fileScopes: {
           clientListFiles?: boolean;
           clientDownload?: boolean;
+          clientEditFile?: boolean;
         } = {},
       ) {
         const key = `rly_${randomBytes(32).toString("base64url")}`;
@@ -1905,6 +1906,123 @@ async function main() {
             [uuid],
           );
         }
+        const editKey = await issueKey(ownerSession, false, false, false, {
+          clientDownload: true,
+          clientEditFile: true,
+        });
+        const editable = `${directory}/example.txt`;
+        const textUrl = (
+          base: string,
+          action: "contents" | "write",
+          file = editable,
+        ) =>
+          `${base}/api/client/servers/${identifier}/files/${action}?${new URLSearchParams({ file })}`;
+        const readText = (base: string, key: string) =>
+          fetch(textUrl(base, "contents"), { headers: auth(key) });
+        const writeText = (
+          base: string,
+          key: string,
+          body: string | Uint8Array,
+          etag?: string,
+          file?: string,
+        ) =>
+          fetch(textUrl(base, "write", file), {
+            method: "POST",
+            headers: {
+              ...auth(key),
+              "content-type": "text/plain; charset=utf-8",
+              ...(etag === undefined ? {} : { "if-match": etag }),
+            },
+            body: typeof body === "string" ? body : new Uint8Array(body),
+          });
+        const readFixture = async (base: string, key: string) => {
+          const response = await readText(base, key);
+          assert.equal(response.status, 200);
+          assert.ok(
+            response.headers.get("content-type")?.startsWith("text/plain"),
+          );
+          return {
+            bytes: Buffer.from(await response.arrayBuffer()),
+            etag: response.headers.get("etag"),
+          };
+        };
+        const originalText = await readFixture(legacyBase, legacyKey);
+        assert.deepEqual(
+          (await readFixture(relayBase, downloadKey)).bytes,
+          originalText.bytes,
+        );
+        const legacyText = "Legacy edit via HTTP\r\n";
+        assert.equal(
+          (await writeText(legacyBase, legacyKey, legacyText)).status,
+          204,
+        );
+        const current = await readFixture(relayBase, editKey);
+        assert.deepEqual(current.bytes, Buffer.from(legacyText));
+        assert.ok(current.etag);
+        assert.equal(
+          (await writeText(relayBase, downloadKey, "denied", current.etag))
+            .status,
+          403,
+        );
+        assert.equal(
+          (await writeText(relayBase, editKey, "no version")).status,
+          428,
+        );
+        assert.equal(
+          (
+            await writeText(
+              relayBase,
+              editKey,
+              new Uint8Array([0xff]),
+              current.etag,
+            )
+          ).status,
+          400,
+        );
+        assert.equal(
+          (
+            await writeText(
+              relayBase,
+              editKey,
+              "other file",
+              current.etag,
+              binaryFile,
+            )
+          ).status,
+          400,
+        );
+        const edited = "\uFEFFRelay edit: café\r\n";
+        assert.equal(
+          (await writeText(relayBase, editKey, edited, current.etag)).status,
+          204,
+        );
+        assert.equal(
+          (await writeText(relayBase, editKey, "stale writer", current.etag))
+            .status,
+          412,
+        );
+        const saved = await readFixture(relayBase, editKey);
+        assert.notEqual(saved.etag, current.etag);
+        assert.deepEqual(saved.bytes, Buffer.from(edited));
+        assert.deepEqual(
+          (await readFixture(legacyBase, legacyKey)).bytes,
+          saved.bytes,
+        );
+        assert.equal(
+          (
+            await writeText(
+              relayBase,
+              editKey,
+              originalText.bytes,
+              saved.etag ?? undefined,
+            )
+          ).status,
+          204,
+        );
+        assert.deepEqual(
+          (await readFixture(relayBase, editKey)).bytes,
+          originalText.bytes,
+        );
         await new Promise((resolve) => setTimeout(resolve, 15_100));
         assert.equal((await fetch(expiringDownload)).status, 404);
         if (browser) {
