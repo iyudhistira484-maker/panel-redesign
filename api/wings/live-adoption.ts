@@ -870,6 +870,7 @@ async function main() {
           const download = (app: typeof relay, id: string) =>
             app.inject({
               url: `/api/v1/servers/${id}/files?directory=%2Ffixture-docs&preview=example.txt&download=1`,
+              remoteAddress: "127.0.0.3", // Check cross-node API separately from Chromium rate limits.
               headers: ownerSession,
             });
           const first = await download(relay, uuid);
