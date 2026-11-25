@@ -1236,6 +1236,7 @@ async function main() {
         const requestPower = (key: string, signal: string) =>
           relay.inject({
             method: "POST",
+            remoteAddress: "127.0.0.4",
             url: clientPath,
             headers: auth(key),
             payload: { signal },
@@ -1249,6 +1250,7 @@ async function main() {
           (
             await relay.inject({
               method: "POST",
+              remoteAddress: "127.0.0.4",
               url: clientPath,
               headers: { ...headers, ...ownerSession },
               payload: { signal: "start" },
@@ -1260,6 +1262,7 @@ async function main() {
           (
             await relay.inject({
               method: "POST",
+              remoteAddress: "127.0.0.4",
               url: clientPath,
               headers: {
                 ...auth(ownerPowerKey),
@@ -1282,9 +1285,13 @@ async function main() {
               : signal === "stop"
                 ? await sdk.stopServer(identifier)
                 : await sdk.restartServer(identifier);
-          } catch {
+          } catch (error) {
+            const status =
+              typeof error === "number" && Number.isFinite(error)
+                ? ` (HTTP ${error})`
+                : "";
             throw new Error(
-              `Nodeactyl ${signal} failed at loopback port ${new URL(base).port}`,
+              `Nodeactyl ${signal} failed at loopback port ${new URL(base).port}${status}`,
             );
           }
         }
