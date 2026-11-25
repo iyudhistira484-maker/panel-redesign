@@ -100,9 +100,9 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     page.getByText("Cuplikan konsol tidak tersedia", { exact: false }),
   ).toBeVisible();
   await readMetrics(404);
-  await expect(page.getByRole("alert")).toContainText(
-    "Penggunaan sumber daya tidak tersedia",
-  );
+  await expect(
+    page.getByRole("alert").filter({ hasText: "Penggunaan sumber daya" }),
+  ).toContainText("Penggunaan sumber daya tidak tersedia");
   await send("Start", 404);
   await expect(
     page.getByText("Permintaan ditolak atau tidak tersedia untuk server ini."),
