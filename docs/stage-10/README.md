@@ -24,3 +24,9 @@ Salinan arsip yang sengaja dirusak ditolak sebelum root tujuan dibuat. Arsip val
 Pengukuran satu fixture: backup volume **66 ms**; ekstraksi hingga pembacaan dari workload **2.640 ms**, tidak termasuk restore database atau persiapan checkpoint. Bukan target RTO/RPO produksi.
 
 **Keputusan:** layak melanjutkan pilot staging terisolasi dengan fixture dan data disposable. Tunda pilot produksi sampai backup off-host, kehilangan host database/node, ukuran workload representatif, dan prosedur operasional/otorisasi cutover diuji.
+
+## Persiapan recovery di host baru — belum lulus end-to-end
+
+`scripts/relay-offhost-bundle.py` mengemas satu checkpoint database/volume dengan manifest SHA-256, tanda tangan sumber yang dipin, serta enkripsi CMS AES-256-GCM untuk sertifikat tujuan. Pemulihan bungkus memeriksa autentikasi, ID checkpoint, isi manifest, ukuran dan hash sebelum memublikasikan direktori hasil. Ini **tidak** menjalankan SQL atau mengekstrak tar volume; plaintext sementara harus berada di ruang privat. Simpan private key sumber dan tujuan terpisah dari bundle dan satu sama lain. Simpan material Relay melalui jalur pemulihan rahasia terpisah, bukan di artefak.
+
+Tes `bash scripts/test-relay-offhost-bundle.sh` memakai input sintetis 16 MiB: byte cocok; perubahan ciphertext, ID checkpoint salah, dan signer yang tidak tepercaya ditolak. Ini hanya memverifikasi kemasan, bukan kehilangan host. Latihan end-to-end memerlukan tujuan staging yang benar-benar terpisah dan transport penyimpanan off-host yang disetujui. Di tujuan, tahan akses ke host sumber, impor SQL ke database kosong, pulihkan volume ke Wings baru yang terisolasi, lalu ukur waktu hingga workload membaca byte checkpoint dan selisih perubahan pasca-checkpoint. Jangan menetapkan RTO/RPO atau melanjutkan pilot produksi dari tes kemasan ini.
