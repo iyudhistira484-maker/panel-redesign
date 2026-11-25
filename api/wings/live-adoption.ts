@@ -713,6 +713,10 @@ async function main() {
         clientPower = false,
         clientConsole = false,
         clientStream = false,
+        fileScopes: {
+          clientListFiles?: boolean;
+          clientDownload?: boolean;
+        } = {},
       ) {
         const key = `rly_${randomBytes(32).toString("base64url")}`;
         const result = await relay.inject({
@@ -725,6 +729,7 @@ async function main() {
             ...(clientPower ? { clientPower: true } : {}),
             ...(clientConsole ? { clientConsole: true } : {}),
             ...(clientStream ? { clientStream: true } : {}),
+            ...fileScopes,
           },
         });
         assert.equal(result.statusCode, 201);
@@ -1109,12 +1114,16 @@ async function main() {
             | "control.stop"
             | "control.restart"
             | "control.console"
-            | "websocket.connect",
+            | "websocket.connect"
+            | "file.read"
+            | "file.read-content",
         ) =>
           relay.inject({
             method: "POST",
             url: `/api/v1/servers/${id}/activity-access`,
-            remoteAddress: "127.0.0.6",
+            remoteAddress: permission?.startsWith("file.")
+              ? "127.0.0.7"
+              : "127.0.0.6",
             headers: { ...headers, ...ownerSession },
             payload: {
               email: "collaborator@example.test",
@@ -1722,6 +1731,182 @@ async function main() {
         // A request that timed out at Relay can still be processed after Wings resumes.
         await sdkPower(relayBase, ownerPowerKey, "stop");
         await observed("offline");
+        const [listKey, downloadKey, sharedFileKey] = await Promise.all([
+          issueKey(ownerSession, false, false, false, {
+            clientListFiles: true,
+          }),
+          issueKey(ownerSession, false, false, false, { clientDownload: true }),
+          issueKey(collaborator, false, false, false, {
+            clientListFiles: true,
+            clientDownload: true,
+          }),
+        ]);
+        const fileApi = (
+          base: string,
+          key: string,
+          action: "list" | "download",
+          path: string,
+        ) =>
+          fetch(
+            `${base}/api/client/servers/${identifier}/files/${action}?${new URLSearchParams({ [action === "list" ? "directory" : "file"]: path })}`,
+            { headers: auth(key) },
+          );
+        const directory = "/fixture-docs";
+        const binaryFile = `${directory}/binary.txt`;
+        const compatibleEntries = async (base: string, key: string) => {
+          const response = await fileApi(base, key, "list", directory);
+          assert.equal(response.status, 200);
+          const body = (await response.json()) as {
+            object: string;
+            data: {
+              object: string;
+              attributes: {
+                name: string;
+                size: number;
+                is_file: boolean;
+                is_symlink: boolean;
+              };
+            }[];
+          };
+          assert.equal(body.object, "list");
+          assert.ok(body.data.every((entry) => entry.object === "file_object"));
+          if (base === relayBase)
+            assert.ok(body.data.every((entry) => !entry.attributes.is_symlink));
+          return body.data
+            .filter((entry) => !entry.attributes.is_symlink)
+            .map(({ attributes: { name, size, is_file } }) => ({
+              name,
+              size,
+              is_file,
+            }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+        };
+        assert.deepEqual(
+          await compatibleEntries(relayBase, listKey),
+          await compatibleEntries(legacyBase, legacyKey),
+        );
+        assert.equal(
+          (await fileApi(relayBase, relayKey, "list", directory)).status,
+          403,
+        );
+        assert.equal(
+          (await fileApi(relayBase, downloadKey, "list", directory)).status,
+          403,
+        );
+        assert.equal(
+          (await fileApi(relayBase, listKey, "download", binaryFile)).status,
+          403,
+        );
+        assert.equal(
+          (await fileApi(relayBase, listKey, "list", "/fixture-docs/.."))
+            .status,
+          400,
+        );
+        assert.equal(
+          (
+            await fileApi(
+              relayBase,
+              downloadKey,
+              "download",
+              `${directory}/link.txt`,
+            )
+          ).status,
+          404,
+        );
+        const downloadTicket = async (base: string, key: string) => {
+          const response = await fileApi(base, key, "download", binaryFile);
+          assert.equal(response.status, 200);
+          const body = (await response.json()) as {
+            object: string;
+            attributes: { url: string };
+          };
+          assert.equal(body.object, "signed_url");
+          const url = new URL(body.attributes.url);
+          if (base === relayBase) {
+            assert.equal(url.origin, origin);
+            url.protocol = "http:";
+            url.host = new URL(relayBase).host;
+          }
+          return url;
+        };
+        const legacyDownload = await fetch(
+          await downloadTicket(legacyBase, legacyKey),
+        );
+        assert.equal(legacyDownload.status, 200);
+        const expectedBytes = Buffer.from(await legacyDownload.arrayBuffer());
+        assert.deepEqual(expectedBytes, Buffer.from("\0fixture"));
+        const relayDownload = await downloadTicket(relayBase, downloadKey);
+        const otherPath = new URL(relayDownload);
+        otherPath.pathname = otherPath.pathname.replace(
+          "binary.txt",
+          "example.txt",
+        );
+        assert.equal((await fetch(otherPath)).status, 404);
+        const otherServer = new URL(relayDownload);
+        otherServer.pathname = otherServer.pathname.replace(uuid, second);
+        assert.equal((await fetch(otherServer)).status, 404);
+        const actualDownload = await fetch(relayDownload);
+        assert.equal(actualDownload.status, 200);
+        assert.equal(
+          actualDownload.headers.get("content-disposition"),
+          'attachment; filename="binary.txt"',
+        );
+        assert.deepEqual(
+          Buffer.from(await actualDownload.arrayBuffer()),
+          expectedBytes,
+        );
+        assert.equal((await fetch(relayDownload)).status, 404);
+        const expiringDownload = await downloadTicket(relayBase, downloadKey);
+        try {
+          assert.equal((await mutate(uuid, "grant")).statusCode, 204);
+          assert.equal(
+            (await mutate(uuid, "grant", "file.read")).statusCode,
+            204,
+          );
+          assert.equal(
+            (await fileApi(relayBase, sharedFileKey, "list", directory)).status,
+            200,
+          );
+          assert.equal(
+            (await fileApi(relayBase, sharedFileKey, "download", binaryFile))
+              .status,
+            403,
+          );
+          assert.equal(
+            (await mutate(uuid, "grant", "file.read-content")).statusCode,
+            204,
+          );
+          const revoked = await downloadTicket(relayBase, sharedFileKey);
+          assert.equal(
+            (await mutate(uuid, "revoke", "file.read-content")).statusCode,
+            204,
+          );
+          assert.equal((await fetch(revoked)).status, 404);
+          assert.equal(
+            (await fileApi(relayBase, sharedFileKey, "download", binaryFile))
+              .status,
+            403,
+          );
+          assert.equal(
+            (await fileApi(relayBase, sharedFileKey, "list", directory)).status,
+            200,
+          );
+          assert.equal(
+            (await mutate(uuid, "revoke", "file.read")).statusCode,
+            204,
+          );
+          assert.equal(
+            (await fileApi(relayBase, sharedFileKey, "list", directory)).status,
+            403,
+          );
+        } finally {
+          await pool.execute(
+            "DELETE FROM server_grants WHERE server_id=? AND user_id=(SELECT id FROM users WHERE email='collaborator@example.test')",
+            [uuid],
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 15_100));
+        assert.equal((await fetch(expiringDownload)).status, 404);
         if (browser) {
           await pool.execute(
             "INSERT INTO server_grants (server_id,user_id,permissions) SELECT ?,id,JSON_ARRAY('activity.read') FROM users WHERE email='collaborator@example.test'",

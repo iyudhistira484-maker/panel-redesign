@@ -300,6 +300,7 @@ export async function createApp({
       : undefined,
     provisioner?.compatCommand,
     provisioner?.compatStream,
+    provisioner?.compatFiles,
   );
   const generic = { error: "invalid_credentials" };
   app.get("/health/live", async () => ({ status: "ok" }));
@@ -772,6 +773,8 @@ export async function createApp({
       clientPower?: boolean;
       clientConsole?: boolean;
       clientStream?: boolean;
+      clientListFiles?: boolean;
+      clientDownload?: boolean;
     };
   }>(
     "/api/v1/account/keys",
@@ -785,6 +788,8 @@ export async function createApp({
             clientPower: { type: "boolean" },
             clientConsole: { type: "boolean" },
             clientStream: { type: "boolean" },
+            clientListFiles: { type: "boolean" },
+            clientDownload: { type: "boolean" },
           },
           ["label", "key"],
         ),
@@ -805,7 +810,7 @@ export async function createApp({
         const digest = crypt.digest("api-key", `${req.body.key}.${suffix}`);
         try {
           await db.execute(
-            "INSERT INTO api_keys (id,user_id,digest,label,expires_at,client_power,client_console,client_stream) VALUES (?,?,?,?,TIMESTAMPADD(DAY,90,UTC_TIMESTAMP(3)),?,?,?)",
+            "INSERT INTO api_keys (id,user_id,digest,label,expires_at,client_power,client_console,client_stream,client_list_files,client_download) VALUES (?,?,?,?,TIMESTAMPADD(DAY,90,UTC_TIMESTAMP(3)),?,?,?,?,?)",
             [
               id,
               u.id,
@@ -814,6 +819,8 @@ export async function createApp({
               req.body.clientPower === true,
               req.body.clientConsole === true,
               req.body.clientStream === true,
+              req.body.clientListFiles === true,
+              req.body.clientDownload === true,
             ],
           );
         } catch (e) {
@@ -955,7 +962,9 @@ export async function createApp({
         | "control.stop"
         | "control.restart"
         | "control.console"
-        | "websocket.connect";
+        | "websocket.connect"
+        | "file.read"
+        | "file.read-content";
     };
   }>(
     "/api/v1/servers/:id/activity-access",
@@ -973,6 +982,8 @@ export async function createApp({
                 "control.restart",
                 "control.console",
                 "websocket.connect",
+                "file.read",
+                "file.read-content",
               ],
             },
             action: { type: "string", enum: ["grant", "revoke"] },

@@ -381,6 +381,38 @@ export function createProvisioner(
         }
       });
     },
+    compatFiles: {
+      async allowed(id: string, actor: Actor, download: boolean) {
+        const server = await load(pool, id);
+        if (
+          !server ||
+          !fromNode(server) ||
+          !server.document.equals(Buffer.from(disposableEgg)) ||
+          server.phase !== "installed" ||
+          actor.channel !== "api-key" ||
+          !actor.keyId
+        )
+          return false;
+        return (
+          (
+            await rows(
+              pool,
+              `SELECT k.id FROM api_keys k JOIN servers s ON s.id=? WHERE k.id=? AND k.user_id=? AND ${download ? "k.client_download" : "k.client_list_files"}=TRUE AND k.expires_at>UTC_TIMESTAMP(3) AND (s.owner_id=k.user_id OR EXISTS (SELECT 1 FROM server_grants g WHERE g.server_id=s.id AND g.user_id=k.user_id AND JSON_CONTAINS(g.permissions,JSON_QUOTE(?))))`,
+              [
+                id,
+                actor.keyId,
+                actor.id,
+                download ? "file.read-content" : "file.read",
+              ],
+            )
+          ).length === 1
+        );
+      },
+      list: (id: string, parts: string[]) =>
+        client.fixtureDirectoryMetadata(id, parts),
+      read: (id: string, parts: string[], name: string, verifyOnly: boolean) =>
+        client.fixtureDownload(id, parts, name, verifyOnly),
+    },
     compatStream: {
       async allowed(id: string, actor: Actor) {
         const server = await load(pool, id);

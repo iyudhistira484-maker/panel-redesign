@@ -213,6 +213,11 @@ export class WingsClient {
     return data.toString("utf8");
   }
   async fixtureDirectory(id: string, segments: string[]) {
+    return (await this.fixtureDirectoryMetadata(id, segments)).map(
+      ({ name, directory, size }) => ({ name, directory, size }),
+    );
+  }
+  async fixtureDirectoryMetadata(id: string, segments: string[]) {
     const root = this.#server(id);
     const list = async (path: string) => {
       const response = await this.#send(
@@ -239,20 +244,41 @@ export class WingsClient {
           row.size < 0
         )
           return [];
+        const metadata = {
+          mode: row.mode,
+          mode_bits: row.mode_bits,
+          mimetype: row.mime ?? "application/octet-stream",
+          created_at: row.created,
+          modified_at: row.modified,
+        };
         if (
           row.directory === true &&
           row.file === false &&
           typeof row.mode === "string" &&
           row.mode.startsWith("d")
         )
-          return [{ name: row.name, directory: true, size: Number(row.size) }];
+          return [
+            {
+              name: row.name,
+              directory: true,
+              size: Number(row.size),
+              ...metadata,
+            },
+          ];
         if (
           row.directory === false &&
           row.file === true &&
           typeof row.mode === "string" &&
           row.mode.startsWith("-")
         )
-          return [{ name: row.name, directory: false, size: Number(row.size) }];
+          return [
+            {
+              name: row.name,
+              directory: false,
+              size: Number(row.size),
+              ...metadata,
+            },
+          ];
         return [];
       });
     };
@@ -267,6 +293,27 @@ export class WingsClient {
       items = await list(path);
     }
     return items;
+  }
+  async fixtureDownload(
+    id: string,
+    segments: string[],
+    name: string,
+    verifyOnly = false,
+  ) {
+    const entry = (await this.fixtureDirectory(id, segments)).find(
+      (item) => !item.directory && item.name === name,
+    );
+    if (!entry) throw new WingsUnavailable("not_found");
+    if (entry.size > 16384) throw new WingsUnavailable("payload");
+    if (verifyOnly) return Buffer.alloc(0);
+    const path = `/${[...segments, name].join("/")}`;
+    const response = await this.#send(
+      `${this.#server(id)}/files/contents?file=${encodeURIComponent(path)}&download=1`,
+      200,
+    );
+    const bytes = await this.#read(response, 16384);
+    if (bytes.length !== entry.size) throw new WingsUnavailable("payload");
+    return bytes;
   }
   async fixtureText(id: string, directories: string[], name: string) {
     if (!fixturePathSegment(name) || !name.endsWith(".txt"))

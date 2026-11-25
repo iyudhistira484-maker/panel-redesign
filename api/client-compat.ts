@@ -1,3 +1,4 @@
+import { registerClientFiles, type FileBinding } from "./client-files";
 import { registerClientStream, type StreamBinding } from "./client-stream";
 import type { Actor } from "./policy";
 import type { FastifyInstance } from "fastify";
@@ -61,6 +62,7 @@ export function registerClientCompatibility(
   ) => Promise<unknown>,
   command?: (id: string, command: string, actor: Actor) => Promise<void>,
   stream?: StreamBinding,
+  files?: FileBinding,
 ) {
   for (const path of ["/api/client", "/api/client/"])
     app.get<{ Querystring: Record<string, unknown> }>(
@@ -168,6 +170,7 @@ export function registerClientCompatibility(
     );
     return records.length === 1 ? records[0] : null;
   }
+  registerClientFiles(app, origin, authenticate, resolve, files);
   const issueStream = stream
     ? registerClientStream(app, origin, stream)
     : undefined;
