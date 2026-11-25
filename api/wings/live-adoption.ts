@@ -1394,6 +1394,7 @@ async function main() {
               403,
             );
             try {
+              assert.equal((await mutate(uuid, "grant")).statusCode, 204);
               assert.equal(
                 (await mutate(uuid, "grant", "control.start")).statusCode,
                 204,

@@ -404,7 +404,11 @@ export function createProvisioner(
             if (grant?.allowed !== 1)
               throw new ProvisionError(404, "server_not_found");
           }
-          if (!eligible(server) || server.phase !== "installed")
+          if (
+            !fromNode(server) ||
+            !server.document.equals(Buffer.from(disposableEgg)) ||
+            server.phase !== "installed"
+          )
             throw new ProvisionError(422, "disposable_fixture_required");
           await db.execute(
             "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,?,?)",
