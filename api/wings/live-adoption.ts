@@ -110,7 +110,10 @@ async function main() {
     },
     { prefix: "/api/remote" },
   );
-  const origin = "https://relay.example.test";
+  const browser = actual && process.env.RELAY_WINGS_BROWSER === "1";
+  const origin = browser
+    ? "https://127.0.0.1:4443"
+    : "https://relay.example.test";
   const mail = stagingMail(origin);
   const relayFor = (configured: typeof node) =>
     createApp({
@@ -768,6 +771,31 @@ async function main() {
           { event: "wings.power_start_requested", subject_id: uuid },
           { event: "wings.power_stop_requested", subject_id: uuid },
         ]);
+        if (browser) {
+          await pool.execute(
+            "INSERT INTO server_grants (server_id,user_id,permissions) SELECT ?,id,JSON_ARRAY('activity.read') FROM users WHERE email='collaborator@example.test'",
+            [uuid],
+          );
+          try {
+            const run = await docker(
+              "./node_modules/.bin/playwright",
+              ["test", "tests/wings-browser-live.spec.ts"],
+              {
+                env: {
+                  ...process.env,
+                  RELAY_BROWSER_FIXTURE_ID: uuid,
+                  RELAY_BROWSER_FIXTURE_PASSWORD: password,
+                },
+                timeout: 90_000,
+              },
+            );
+            console.log(run.stdout);
+          } finally {
+            await pool.execute("DELETE FROM server_grants WHERE server_id=?", [
+              uuid,
+            ]);
+          }
+        }
       };
     }
     await copyFile(`${config}.backup`, config);

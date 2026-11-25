@@ -6,6 +6,7 @@ work=$(mktemp -d)
 name=relay-wings-contract
 network=relay-wings-contract-net
 harness_pid=''
+proxy_pid=''
 remote_port=13200
 harness=api/wings/live-contract.ts
 if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == adoption || "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then
@@ -13,6 +14,7 @@ if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == adoption || "${RELAY_BOOTSTRAP_SCENARIO
   harness=api/wings/live-adoption.ts
 fi
 cleanup() {
+  if [[ -n "$proxy_pid" ]]; then kill "$proxy_pid" 2>/dev/null || true; fi
   if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then docker rm -f relay-adoption-panel relay-adoption-db relay-wings-adoption-second relay-adoption-mailpit >/dev/null 2>&1 || true; fi
   docker rm -f "$name" >/dev/null 2>&1 || true
   docker network rm "$network" >/dev/null 2>&1 || true
@@ -131,6 +133,12 @@ if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then
     while IFS= read -r message; do [[ -z "$message" ]] || printf '::warning::%s\n' "$message"; done <<< "$diagnostics"
     exit 1
   fi
+fi
+if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then
+  export RELAY_WINGS_BROWSER=1
+  openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=127.0.0.1 -addext 'subjectAltName=IP:127.0.0.1' -keyout "$work/key.pem" -out "$work/cert.pem" 2>/dev/null
+  node scripts/auth-browser-proxy.mjs "$work/cert.pem" "$work/key.pem" 13200 &
+  proxy_pid=$!
 fi
 RELAY_WINGS_CONTRACT_DATA="$work/data/volumes" RELAY_ADOPTION_FIXTURE_CONFIG="$work/config/config.yml" RELAY_ADOPTION_SECOND_CONFIG="$work/config2/config.yml" ./node_modules/.bin/tsx "$harness" &
 harness_pid=$!

@@ -102,6 +102,16 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run test:wings
+      - if: matrix.scenario == 'legacy-panel'
+        run: npm run build
+      - if: matrix.scenario == 'legacy-panel'
+        name: Use runner Chromium or install Playwright browser
+        run: |
+          if command -v google-chrome >/dev/null; then
+            echo "RELAY_CHROMIUM_PATH=$(command -v google-chrome)" >> "$GITHUB_ENV"
+          else
+            npx playwright install --with-deps chromium
+          fi
       - run: bash scripts/wings-contract.sh
         env:
           RELAY_BOOTSTRAP_SCENARIO: ${{ matrix.scenario }}
