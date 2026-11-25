@@ -9,11 +9,64 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
   const [items, setItems] = useState<Entry[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
-  const [preview, setPreview] = useState<{ name: string; text: string } | null>(
-    null,
-  );
+  const [preview, setPreview] = useState<{
+    name: string;
+    text: string;
+    version: string;
+  } | null>(null);
   const [previewError, setPreviewError] = useState(false);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<
+    "saved" | "conflict" | "error" | null
+  >(null);
+  async function save() {
+    if (
+      !preview ||
+      draft === null ||
+      busy ||
+      new TextEncoder().encode(draft).length > 16384
+    )
+      return;
+    setBusy(true);
+    setSaveStatus(null);
+    try {
+      const response = await fetch(
+        `/api/v1/servers/${encodeURIComponent(id)}/files/edit-fixture`,
+        {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "content-type": "application/json",
+            "x-relay-request": "1",
+          },
+          body: JSON.stringify({ version: preview.version, text: draft }),
+          signal: AbortSignal.timeout(30000),
+        },
+      );
+      const data = await response.json();
+      if (response.status === 409 && data?.error === "file_version_conflict") {
+        setSaveStatus("conflict");
+        return;
+      }
+      if (
+        !response.ok ||
+        data?.name !== preview.name ||
+        typeof data.text !== "string" ||
+        typeof data.version !== "string"
+      )
+        throw new Error("Save unverified");
+      setPreview(data);
+      setDraft(null);
+      setSaveStatus("saved");
+    } catch {
+      setSaveStatus("error");
+    } finally {
+      setBusy(false);
+    }
+  }
   async function openText(name: string) {
+    setDraft(null);
+    setSaveStatus(null);
     setDownloadError(false);
     setPreview(null);
     setPreviewError(false);
@@ -94,6 +147,8 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
     }
   }
   async function load(parts: string[]) {
+    setDraft(null);
+    setSaveStatus(null);
     setDownloadError(false);
     setPreview(null);
     setPreviewError(false);
@@ -210,6 +265,62 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
           >
             {en ? "Download text file" : "Unduh file teks"}
           </Button>
+          {path.join("/") === "fixture-docs" &&
+            preview.name === "example.txt" &&
+            (draft === null ? (
+              <Button disabled={busy} onClick={() => setDraft(preview.text)}>
+                {en ? "Edit staging text" : "Edit teks staging"}
+              </Button>
+            ) : (
+              <>
+                <p>
+                  {en ? "The server must be offline." : "Server harus offline."}
+                </p>
+                <textarea
+                  aria-label={en ? "Text editor" : "Editor teks"}
+                  value={draft}
+                  onChange={(event) => setDraft(event.currentTarget.value)}
+                  maxLength={16384}
+                  rows={6}
+                  disabled={busy}
+                />
+                <Button
+                  disabled={
+                    busy ||
+                    saveStatus === "conflict" ||
+                    new TextEncoder().encode(draft).length > 16384
+                  }
+                  onClick={() => void save()}
+                >
+                  {en ? "Save text" : "Simpan teks"}
+                </Button>
+                <Button
+                  disabled={busy}
+                  onClick={() => void openText(preview.name)}
+                >
+                  {en ? "Reload file" : "Muat ulang file"}
+                </Button>
+              </>
+            ))}
+          {saveStatus === "saved" && (
+            <output>
+              {en ? "Saved and verified." : "Tersimpan dan terverifikasi."}
+            </output>
+          )}
+          {saveStatus === "conflict" && (
+            <p role="alert">
+              {en
+                ? "File changed. Reload before saving."
+                : "File sudah berubah. Muat ulang sebelum menyimpan."}
+            </p>
+          )}
+          {saveStatus === "error" && (
+            <p role="alert">
+              {en
+                ? "Save not verified. Check the server and reload the file."
+                : "Penyimpanan belum terverifikasi. Periksa server dan muat ulang file."}
+            </p>
+          )}
           <pre>{preview.text}</pre>
         </section>
       )}

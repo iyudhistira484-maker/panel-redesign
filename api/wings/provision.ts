@@ -11,7 +11,7 @@ import {
   type FixtureMode,
 } from "../eggs/reviewed-workload";
 import { WingsSocket, SocketError } from "./socket";
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import type { Pool } from "mysql2/promise";
 import { rows, transaction, type Executor } from "../db";
 import { canServer, type Actor } from "../policy";
@@ -299,7 +299,13 @@ export function createProvisioner(
         const result = await client.fixtureText(id, segments, preview);
         if (result === null)
           throw new ProvisionError(422, "text_preview_unavailable");
-        return download ? result.bytes : { name: preview, text: result.text };
+        return download
+          ? result.bytes
+          : {
+              name: preview,
+              text: result.text,
+              version: createHash("sha256").update(result.bytes).digest("hex"),
+            };
       } catch (error) {
         if (error instanceof WingsUnavailable)
           throw new ProvisionError(
@@ -308,6 +314,72 @@ export function createProvisioner(
           );
         throw error;
       }
+    },
+    async editFixtureText(
+      id: string,
+      actor: Actor,
+      version: string,
+      text: string,
+    ) {
+      return exclusive(id, async () => {
+        const server = await load(pool, id);
+        if (
+          !server ||
+          actor.channel !== "session" ||
+          server.ownerId !== actor.id
+        )
+          throw new ProvisionError(404, "server_not_found");
+        if (!eligible(server))
+          throw new ProvisionError(422, "disposable_fixture_required");
+        if (server.phase !== "installed")
+          throw new ProvisionError(409, "server_not_installed");
+        const bytes = Buffer.from(text, "utf8");
+        if (
+          bytes.length > 16384 ||
+          bytes.toString("utf8") !== text ||
+          [...bytes].some(
+            (byte) =>
+              (byte < 32 && byte !== 9 && byte !== 10 && byte !== 13) ||
+              byte === 127,
+          )
+        )
+          throw new ProvisionError(422, "invalid_text_file");
+        try {
+          if ((await client.state(id)) !== "offline")
+            throw new ProvisionError(409, "server_not_offline");
+          const current = await client.fixtureText(
+            id,
+            ["fixture-docs"],
+            "example.txt",
+          );
+          if (!current)
+            throw new ProvisionError(422, "text_preview_unavailable");
+          if (
+            createHash("sha256").update(current.bytes).digest("hex") !== version
+          )
+            throw new ProvisionError(409, "file_version_conflict");
+          await client.writeFixtureText(id, text);
+          const observed = await client.fixtureText(
+            id,
+            ["fixture-docs"],
+            "example.txt",
+          );
+          if (!observed?.bytes.equals(bytes))
+            throw new ProvisionError(502, "file_write_unverified");
+          return {
+            name: "example.txt",
+            text: observed.text,
+            version: createHash("sha256").update(observed.bytes).digest("hex"),
+          };
+        } catch (error) {
+          if (error instanceof WingsUnavailable)
+            throw new ProvisionError(
+              error.reason === "not_found" ? 404 : 502,
+              "file_write_unverified",
+            );
+          throw error;
+        }
+      });
     },
     async stats(id: string, actor: Actor, scope: "admin" | "user" = "admin") {
       const server =

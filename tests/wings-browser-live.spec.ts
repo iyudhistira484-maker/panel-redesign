@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -106,6 +107,11 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     name: "Baca aktivitas server",
   });
   const fileApi = `${origin}/api/v1/servers/${id}/files`;
+  const editApi = `${fileApi}/edit-fixture`;
+  const editHeaders = { origin, "x-relay-request": "1" };
+  const initialVersion = createHash("sha256")
+    .update("<strong>fixture preview</strong>\n")
+    .digest("hex");
   await open("collaborator@example.test");
   expect((await page.context().request.get(fileApi)).status()).toBe(404);
   expect(
@@ -117,6 +123,16 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
           download: "1",
         },
       })
+    ).status(),
+  ).toBe(404);
+  expect(
+    (
+      await page
+        .context()
+        .request.post(editApi, {
+          headers: editHeaders,
+          data: { version: initialVersion, text: "blocked" },
+        })
     ).status(),
   ).toBe(404);
   await readActivity.click();
@@ -175,6 +191,22 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     Buffer.from("<strong>fixture preview</strong>\n"),
   );
 
+  await preview.getByRole("button", { name: "Edit teks staging" }).click();
+  await preview
+    .getByRole("textbox", { name: "Editor teks" })
+    .fill("Saved from Chromium\n");
+  await preview.getByRole("button", { name: "Simpan teks" }).click();
+  await expect(preview.getByText("Tersimpan dan terverifikasi.")).toBeVisible();
+  const stale = await page
+    .context()
+    .request.post(editApi, {
+      headers: editHeaders,
+      data: { version: initialVersion, text: "stale overwrite" },
+    });
+  expect(stale.status()).toBe(409);
+  expect((await stale.json()).error).toBe("file_version_conflict");
+  await files.getByRole("button", { name: "example.txt", exact: true }).click();
+  await expect(preview.locator("pre")).toHaveText("Saved from Chromium");
   await files.getByRole("button", { name: "binary.txt", exact: true }).click();
   await expect(page.getByText("Pratinjau teks tidak tersedia.")).toBeVisible();
   await expect(preview).toHaveCount(0);

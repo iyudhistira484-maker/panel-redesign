@@ -47,7 +47,7 @@ export class WingsClient {
     path: string,
     expected: number,
     method = "GET",
-    body?: object,
+    body?: object | string,
     allowMissing = false,
   ): Promise<Response> {
     let response: Response;
@@ -57,9 +57,18 @@ export class WingsClient {
         headers: {
           authorization: `Bearer ${this.#node.token}`,
           accept: "application/json",
-          ...(body ? { "content-type": "application/json" } : {}),
+          ...(typeof body === "string"
+            ? { "content-type": "text/plain; charset=utf-8" }
+            : body
+              ? { "content-type": "application/json" }
+              : {}),
         },
-        body: body ? JSON.stringify(body) : undefined,
+        body:
+          typeof body === "string"
+            ? body
+            : body
+              ? JSON.stringify(body)
+              : undefined,
         signal: AbortSignal.timeout(5000),
         redirect: "error",
       });
@@ -246,6 +255,15 @@ export class WingsClient {
     } catch {
       return null;
     }
+  }
+  async writeFixtureText(id: string, text: string) {
+    const response = await this.#send(
+      `${this.#server(id)}/files/write?file=%2Ffixture-docs%2Fexample.txt`,
+      204,
+      "POST",
+      text,
+    );
+    await response.body?.cancel();
   }
   /** Bounded digest of all visible directories and regular-file bytes; fail closed on other entries. */
   async transferTreeDigest(id: string) {

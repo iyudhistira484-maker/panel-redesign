@@ -1118,6 +1118,46 @@ export async function createApp({
       },
     );
   if (provisioner)
+    app.post<{
+      Params: { id: string };
+      Body: { version: string; text: string };
+    }>(
+      "/api/v1/servers/:id/files/edit-fixture",
+      {
+        bodyLimit: 100_000,
+        config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+        schema: {
+          body: object({
+            version: text(64, 64, "^[a-f0-9]{64}$"),
+            text: text(0, 16384),
+          }),
+        },
+      },
+      async (req, reply) => {
+        reply.header("cache-control", "no-store");
+        const principal = await actor(
+          req.cookies[sessionCookie],
+          req.headers.authorization,
+        );
+        if (!principal || principal.channel !== "session")
+          return reply.code(401).send({ error: "unauthenticated" });
+        if (!UUID_V4.test(req.params.id))
+          return reply.code(404).send({ error: "server_not_found" });
+        try {
+          return await provisioner.editFixtureText(
+            req.params.id,
+            principal,
+            req.body.version,
+            req.body.text,
+          );
+        } catch (error) {
+          if (error instanceof ProvisionError)
+            return reply.code(error.status).send({ error: error.code });
+          throw error;
+        }
+      },
+    );
+  if (provisioner)
     app.get<{ Params: { id: string } }>(
       "/api/v1/servers/:id/stats",
       { config: { rateLimit: { max: 15, timeWindow: "1 minute" } } },
