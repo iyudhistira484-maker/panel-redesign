@@ -51,7 +51,21 @@ cat > /mnt/server/relay-start.sh <<'WORKLOAD'
 set -eu
 trap 'exit 0' TERM INT
 printf '%s\n' RELAY_CONTRACT_READY 'RELAY_DIAGNOSTIC runtime=ready config=loaded' 'RELAY_DIAGNOSTIC runtime=ready config=loaded token=fixture-console-secret'
-while :; do sleep 1 & wait "$!"; done
+while :; do
+    if IFS= read -r command; then
+        case "$command" in
+            'relay-marker '*)
+                marker=${command#relay-marker }
+                case "$marker" in
+                    ''|*[!0-9a-f]*) ;;
+                    *) if [ "${#marker}" -eq 24 ]; then printf 'RELAY_COMMAND_ACK %s\n' "$marker"; fi ;;
+                esac
+                ;;
+        esac
+    else
+        sleep 1 & wait "$!"
+    fi
+done
 WORKLOAD
 chmod 644 /mnt/server/relay-start.sh
 mkdir -p /mnt/server/fixture-docs

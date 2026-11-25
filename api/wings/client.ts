@@ -96,6 +96,15 @@ export class WingsClient {
     });
     await response.body?.cancel();
   }
+  async command(id: string, command: string) {
+    const response = await this.#send(
+      `${this.#server(id)}/commands`,
+      204,
+      "POST",
+      { commands: [command] },
+    );
+    await response.body?.cancel();
+  }
   async power(id: string, action: "start" | "stop" | "restart") {
     if (action !== "start" && action !== "stop" && action !== "restart")
       throw new Error("Unsupported power action");

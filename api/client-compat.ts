@@ -58,6 +58,7 @@ export function registerClientCompatibility(
     action: "start" | "stop" | "restart",
     actor: Actor,
   ) => Promise<unknown>,
+  command?: (id: string, command: string, actor: Actor) => Promise<void>,
 ) {
   for (const path of ["/api/client", "/api/client/"])
     app.get<{ Querystring: Record<string, unknown> }>(
@@ -196,6 +197,69 @@ export function registerClientCompatibility(
       } catch (error) {
         if (error instanceof ProvisionError) return unavailable(error.status);
         throw error;
+      }
+    },
+  );
+  app.post<{ Params: { identifier: string }; Body: { command: string } }>(
+    "/api/client/servers/:identifier/command",
+    {
+      bodyLimit: 1024,
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+    },
+    async (req, reply) => {
+      reply.header("cache-control", "no-store");
+      const principal = await authenticate(req.headers.authorization ?? "");
+      if (!principal)
+        return reply
+          .code(401)
+          .send(errors("AuthenticationException", "Unauthenticated."));
+      const input = req.body?.command;
+      if (
+        typeof input !== "string" ||
+        Object.keys(req.body ?? {}).length !== 1 ||
+        !/^relay-marker [a-f0-9]{24}(?![\s\S])/.test(input)
+      )
+        return reply
+          .code(400)
+          .send(
+            errors(
+              "BadRequestHttpException",
+              "Only the staging marker command is supported.",
+            ),
+          );
+      const server = await resolve(req.params.identifier, principal.id);
+      if (!server)
+        return reply
+          .code(404)
+          .send(errors("NotFoundHttpException", "Server not found."));
+      const unavailable = (status: number, code: string, detail: string) =>
+        reply
+          .code(status)
+          .send({ errors: [{ code, status: String(status), detail }] });
+      if (!command)
+        return unavailable(
+          503,
+          "ServiceUnavailableHttpException",
+          "Server console unavailable.",
+        );
+      try {
+        await command(server.id, input, principal);
+        return reply.code(204).send();
+      } catch (error) {
+        if (!(error instanceof ProvisionError)) throw error;
+        if (error.status === 404)
+          return reply
+            .code(404)
+            .send(errors("NotFoundHttpException", "Server not found."));
+        return unavailable(
+          error.status,
+          error.status === 403
+            ? "AuthorizationException"
+            : "CommandRequestException",
+          error.status === 502
+            ? "Command delivery unconfirmed."
+            : "Command not permitted or unavailable.",
+        );
       }
     },
   );

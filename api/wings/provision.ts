@@ -381,6 +381,48 @@ export function createProvisioner(
         }
       });
     },
+    async compatCommand(id: string, command: string, actor: Actor) {
+      if (!/^relay-marker [a-f0-9]{24}(?![\s\S])/.test(command))
+        throw new ProvisionError(400, "invalid_fixture_command");
+      await exclusive(id, async () => {
+        await transaction(pool, async (db) => {
+          const server = await load(db, id, true);
+          if (!server) throw new ProvisionError(404, "server_not_found");
+          const [key] = await rows(
+            db,
+            "SELECT id FROM api_keys WHERE id=? AND user_id=? AND client_console=TRUE AND expires_at>UTC_TIMESTAMP(3) FOR UPDATE",
+            [actor.keyId ?? "", actor.id],
+          );
+          if (actor.channel !== "api-key" || !key)
+            throw new ProvisionError(403, "console_scope_required");
+          if (server.ownerId !== actor.id) {
+            const [grant] = await rows<{ allowed: number }>(
+              db,
+              "SELECT JSON_CONTAINS(permissions,JSON_QUOTE('control.console')) AS allowed FROM server_grants WHERE server_id=? AND user_id=? FOR UPDATE",
+              [id, actor.id],
+            );
+            if (grant?.allowed !== 1)
+              throw new ProvisionError(404, "server_not_found");
+          }
+          if (!eligible(server) || server.phase !== "installed")
+            throw new ProvisionError(422, "disposable_fixture_required");
+          await db.execute(
+            "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,?,?)",
+            [actor.id, "wings.command_requested", id],
+          );
+        });
+        try {
+          await client.command(id, command);
+        } catch (error) {
+          if (!(error instanceof WingsUnavailable)) throw error;
+          await pool.execute(
+            "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,?,?)",
+            [actor.id, "wings.command_unconfirmed", id],
+          );
+          throw new ProvisionError(502, "command_unconfirmed");
+        }
+      });
+    },
     async compatResources(id: string) {
       const server = await load(pool, id);
       if (!server || !eligible(server) || server.phase !== "installed")

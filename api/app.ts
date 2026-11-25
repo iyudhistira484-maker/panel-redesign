@@ -172,7 +172,8 @@ export async function createApp({
       // Legacy SDK requests carry an explicit bearer, never a browser session.
       !(
         req.method === "POST" &&
-        req.routeOptions.url === "/api/client/servers/:identifier/power" &&
+        (req.routeOptions.url === "/api/client/servers/:identifier/power" ||
+          req.routeOptions.url === "/api/client/servers/:identifier/command") &&
         req.headers.origin === undefined &&
         req.headers.cookie === undefined &&
         /^Bearer rly_[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{22}$/.test(
@@ -293,6 +294,7 @@ export async function createApp({
       ? (id, action, principal) =>
           provisioner.power(id, action, principal, "compat")
       : undefined,
+    provisioner?.compatCommand,
   );
   const generic = { error: "invalid_credentials" };
   app.get("/health/live", async () => ({ status: "ok" }));
@@ -758,7 +760,14 @@ export async function createApp({
       [u.id],
     );
   });
-  app.post<{ Body: { label: string; key: string; clientPower?: boolean } }>(
+  app.post<{
+    Body: {
+      label: string;
+      key: string;
+      clientPower?: boolean;
+      clientConsole?: boolean;
+    };
+  }>(
     "/api/v1/account/keys",
     {
       config: authLimit,
@@ -768,6 +777,7 @@ export async function createApp({
             label: text(1, 80),
             key: text(47, 47, "^rly_[A-Za-z0-9_-]{43}$"),
             clientPower: { type: "boolean" },
+            clientConsole: { type: "boolean" },
           },
           ["label", "key"],
         ),
@@ -788,8 +798,15 @@ export async function createApp({
         const digest = crypt.digest("api-key", `${req.body.key}.${suffix}`);
         try {
           await db.execute(
-            "INSERT INTO api_keys (id,user_id,digest,label,expires_at,client_power) VALUES (?,?,?,?,TIMESTAMPADD(DAY,90,UTC_TIMESTAMP(3)),?)",
-            [id, u.id, digest, req.body.label, req.body.clientPower === true],
+            "INSERT INTO api_keys (id,user_id,digest,label,expires_at,client_power,client_console) VALUES (?,?,?,?,TIMESTAMPADD(DAY,90,UTC_TIMESTAMP(3)),?,?)",
+            [
+              id,
+              u.id,
+              digest,
+              req.body.label,
+              req.body.clientPower === true,
+              req.body.clientConsole === true,
+            ],
           );
         } catch (e) {
           if ((e as { code?: string }).code === "ER_DUP_ENTRY") return false;
@@ -925,7 +942,11 @@ export async function createApp({
     Body: {
       email: string;
       action: "grant" | "revoke";
-      permission?: "control.start" | "control.stop" | "control.restart";
+      permission?:
+        | "control.start"
+        | "control.stop"
+        | "control.restart"
+        | "control.console";
     };
   }>(
     "/api/v1/servers/:id/activity-access",
@@ -937,7 +958,12 @@ export async function createApp({
             email,
             permission: {
               type: "string",
-              enum: ["control.start", "control.stop", "control.restart"],
+              enum: [
+                "control.start",
+                "control.stop",
+                "control.restart",
+                "control.console",
+              ],
             },
             action: { type: "string", enum: ["grant", "revoke"] },
           },
