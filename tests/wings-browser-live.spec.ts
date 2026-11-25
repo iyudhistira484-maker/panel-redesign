@@ -78,7 +78,20 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       page.getByText("Status tujuan terverifikasi oleh Wings."),
     ).toBeVisible();
   }
+  async function readMetrics(status: number) {
+    const response = page.waitForResponse(
+      (r) => r.url() === `${origin}/api/v1/servers/${id}/stats`,
+    );
+    await page
+      .getByRole("button", { name: "Baca penggunaan sumber daya" })
+      .click();
+    expect((await response).status()).toBe(status);
+  }
   await open("collaborator@example.test");
+  await readMetrics(404);
+  await expect(page.getByRole("alert")).toContainText(
+    "Penggunaan sumber daya tidak tersedia",
+  );
   await send("Start", 404);
   await expect(
     page.getByText("Permintaan ditolak atau tidak tersedia untuk server ini."),
@@ -88,6 +101,10 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   await open("adoption@example.test");
   await send("Start", 202);
   await verify("running");
+  await readMetrics(200);
+  await expect(page.getByLabel("Cuplikan sumber daya Wings")).toContainText(
+    "MiB",
+  );
   await send("Stop", 202);
   await verify("offline");
 

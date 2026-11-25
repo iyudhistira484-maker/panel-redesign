@@ -269,8 +269,19 @@ export function createProvisioner(
   }
   return {
     provider,
-    async stats(id: string, actor: Actor) {
-      const server = await authorized(pool, id, actor);
+    async stats(id: string, actor: Actor, scope: "admin" | "user" = "admin") {
+      const server =
+        scope === "admin"
+          ? await authorized(pool, id, actor)
+          : await load(pool, id);
+      if (
+        !server ||
+        (scope === "user" &&
+          (actor.channel !== "session" || server.ownerId !== actor.id))
+      )
+        throw new ProvisionError(404, "server_not_found");
+      if (!eligible(server))
+        throw new ProvisionError(422, "disposable_fixture_required");
       if (server.phase !== "installed")
         throw new ProvisionError(409, "server_not_installed");
       try {

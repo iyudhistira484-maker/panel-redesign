@@ -1,3 +1,4 @@
+import { ServerMetrics } from "./server-metrics";
 import { ServerPower } from "./server-power";
 import { useState } from "react";
 import type { Locale } from "./i18n";
@@ -100,7 +101,10 @@ export function StagingServers({ locale }: { locale: Locale }) {
                 {en ? "Server detail" : "Detail server"}
               </Button>
               {opened === item.id && (
-                <ServerPower id={item.id} locale={locale} />
+                <>
+                  <ServerPower id={item.id} locale={locale} />
+                  <ServerMetrics id={item.id} locale={locale} />
+                </>
               )}
             </li>
           ))}
