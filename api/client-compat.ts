@@ -1,3 +1,4 @@
+import upstreamPermissions from "./compat-upstream/pterodactyl-permissions.json";
 import { registerClientFiles, type FileBinding } from "./client-files";
 import { registerClientStream, type StreamBinding } from "./client-stream";
 import type { Actor } from "./policy";
@@ -64,6 +65,24 @@ export function registerClientCompatibility(
   stream?: StreamBinding,
   files?: FileBinding,
 ) {
+  app.get(
+    "/api/client/permissions",
+    {
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+    },
+    async (req, reply) => {
+      reply.header("cache-control", "no-store");
+      if (!(await authenticate(req.headers.authorization ?? ""))) {
+        return reply
+          .code(401)
+          .send(errors("AuthenticationException", "Unauthenticated."));
+      }
+      return {
+        object: "system_permissions",
+        attributes: { permissions: upstreamPermissions },
+      };
+    },
+  );
   for (const path of ["/api/client", "/api/client/"])
     app.get<{ Querystring: Record<string, unknown> }>(
       path,

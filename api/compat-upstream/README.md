@@ -1,0 +1,1 @@
+The permission descriptions and keys in `pterodactyl-permissions.json` are from [Pterodactyl Panel v1.15.2, Permission.php](https://github.com/pterodactyl/panel/blob/v1.15.2/app/Models/Permission.php), under the included `PTERODACTYL-LICENSE.md`. This catalog describes upstream keys; serving it does not grant them or establish support for the corresponding Relay operations.

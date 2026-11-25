@@ -1013,6 +1013,31 @@ async function main() {
       assert.match(legacyKey, /^ptlc_[A-Za-z0-9]+$/);
       const legacyBase = "http://127.0.0.1:13202",
         relayBase = "http://127.0.0.1:13200";
+      const permissionPath = "/api/client/permissions";
+      const [legacyPermissions, relayPermissions, unauthenticatedPermissions] =
+        await Promise.all([
+          fetch(`${legacyBase}${permissionPath}`, {
+            headers: {
+              authorization: `Bearer ${legacyKey}`,
+              accept: "application/json",
+            },
+          }),
+          fetch(`${relayBase}${permissionPath}`, {
+            headers: {
+              authorization: `Bearer ${relayKey}`,
+              accept: "application/json",
+            },
+          }),
+          relay.inject({ url: permissionPath }),
+        ]);
+      assert.equal(legacyPermissions.status, 200);
+      assert.equal(relayPermissions.status, 200);
+      assert.equal(relayPermissions.headers.get("cache-control"), "no-store");
+      assert.deepEqual(
+        await relayPermissions.json(),
+        await legacyPermissions.json(),
+      );
+      assert.equal(unauthenticatedPermissions.statusCode, 401);
       async function probe(url: string, key: string) {
         // The exact same upstream SDK calls run against either configured panel.
         const client = new NodeactylClient(url, key);

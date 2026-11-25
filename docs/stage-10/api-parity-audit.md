@@ -4,12 +4,12 @@ Baseline: Panel Pterodactyl v1.15.2 inventories. Generated from Relay route regi
 
 ## client
 
-69 upstream entries: **12 registered**, **0 disposable Wings only**, **57 not registered**.
+69 upstream entries: **13 registered**, **0 disposable Wings only**, **56 not registered**.
 
 | Method | Upstream path | Relay registration |
 | --- | --- | --- |
 | GET | `/` | Registered |
-| GET | `/permissions` | Not registered |
+| GET | `/permissions` | Registered |
 | GET | `/account` | Not registered |
 | GET | `/account/two-factor` | Not registered |
 | POST | `/account/two-factor` | Not registered |
