@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { expect, test } from "@playwright/test";
 
 test.use({
@@ -88,4 +90,40 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   await verify("running");
   await send("Stop", 202);
   await verify("offline");
+
+  // Pause only the first disposable CI daemon after observing a valid state.
+  // Refreshing runtime first would hide the action and not test dispatch failure.
+  const docker = promisify(execFile);
+  const refresh = page.getByRole("button", { name: "Perbarui status" });
+  const fixtureDaemon = "relay-wings-contract";
+  assert.equal(process.env.RELAY_DISPOSABLE_WINGS_CI, "1");
+  assert.equal(process.env.RELAY_BOOTSTRAP_SCENARIO, "legacy-panel");
+  const requests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url() === power && request.method() === "POST")
+      requests.push(request.url());
+  });
+  await docker("docker", ["pause", fixtureDaemon], { timeout: 5000 });
+  try {
+    await send("Start", 502);
+    await expect(
+      page.getByText("Hasil belum diketahui.", { exact: false }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Status tujuan terverifikasi oleh Wings."),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Start", exact: true }),
+    ).toHaveCount(0);
+    await refresh.click();
+    await expect(page.getByText("Status Wings tidak tersedia.")).toBeVisible();
+    expect(requests).toHaveLength(1);
+  } finally {
+    await docker("docker", ["unpause", fixtureDaemon], { timeout: 5000 });
+  }
+  await refresh.click();
+  await expect(
+    page.getByText("Status Wings: offline", { exact: true }),
+  ).toBeVisible();
+  expect(requests).toHaveLength(1);
 });
