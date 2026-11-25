@@ -1,0 +1,97 @@
+name: Off-host staging recovery
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  checkpoint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      CERT: ${{ vars.RELAY_RECOVERY_RECIPIENT_CERT }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create disposable checkpoint
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$CERT" || { echo 'Configure RELAY_RECOVERY_RECIPIENT_CERT before dispatching'; exit 1; }
+          printf '%s\n' "$CERT" > recipient.crt
+          openssl req -x509 -newkey rsa:3072 -nodes -days 1 -subj /CN=relay-checkpoint \
+            -keyout signer.key -out signer.crt
+          echo "signer_digest=$(sha256sum signer.crt | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          mkdir volume artifact
+          dd if=/dev/urandom of=volume/checkpoint.bin bs=1M count=128 status=none
+          digest=$(sha256sum volume/checkpoint.bin | cut -d ' ' -f 1)
+          tar -C volume -cf volume.tar checkpoint.bin
+          printf 'CREATE TABLE fixture (id INT PRIMARY KEY, owner VARCHAR(32), allocation INT, sha CHAR(64));\nINSERT INTO fixture VALUES (1,"staging-owner",25610,"%s");\n' "$digest" > database.sql
+          python3 "$GITHUB_WORKSPACE/scripts/relay-offhost-bundle.py" pack \
+            --checkpoint "$GITHUB_RUN_ID" --signer signer.crt --signing-key signer.key \
+            --recipient recipient.crt --database database.sql --volume volume.tar --output artifact/checkpoint.cms
+          cp signer.crt artifact/
+        id: checkpoint
+      - uses: actions/upload-artifact@v4
+        with:
+          name: encrypted-checkpoint
+          path: ${{ runner.temp }}/artifact/
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+    outputs:
+      signer_digest: ${{ steps.checkpoint.outputs.signer_digest }}
+  restore:
+    needs: checkpoint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      mysql:
+        image: mysql:8.4.8
+        env:
+          MYSQL_ROOT_PASSWORD: disposable-ci
+          MYSQL_DATABASE: recovered
+        options: --health-cmd="mysqladmin ping" --health-interval=5s --health-timeout=5s --health-retries=20
+    env:
+      CERT: ${{ vars.RELAY_RECOVERY_RECIPIENT_CERT }}
+      PRIVATE_KEY: ${{ secrets.RELAY_RECOVERY_RECIPIENT_KEY }}
+      SIGNER_DIGEST: ${{ needs.checkpoint.outputs.signer_digest }}
+      MYSQL: ${{ job.services.mysql.id }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: encrypted-checkpoint
+          path: ${{ runner.temp }}/checkpoint-artifact
+      - name: Recover into fresh MySQL and a fresh workload volume
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$PRIVATE_KEY" || { echo 'Configure RELAY_RECOVERY_RECIPIENT_KEY before dispatching'; exit 1; }
+          printf '%s\n' "$CERT" > recipient.crt
+          printf '%s\n' "$PRIVATE_KEY" > recipient.key
+          trap 'rm -f recipient.key' EXIT
+          unset PRIVATE_KEY
+          cd checkpoint-artifact
+          printf '%s  signer.crt\n' "$SIGNER_DIGEST" | sha256sum -c -
+          restore=(python3 "$GITHUB_WORKSPACE/scripts/relay-offhost-bundle.py" unpack --checkpoint "$GITHUB_RUN_ID" --signer signer.crt --recipient ../recipient.crt --recipient-key ../recipient.key)
+          python3 - <<'PY'
+          from pathlib import Path
+          data = bytearray(Path('checkpoint.cms').read_bytes())
+          data[len(data) // 2] ^= 1
+          Path('corrupt.cms').write_bytes(data)
+          PY
+          if "${restore[@]}" --bundle corrupt.cms --output rejected; then exit 1; fi
+          test ! -e rejected
+          start=$(date +%s%3N)
+          "${restore[@]}" --bundle checkpoint.cms --output recovered
+          docker exec -i "$MYSQL" mysql -uroot -pdisposable-ci recovered < recovered/database.sql
+          row=$(docker exec "$MYSQL" mysql -uroot -pdisposable-ci -N recovered -e 'SELECT owner, allocation, sha FROM fixture WHERE id=1')
+          IFS=$'\t' read -r owner allocation digest <<< "$row"
+          test "$owner" = staging-owner
+          test "$allocation" = 25610
+          mkdir volume
+          tar -C volume -xf recovered/volume.tar -- checkpoint.bin
+          actual=$(docker run --rm --network none --mount "type=bind,src=$PWD/volume,dst=/data,readonly" mysql:8.4.8 sha256sum /data/checkpoint.bin)
+          test "${actual%% *}" = "$digest"
+          echo "::notice::Cross-runner synthetic restore_ms=$(( $(date +%s%3N) - start )) bytes=134217728 corruption_rejected=true"
