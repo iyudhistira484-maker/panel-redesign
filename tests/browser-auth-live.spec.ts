@@ -168,6 +168,7 @@ test("staging server list shows only owned or shared rows and never falls back t
   const password = `Fixture-${randomUUID()}`;
   const ids = Array.from({ length: 3 }, () => randomUUID());
   const emails = ids.map((id) => `${id}@example.test`);
+  const server = randomUUID();
   const pool = stagingPool();
   try {
     const hash = await passwordHash(password);
@@ -178,8 +179,7 @@ test("staging server list shows only owned or shared rows and never falls back t
       );
     const node = randomUUID(),
       nest = randomUUID(),
-      egg = randomUUID(),
-      server = randomUUID();
+      egg = randomUUID();
     await pool.execute(
       "INSERT INTO nodes VALUES (?, 'Fixture node', ?, ?, X'00')",
       [node, `https://${node}.example.test`, node],
@@ -234,6 +234,11 @@ test("staging server list shows only owned or shared rows and never falls back t
       );
     }
 
+    expect(
+      (
+        await context.request.get(`${origin}/api/v1/servers/${server}/activity`)
+      ).status(),
+    ).toBe(i === 2 ? 404 : 200);
     await page.getByRole("button", { name: "Keluar", exact: true }).click();
     await expect(
       page.getByRole("heading", { name: "Masuk", exact: true }),
