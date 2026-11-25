@@ -217,23 +217,40 @@ export class WingsClient {
       ({ name, directory, size }) => ({ name, directory, size }),
     );
   }
+  async #fixtureEntries(id: string, path: string) {
+    const response = await this.#send(
+      `${this.#server(id)}/files/list-directory?directory=${encodeURIComponent(path)}`,
+      200,
+    );
+    let data: unknown;
+    try {
+      data = JSON.parse((await this.#read(response, 131072)).toString("utf8"));
+    } catch {
+      throw new WingsUnavailable("payload");
+    }
+    if (!Array.isArray(data) || data.length > 100)
+      throw new WingsUnavailable("payload");
+    return data;
+  }
+  async fixtureUploadTargetExists(id: string, name: string) {
+    await this.fixtureDirectory(id, ["fixture-docs"]);
+    const entries = await this.#fixtureEntries(id, "/fixture-docs");
+    if (entries.some((entry) => !entry || typeof entry.name !== "string"))
+      throw new WingsUnavailable("payload");
+    return entries.some((entry) => entry.name === name);
+  }
+  async uploadFixtureText(id: string, name: string, text: string) {
+    const response = await this.#send(
+      `${this.#server(id)}/files/write?file=${encodeURIComponent(`/fixture-docs/${name}`)}`,
+      204,
+      "POST",
+      text,
+    );
+    await response.body?.cancel();
+  }
   async fixtureDirectoryMetadata(id: string, segments: string[]) {
-    const root = this.#server(id);
     const list = async (path: string) => {
-      const response = await this.#send(
-        `${root}/files/list-directory?directory=${encodeURIComponent(path)}`,
-        200,
-      );
-      let data: unknown;
-      try {
-        data = JSON.parse(
-          (await this.#read(response, 131072)).toString("utf8"),
-        );
-      } catch {
-        throw new WingsUnavailable("payload");
-      }
-      if (!Array.isArray(data) || data.length > 100)
-        throw new WingsUnavailable("payload");
+      const data = await this.#fixtureEntries(id, path);
       return data.flatMap((row) => {
         if (
           !row ||

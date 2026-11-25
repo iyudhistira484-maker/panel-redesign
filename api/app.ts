@@ -173,6 +173,12 @@ export async function createApp({
               "/api/remote/servers/:uuid/transfer/:result")) &&
         req.method === "POST"
       ) &&
+      !(
+        req.method === "POST" &&
+        req.routeOptions.url === "/api/client/file-uploads/:id" &&
+        req.headers.cookie === undefined &&
+        (req.headers.origin === undefined || req.headers.origin === origin)
+      ) &&
       // Legacy SDK requests carry an explicit bearer, never a browser session.
       !(
         req.method === "POST" &&
@@ -778,6 +784,7 @@ export async function createApp({
       clientListFiles?: boolean;
       clientDownload?: boolean;
       clientEditFile?: boolean;
+      clientUploadFile?: boolean;
     };
   }>(
     "/api/v1/account/keys",
@@ -794,6 +801,7 @@ export async function createApp({
             clientListFiles: { type: "boolean" },
             clientDownload: { type: "boolean" },
             clientEditFile: { type: "boolean" },
+            clientUploadFile: { type: "boolean" },
           },
           ["label", "key"],
         ),
@@ -814,7 +822,7 @@ export async function createApp({
         const digest = crypt.digest("api-key", `${req.body.key}.${suffix}`);
         try {
           await db.execute(
-            "INSERT INTO api_keys (id,user_id,digest,label,expires_at,client_power,client_console,client_stream,client_list_files,client_download,client_edit_file) VALUES (?,?,?,?,TIMESTAMPADD(DAY,90,UTC_TIMESTAMP(3)),?,?,?,?,?,?)",
+            "INSERT INTO api_keys (id,user_id,digest,label,expires_at,client_power,client_console,client_stream,client_list_files,client_download,client_edit_file,client_upload_file) VALUES (?,?,?,?,TIMESTAMPADD(DAY,90,UTC_TIMESTAMP(3)),?,?,?,?,?,?,?)",
             [
               id,
               u.id,
@@ -826,6 +834,7 @@ export async function createApp({
               req.body.clientListFiles === true,
               req.body.clientDownload === true,
               req.body.clientEditFile === true,
+              req.body.clientUploadFile === true,
             ],
           );
         } catch (e) {

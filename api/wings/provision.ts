@@ -349,6 +349,28 @@ export function createProvisioner(
       }
     });
   }
+  async function uploadAllowed(id: string, actor: Actor) {
+    const server = await load(pool, id);
+    if (
+      !server ||
+      server.ownerId !== actor.id ||
+      !fromNode(server) ||
+      !server.document.equals(Buffer.from(disposableEgg)) ||
+      server.phase !== "installed" ||
+      actor.channel !== "api-key" ||
+      !actor.keyId
+    )
+      return false;
+    return (
+      (
+        await rows(
+          pool,
+          "SELECT id FROM api_keys WHERE id=? AND user_id=? AND client_upload_file=TRUE AND expires_at>UTC_TIMESTAMP(3)",
+          [actor.keyId, actor.id],
+        )
+      ).length === 1
+    );
+  }
   return {
     provider,
     async files(
@@ -398,6 +420,51 @@ export function createProvisioner(
     },
     editFixtureText,
     compatFiles: {
+      uploadAllowed,
+      async upload(
+        id: string,
+        actor: Actor,
+        name: string,
+        bytes: Buffer,
+        expires: number,
+      ) {
+        return exclusive(id, async () => {
+          if (
+            !fixturePathSegment(name) ||
+            !name.endsWith(".txt") ||
+            bytes.length > 16384
+          )
+            throw new ProvisionError(400, "invalid_upload");
+          let text: string;
+          try {
+            text = new TextDecoder("utf-8", {
+              fatal: true,
+              ignoreBOM: true,
+            }).decode(bytes);
+          } catch {
+            throw new ProvisionError(400, "invalid_upload");
+          }
+          if (!(await uploadAllowed(id, actor)))
+            throw new ProvisionError(403, "upload_scope_required");
+          if ((await client.state(id)) !== "offline")
+            throw new ProvisionError(409, "server_not_offline");
+          if (await client.fixtureUploadTargetExists(id, name))
+            throw new ProvisionError(409, "file_exists");
+          if (
+            expires <= Date.now() ||
+            !(await uploadAllowed(id, actor)) ||
+            expires <= Date.now()
+          )
+            throw new ProvisionError(403, "upload_ticket_expired_or_revoked");
+          await client.uploadFixtureText(id, name, text);
+          if (
+            !(await client.fixtureDownload(id, ["fixture-docs"], name)).equals(
+              bytes,
+            )
+          )
+            throw new ProvisionError(502, "file_upload_unverified");
+        });
+      },
       contents: async (id: string) => {
         const file = await client.fixtureText(
           id,

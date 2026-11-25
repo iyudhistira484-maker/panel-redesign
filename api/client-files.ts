@@ -15,6 +15,14 @@ type Entry = {
   modified_at: unknown;
 };
 export type FileBinding = {
+  uploadAllowed(id: string, actor: Actor): Promise<boolean>;
+  upload(
+    id: string,
+    actor: Actor,
+    name: string,
+    bytes: Buffer,
+    expires: number,
+  ): Promise<void>;
   contents(id: string): Promise<Buffer>;
   edit(
     id: string,
@@ -255,6 +263,123 @@ export function registerClientFiles(
       },
     );
   });
+  const uploadTickets = new Map<
+    string,
+    { id: string; actor: Actor; expires: number }
+  >();
+  const uploadPath = "/api/client/file-uploads";
+  app.get<{ Params: { identifier: string } }>(
+    "/api/client/servers/:identifier/files/upload",
+    { config: { rateLimit: { max: 12, timeWindow: "1 minute" } } },
+    async (req, reply) => {
+      const actor = await authenticate(req.headers.authorization ?? "");
+      if (!actor) return failure(reply, 401);
+      const server = await resolve(req.params.identifier, actor.id);
+      if (!server) return failure(reply, 404);
+      if (!binding) return failure(reply, 503);
+      if (!(await binding.uploadAllowed(server.id, actor)))
+        return failure(reply, 403);
+      const now = Date.now();
+      for (const [token, ticket] of uploadTickets)
+        if (ticket.expires <= now) uploadTickets.delete(token);
+      if (uploadTickets.size >= 128) return failure(reply, 503);
+      const token = randomBytes(32).toString("base64url");
+      uploadTickets.set(token, { id: server.id, actor, expires: now + 15_000 });
+      const url = new URL(`${uploadPath}/${server.id}`, origin);
+      url.searchParams.set("token", token);
+      return { object: "signed_url", attributes: { url: url.href } };
+    },
+  );
+  if (binding)
+    app.register(async (scope) => {
+      scope.addContentTypeParser(
+        "multipart/form-data",
+        { parseAs: "buffer" },
+        (_req, body, done) => done(null, body),
+      );
+      scope.post<{
+        Params: { id: string };
+        Querystring: { token?: string; directory?: string };
+        Body: Buffer;
+      }>(
+        `${uploadPath}/:id`,
+        {
+          bodyLimit: 20480,
+          config: { rateLimit: { max: 15, timeWindow: "1 minute" } },
+        },
+        async (req, reply) => {
+          reply.header("referrer-policy", "no-referrer");
+          const { token, directory } = req.query;
+          const ticket =
+            typeof token === "string" ? uploadTickets.get(token) : undefined;
+          if (
+            !ticket ||
+            !token ||
+            ticket.id !== req.params.id ||
+            ticket.expires <= Date.now()
+          )
+            return failure(reply, 404);
+          if (
+            directory !== "/fixture-docs" ||
+            Object.keys(req.query).length !== 2 ||
+            !Buffer.isBuffer(req.body)
+          )
+            return failure(reply, 400);
+          uploadTickets.delete(token);
+          let file: File;
+          try {
+            const body = await new Response(new Uint8Array(req.body), {
+              headers: { "content-type": req.headers["content-type"] ?? "" },
+            }).formData();
+            const parts = [...body.entries()];
+            if (
+              parts.length !== 1 ||
+              parts[0][0] !== "files" ||
+              typeof parts[0][1] === "string"
+            )
+              return failure(reply, 400);
+            file = parts[0][1];
+          } catch {
+            return failure(reply, 400);
+          }
+          if (
+            !fixturePathSegment(file.name) ||
+            !file.name.endsWith(".txt") ||
+            file.size > 16384
+          )
+            return failure(reply, 400);
+          try {
+            await binding.upload(
+              ticket.id,
+              ticket.actor,
+              file.name,
+              Buffer.from(await file.arrayBuffer()),
+              ticket.expires,
+            );
+            return reply.code(200).send();
+          } catch (error) {
+            if (
+              error instanceof ProvisionError &&
+              (error.code === "file_exists" ||
+                error.code === "server_not_offline")
+            )
+              return reply.code(409).send({
+                errors: [
+                  {
+                    code: "ConflictHttpException",
+                    status: "409",
+                    detail:
+                      error.code === "file_exists"
+                        ? "File already exists."
+                        : "Server must be offline.",
+                  },
+                ],
+              });
+            return textError(error, reply);
+          }
+        },
+      );
+    });
   if (!binding) return;
   app.get<{
     Params: { id: string; name: string };

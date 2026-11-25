@@ -717,12 +717,17 @@ async function main() {
           clientListFiles?: boolean;
           clientDownload?: boolean;
           clientEditFile?: boolean;
+          clientUploadFile?: boolean;
         } = {},
       ) {
         const key = `rly_${randomBytes(32).toString("base64url")}`;
         const result = await relay.inject({
           method: "POST",
-          remoteAddress: fileScopes.clientEditFile ? "127.0.0.8" : "127.0.0.1",
+          remoteAddress: fileScopes.clientUploadFile
+            ? "127.0.0.9"
+            : fileScopes.clientEditFile
+              ? "127.0.0.8"
+              : "127.0.0.1",
           url: "/api/v1/account/keys",
           headers: { ...headers, ...session },
           payload: {
@@ -2024,7 +2029,150 @@ async function main() {
           (await readFixture(relayBase, editKey)).bytes,
           originalText.bytes,
         );
+        const uploadKey = await issueKey(ownerSession, false, false, false, {
+          clientUploadFile: true,
+        });
+        const getUpload = (base: string, key: string) =>
+          fetch(`${base}/api/client/servers/${identifier}/files/upload`, {
+            headers: auth(key),
+          });
+        async function uploadTicket(base: string, key: string) {
+          const response = await getUpload(base, key);
+          assert.equal(response.status, 200);
+          const body = (await response.json()) as {
+            object: string;
+            attributes: { url: string };
+          };
+          assert.equal(body.object, "signed_url");
+          const url = new URL(body.attributes.url);
+          if (base === relayBase) {
+            assert.equal(url.origin, origin);
+            url.protocol = "http:";
+            url.host = new URL(relayBase).host;
+          }
+          return url;
+        }
+        function sendUpload(
+          url: URL,
+          name: string,
+          body: string,
+          directoryPath = directory,
+          multiple = false,
+        ) {
+          const target = new URL(url);
+          target.searchParams.set("directory", directoryPath);
+          const form = new FormData();
+          form.append("files", new Blob([body], { type: "text/plain" }), name);
+          if (multiple) form.append("files", new Blob(["other"]), "extra.txt");
+          return fetch(target, { method: "POST", body: form });
+        }
+        for (const denied of [listKey, downloadKey, editKey])
+          assert.equal((await getUpload(relayBase, denied)).status, 403);
+        const expiredUpload = await uploadTicket(relayBase, uploadKey);
+        const payload = "\uFEFFUploaded café\r\n";
+        const legacyName = "legacy-upload.txt";
+        const relayName = "relay-upload.txt";
+        assert.equal(
+          (
+            await sendUpload(
+              await uploadTicket(legacyBase, legacyKey),
+              legacyName,
+              payload,
+            )
+          ).status,
+          200,
+        );
+        const relayUpload = await uploadTicket(relayBase, uploadKey);
+        const wrongUpload = new URL(relayUpload);
+        wrongUpload.pathname = wrongUpload.pathname.replace(uuid, second);
+        assert.equal(
+          (await sendUpload(wrongUpload, relayName, payload)).status,
+          404,
+        );
+        assert.equal(
+          (await sendUpload(relayUpload, relayName, payload, "/")).status,
+          400,
+        );
+        assert.equal(
+          (await sendUpload(relayUpload, relayName, payload)).status,
+          200,
+        );
+        assert.equal(
+          (await sendUpload(relayUpload, "replay.txt", payload)).status,
+          404,
+        );
+        assert.equal(
+          (
+            await sendUpload(
+              await uploadTicket(relayBase, uploadKey),
+              relayName,
+              "overwrite",
+            )
+          ).status,
+          409,
+        );
+        assert.equal(
+          (
+            await sendUpload(
+              await uploadTicket(relayBase, uploadKey),
+              "link.txt",
+              "overwrite symlink",
+            )
+          ).status,
+          409,
+        );
+        assert.equal(
+          (
+            await sendUpload(
+              await uploadTicket(relayBase, uploadKey),
+              "large-upload.txt",
+              "x".repeat(16_385),
+            )
+          ).status,
+          400,
+        );
+        assert.equal(
+          (
+            await sendUpload(
+              await uploadTicket(relayBase, uploadKey),
+              "multi.txt",
+              payload,
+              directory,
+              true,
+            )
+          ).status,
+          400,
+        );
+        const wingClient = clientFor(uuid);
+        const uploaded = await wingClient.fixtureDownload(
+          uuid,
+          ["fixture-docs"],
+          relayName,
+        );
+        assert.deepEqual(uploaded, Buffer.from(payload));
+        assert.deepEqual(
+          await wingClient.fixtureDownload(uuid, ["fixture-docs"], legacyName),
+          uploaded,
+        );
+        assert.deepEqual(
+          (await readFixture(relayBase, editKey)).bytes,
+          originalText.bytes,
+        );
+        const names = (
+          await wingClient.fixtureDirectory(uuid, ["fixture-docs"])
+        ).map((entry) => entry.name);
+        for (const rejected of [
+          "replay.txt",
+          "large-upload.txt",
+          "multi.txt",
+          "extra.txt",
+        ])
+          assert.ok(!names.includes(rejected));
         await new Promise((resolve) => setTimeout(resolve, 15_100));
+        assert.equal(
+          (await sendUpload(expiredUpload, "expired.txt", payload)).status,
+          404,
+        );
         assert.equal((await fetch(expiringDownload)).status, 404);
         if (browser) {
           await pool.execute(
