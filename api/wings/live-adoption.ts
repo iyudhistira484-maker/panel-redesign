@@ -1314,12 +1314,124 @@ async function main() {
               (await inspect()) !== before &&
               (await clientFor(uuid).state(uuid)) === "running",
           );
+        const [ownerConsoleKey, sharedConsoleKey] = await Promise.all([
+          issueKey(ownerSession, false, true),
+          issueKey(collaborator, false, true),
+        ]);
+        const marker = () => randomBytes(12).toString("hex");
+        const commandPath = `/api/client/servers/${identifier}/command`;
+        const commandRequest = (key: string, command: string) =>
+          relay.inject({
+            method: "POST",
+            remoteAddress: "127.0.0.5",
+            url: commandPath,
+            headers: auth(key),
+            payload: { command },
+          });
+        const sendMarker = async (base: string, key: string) => {
+          const nonce = marker();
+          try {
+            assert.equal(
+              await new NodeactylClient(base, key).sendServerCommand(
+                identifier,
+                `relay-marker ${nonce}`,
+              ),
+              true,
+            );
+          } catch (error) {
+            throw new Error(
+              `Nodeactyl command failed at loopback port ${new URL(base).port}${typeof error === "number" ? ` (${error})` : ""}`,
+            );
+          }
+          await until("fixture console command acknowledgment", async () => {
+            const { stdout, stderr } = await docker(
+              "docker",
+              ["logs", "--tail", "50", uuid],
+              { timeout: 5000 },
+            );
+            return `${stdout}\n${stderr}`
+              .split(/\r?\n/)
+              .includes(`RELAY_COMMAND_ACK ${nonce}`);
+          });
+        };
+        const offline = await commandRequest(
+          ownerConsoleKey,
+          `relay-marker ${marker()}`,
+        );
+        assert.equal(offline.statusCode, 502);
         for (const [base, key] of [
           [legacyBase, legacyKey],
           [relayBase, ownerPowerKey],
         ] as const) {
           assert.equal(await sdkPower(base, key, "start"), true);
           await observed("running");
+          await sendMarker(
+            base,
+            base === relayBase ? ownerConsoleKey : legacyKey,
+          );
+          if (base === relayBase) {
+            assert.equal(
+              (await commandRequest(ownerPowerKey, `relay-marker ${marker()}`))
+                .statusCode,
+              403,
+            );
+            assert.equal(
+              (
+                await commandRequest(
+                  ownerConsoleKey,
+                  `relay-marker ${marker()}\n`,
+                )
+              ).statusCode,
+              400,
+            );
+            assert.equal(
+              (await commandRequest(ownerConsoleKey, "echo arbitrary"))
+                .statusCode,
+              400,
+            );
+            assert.equal(
+              (await requestPower(ownerConsoleKey, "stop")).statusCode,
+              403,
+            );
+            try {
+              assert.equal(
+                (await mutate(uuid, "grant", "control.start")).statusCode,
+                204,
+              );
+              assert.equal(
+                (
+                  await commandRequest(
+                    sharedConsoleKey,
+                    `relay-marker ${marker()}`,
+                  )
+                ).statusCode,
+                404,
+              );
+              assert.equal(
+                (await mutate(uuid, "grant", "control.console")).statusCode,
+                204,
+              );
+              await sendMarker(relayBase, sharedConsoleKey);
+              assert.equal(
+                (await mutate(uuid, "revoke", "control.console")).statusCode,
+                204,
+              );
+              assert.equal(
+                (
+                  await commandRequest(
+                    sharedConsoleKey,
+                    `relay-marker ${marker()}`,
+                  )
+                ).statusCode,
+                404,
+              );
+            } finally {
+              await pool.execute(
+                "DELETE FROM server_grants WHERE server_id=? AND user_id=(SELECT id FROM users WHERE email='collaborator@example.test')",
+                [uuid],
+              );
+            }
+          }
           const before = await inspect();
           assert.equal(await sdkPower(base, key, "restart"), true);
           await restarted(before);
@@ -1437,124 +1549,6 @@ async function main() {
         // A request that timed out at Relay can still be processed after Wings resumes.
         await sdkPower(relayBase, ownerPowerKey, "stop");
         await observed("offline");
-        const [ownerConsoleKey, sharedConsoleKey] = await Promise.all([
-          issueKey(ownerSession, false, true),
-          issueKey(collaborator, false, true),
-        ]);
-        const marker = () => randomBytes(12).toString("hex");
-        const commandPath = `/api/client/servers/${identifier}/command`;
-        const commandRequest = (key: string, command: string) =>
-          relay.inject({
-            method: "POST",
-            remoteAddress: "127.0.0.5",
-            url: commandPath,
-            headers: auth(key),
-            payload: { command },
-          });
-        const sendMarker = async (base: string, key: string) => {
-          const nonce = marker();
-          try {
-            assert.equal(
-              await new NodeactylClient(base, key).sendServerCommand(
-                identifier,
-                `relay-marker ${nonce}`,
-              ),
-              true,
-            );
-          } catch (error) {
-            throw new Error(
-              `Nodeactyl command failed at loopback port ${new URL(base).port}${typeof error === "number" ? ` (${error})` : ""}`,
-            );
-          }
-          await until("fixture console command acknowledgment", async () => {
-            const { stdout, stderr } = await docker(
-              "docker",
-              ["logs", "--tail", "50", uuid],
-              { timeout: 5000 },
-            );
-            return `${stdout}\n${stderr}`
-              .split(/\r?\n/)
-              .includes(`RELAY_COMMAND_ACK ${nonce}`);
-          });
-        };
-        const offline = await commandRequest(
-          ownerConsoleKey,
-          `relay-marker ${marker()}`,
-        );
-        assert.equal(offline.statusCode, 502);
-        for (const [base, powerKey, consoleKey] of [
-          [legacyBase, legacyKey, legacyKey],
-          [relayBase, ownerPowerKey, ownerConsoleKey],
-        ] as const) {
-          assert.equal(await sdkPower(base, powerKey, "start"), true);
-          await observed("running");
-          await sendMarker(base, consoleKey);
-          if (base === relayBase) {
-            assert.equal(
-              (await commandRequest(ownerPowerKey, `relay-marker ${marker()}`))
-                .statusCode,
-              403,
-            );
-            assert.equal(
-              (
-                await commandRequest(
-                  ownerConsoleKey,
-                  `relay-marker ${marker()}\n`,
-                )
-              ).statusCode,
-              400,
-            );
-            assert.equal(
-              (await commandRequest(ownerConsoleKey, "echo arbitrary"))
-                .statusCode,
-              400,
-            );
-            assert.equal(
-              (await requestPower(ownerConsoleKey, "stop")).statusCode,
-              403,
-            );
-            try {
-              assert.equal(
-                (await mutate(uuid, "grant", "control.start")).statusCode,
-                204,
-              );
-              assert.equal(
-                (
-                  await commandRequest(
-                    sharedConsoleKey,
-                    `relay-marker ${marker()}`,
-                  )
-                ).statusCode,
-                404,
-              );
-              assert.equal(
-                (await mutate(uuid, "grant", "control.console")).statusCode,
-                204,
-              );
-              await sendMarker(relayBase, sharedConsoleKey);
-              assert.equal(
-                (await mutate(uuid, "revoke", "control.console")).statusCode,
-                204,
-              );
-              assert.equal(
-                (
-                  await commandRequest(
-                    sharedConsoleKey,
-                    `relay-marker ${marker()}`,
-                  )
-                ).statusCode,
-                404,
-              );
-            } finally {
-              await pool.execute(
-                "DELETE FROM server_grants WHERE server_id=? AND user_id=(SELECT id FROM users WHERE email='collaborator@example.test')",
-                [uuid],
-              );
-            }
-          }
-          assert.equal(await sdkPower(base, powerKey, "stop"), true);
-          await observed("offline");
-        }
         if (browser) {
           await pool.execute(
             "INSERT INTO server_grants (server_id,user_id,permissions) SELECT ?,id,JSON_ARRAY('activity.read') FROM users WHERE email='collaborator@example.test'",
