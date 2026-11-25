@@ -52,12 +52,12 @@ async function main() {
   });
   const client = new WingsClient(node);
   const docker = promisify(execFile);
-  async function waitState(state: string) {
+  async function waitState(state: string, phase: string) {
     for (let i = 0; i < 40; i++) {
       if ((await client.state(uuid).catch(() => null)) === state) return;
       await new Promise((resolve) => setTimeout(resolve, 750));
     }
-    throw new Error(`Restored workload did not reach ${state}`);
+    throw new Error(`Restored workload did not reach ${state} during ${phase}`);
   }
   try {
     await app.listen({ host: "127.0.0.1", port: 13200 });
@@ -80,7 +80,7 @@ async function main() {
       app.inject({ url: `/api/v1/servers/${uuid}/activity`, headers });
     assert.equal((await activity(runtime.collaborator)).statusCode, 200);
     assert.equal((await activity(runtime.outsider)).statusCode, 404);
-    await waitState("offline");
+    await waitState("offline", "rediscovery");
     const bytes = await client.fixtureDownload(
       uuid,
       ["fixture-docs"],
@@ -92,7 +92,7 @@ async function main() {
     );
     assert.notEqual(runtime.checkpointHash, runtime.newerHash);
     await client.power(uuid, "start");
-    await waitState("running");
+    await waitState("running", "initial boot");
     const { stdout } = await docker(
       "docker",
       ["exec", uuid, "sha256sum", "/home/container/fixture-docs/example.txt"],
@@ -182,10 +182,29 @@ async function main() {
     const freshRecord = `restored-${randomUUID()}`;
     assert.equal(await call(freshRecord), freshRecord);
     await readHttp(freshRecord);
-    await client.power(uuid, "stop");
-    await waitState("offline");
-    await client.power(uuid, "start");
-    await waitState("running");
+    const startedAt = async () =>
+      (
+        await docker(
+          "docker",
+          ["inspect", "--format", "{{.State.StartedAt}}", uuid],
+          { timeout: 5000 },
+        )
+      ).stdout.trim();
+    const originalStart = await startedAt();
+    await client.power(uuid, "restart");
+    let restarted = false;
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const state = await client.state(uuid).catch(() => null);
+      if (
+        state === "running" &&
+        (await startedAt().catch(() => originalStart)) !== originalStart
+      ) {
+        restarted = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 750));
+    }
+    assert.ok(restarted, "Wings restart did not start a new workload process");
     await readHttp(freshRecord);
     const revoke = await app.inject({
       method: "POST",
@@ -221,9 +240,15 @@ main().catch((error: unknown) => {
           ?.split("\n")
           .find((line) => line.includes("offhost-restore.ts:"))
       : undefined;
+  const detail =
+    error instanceof Error &&
+    /^Restored workload did not reach (offline|running) during (rediscovery|initial boot)$/.test(
+      error.message,
+    )
+      ? error.message
+      : "";
   console.error(
-    "::error::Relay/Wings isolated restore assertions failed",
-    frame ?? "",
+    `::error::Relay/Wings isolated restore assertions failed ${detail} ${frame ?? ""}`,
   );
   process.exitCode = 1;
 });
