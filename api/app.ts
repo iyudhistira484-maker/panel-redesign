@@ -815,6 +815,34 @@ export async function createApp({
       [u.id],
     );
   });
+  app.get<{ Querystring: { after?: string } }>(
+    "/api/v1/servers",
+    async (req, reply) => {
+      reply.header("cache-control", "no-store");
+      const principal = await actor(
+        req.cookies[sessionCookie],
+        req.headers.authorization,
+      );
+      if (!principal || principal.channel !== "session")
+        return reply.code(401).send({ error: "unauthenticated" });
+      const after = req.query.after;
+      if (
+        after !== undefined &&
+        (typeof after !== "string" || !UUID_V4.test(after))
+      )
+        return reply.code(400).send({ error: "invalid_cursor" });
+      const result = await rows<{ id: string; name: string }>(
+        pool,
+        `SELECT s.id,s.name FROM servers s
+      WHERE s.id>? AND (s.owner_id=? OR EXISTS (
+        SELECT 1 FROM server_grants g WHERE g.server_id=s.id AND g.user_id=? AND JSON_LENGTH(g.permissions)>0
+      )) ORDER BY s.id LIMIT 51`,
+        [after ?? "", principal.id, principal.id],
+      );
+      const items = result.slice(0, 50);
+      return { items, next: result.length > 50 ? items[49].id : null };
+    },
+  );
   app.get<{ Params: { id: string } }>(
     "/api/v1/servers/:id/activity",
     async (req, reply) => {

@@ -1,3 +1,4 @@
+import { StagingServers } from "./staging-servers";
 import { TotpEnrollment } from "./totp-enrollment";
 import { useEffect, useId, useState, type FormEvent } from "react";
 import type { Locale } from "./i18n";
@@ -174,6 +175,7 @@ export function SignIn({ locale }: { locale: Locale }) {
       {phase === "signed" ? (
         <>
           <p>{name}</p>
+          <StagingServers locale={locale} />
           {canEnroll && (
             <TotpEnrollment locale={locale} onBusy={setEnrolling} />
           )}

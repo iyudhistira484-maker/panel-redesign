@@ -153,3 +153,90 @@ test("HTTPS browser, Mailpit, MySQL and real API complete account recovery and 2
     ).status(),
   ).toBe(401);
 });
+
+test("staging server list shows only owned or shared rows and never falls back to demo", async ({
+  page,
+  context,
+}) => {
+  test.skip(
+    process.env.RELAY_BROWSER_AUTH_CI !== "1",
+    "Disposable staging only",
+  );
+  test.setTimeout(60_000);
+  assert.equal(process.env.RUNNER_ENVIRONMENT, "github-hosted");
+  const origin = "https://127.0.0.1:4443";
+  const password = `Fixture-${randomUUID()}`;
+  const ids = Array.from({ length: 3 }, () => randomUUID());
+  const emails = ids.map((id) => `${id}@example.test`);
+  const pool = stagingPool();
+  try {
+    const hash = await passwordHash(password);
+    for (const [i, id] of ids.entries())
+      await pool.execute(
+        "INSERT INTO users(id,email,display_name,password_hash) VALUES (?,?,?,?)",
+        [id, emails[i], `Inventory operator ${i}`, hash],
+      );
+    const node = randomUUID(),
+      nest = randomUUID(),
+      egg = randomUUID(),
+      server = randomUUID();
+    await pool.execute(
+      "INSERT INTO nodes VALUES (?, 'Fixture node', ?, ?, X'00')",
+      [node, `https://${node}.example.test`, node],
+    );
+    await pool.execute("INSERT INTO nests VALUES (?,?)", [nest, nest]);
+    await pool.execute(
+      "INSERT INTO eggs VALUES (?,?,'Fixture egg','PTDL_v2',X'00')",
+      [egg, nest],
+    );
+    for (const [i, name] of [
+      "Staging shared workload",
+      "Staging private workload",
+    ].entries()) {
+      const allocation = randomUUID();
+      await pool.execute("INSERT INTO allocations VALUES (?,?,'127.0.0.1',?)", [
+        allocation,
+        node,
+        25500 + i,
+      ]);
+      await pool.execute(
+        "INSERT INTO servers(id,name,node_id,owner_id,egg_id,allocation_id) VALUES (?,?,?,?,?,?)",
+        [i === 0 ? server : randomUUID(), name, node, ids[0], egg, allocation],
+      );
+    }
+    await pool.execute(
+      "INSERT INTO server_grants VALUES (?,?,JSON_ARRAY('activity.read')), (?,?,JSON_ARRAY())",
+      [server, ids[1], server, ids[2]],
+    );
+  } finally {
+    await pool.end();
+  }
+  expect((await context.request.get(`${origin}/api/v1/servers`)).status()).toBe(
+    401,
+  );
+  for (const [i, email] of emails.entries()) {
+    await page.goto(`${origin}/#authView`);
+    await page.getByLabel("Email", { exact: true }).fill(email);
+    await page.getByLabel("Kata sandi", { exact: true }).fill(password);
+    await page.getByRole("button", { name: "Masuk", exact: true }).click();
+    await page.getByRole("button", { name: "Muat daftar server" }).click();
+    const list = page.getByRole("list", { name: "Server yang dapat diakses" });
+    if (i === 2) {
+      await expect(
+        page.getByText("Tidak ada server yang dapat diakses."),
+      ).toBeVisible();
+      await expect(list).toHaveCount(0);
+    } else {
+      await expect(list.getByRole("listitem")).toHaveCount(i === 0 ? 2 : 1);
+      await expect(list.getByText("Staging shared workload")).toBeVisible();
+      await expect(list.getByText("Staging private workload")).toHaveCount(
+        i === 0 ? 1 : 0,
+      );
+    }
+
+    await page.getByRole("button", { name: "Keluar", exact: true }).click();
+    await expect(
+      page.getByRole("heading", { name: "Masuk", exact: true }),
+    ).toBeVisible();
+  }
+});
