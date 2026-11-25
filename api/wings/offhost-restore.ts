@@ -129,28 +129,58 @@ async function main() {
     const port = Number(runtime.placement.port);
     assert.equal(port, 25610);
     assert.equal(runtime.placement.ip, "127.0.0.1");
-    const endpoint = `http://127.0.0.1:${port}/cgi-bin/record`;
-    const call = (body?: string) =>
-      fetch(endpoint, {
-        ...(body === undefined ? {} : { method: "POST", body }),
-        signal: AbortSignal.timeout(2000),
-      });
+    // An internal Docker bridge deliberately does not promise host-published ingress.
+    // Probe from a separate client container attached to the same staging network.
+    const network = "relay-wings-contract-net";
+    const call = async (body?: string) => {
+      const address = (
+        await docker(
+          "docker",
+          [
+            "inspect",
+            "--format",
+            '{{(index .NetworkSettings.Networks "relay-wings-contract-net").IPAddress}}',
+            uuid,
+          ],
+          { timeout: 5000 },
+        )
+      ).stdout.trim();
+      assert.match(address, /^\d+\.\d+\.\d+\.\d+$/);
+      const { stdout } = await docker(
+        "docker",
+        [
+          "run",
+          "--rm",
+          "--network",
+          network,
+          "--entrypoint",
+          "busybox",
+          "relay-wings-contract-workload:ci",
+          "wget",
+          "-T",
+          "2",
+          "-qO-",
+          ...(body === undefined ? [] : ["--post-data", body]),
+          `http://${address}:${port}/cgi-bin/record`,
+        ],
+        { timeout: 8000 },
+      );
+      return stdout;
+    };
     async function readHttp(expected: string) {
-      for (let attempt = 0; attempt < 20; attempt++) {
-        const response = await call().catch(() => null);
-        if (response?.ok) {
-          assert.equal(await response.text(), expected);
+      for (let attempt = 0; attempt < 10; attempt++) {
+        const data = await call().catch(() => null);
+        if (data !== null) {
+          assert.equal(data, expected);
           return;
         }
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
-      throw new Error("Restored HTTP service unavailable");
+      throw new Error("Restored HTTP service unavailable on internal bridge");
     }
     await readHttp(checkpointRecord);
     const freshRecord = `restored-${randomUUID()}`;
-    const write = await call(freshRecord);
-    assert.equal(write.status, 200);
-    assert.equal(await write.text(), freshRecord);
+    assert.equal(await call(freshRecord), freshRecord);
     await readHttp(freshRecord);
     await client.power(uuid, "stop");
     await waitState("offline");
@@ -191,6 +221,9 @@ main().catch((error: unknown) => {
           ?.split("\n")
           .find((line) => line.includes("offhost-restore.ts:"))
       : undefined;
-  console.error("::error::Relay/Wings isolated restore assertions failed", frame ?? "");
+  console.error(
+    "::error::Relay/Wings isolated restore assertions failed",
+    frame ?? "",
+  );
   process.exitCode = 1;
 });
