@@ -55,7 +55,6 @@ jobs:
       CERT: ${{ vars.RELAY_RECOVERY_RECIPIENT_CERT }}
       PRIVATE_KEY: ${{ secrets.RELAY_RECOVERY_RECIPIENT_KEY }}
       SIGNER_DIGEST: ${{ needs.checkpoint.outputs.signer_digest }}
-      MYSQL: ${{ job.services.mysql.id }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -63,6 +62,8 @@ jobs:
           name: encrypted-checkpoint
           path: ${{ runner.temp }}/checkpoint-artifact
       - name: Recover into fresh MySQL and a fresh workload volume
+        env:
+          MYSQL: ${{ job.services.mysql.id }}
         working-directory: ${{ runner.temp }}
         run: |
           set -euo pipefail
