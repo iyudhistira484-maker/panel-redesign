@@ -66,38 +66,70 @@ export function registerClientCompatibility(
             .send(errors("AuthenticationException", "Unauthenticated."));
         const page = integer(req.query.page, 1, 1_000_000),
           size = integer(req.query.per_page, 50, 100);
+        const { type, "filter[name]": name, "filter[uuid]": uuid } = req.query;
+        const supported = new Set([
+          "page",
+          "per_page",
+          "type",
+          "filter[name]",
+          "filter[uuid]",
+        ]);
         if (
           page === null ||
           size === null ||
-          Object.keys(req.query).some(
-            (key) => key !== "page" && key !== "per_page",
-          )
+          (type !== undefined && type !== "owner") ||
+          (name !== undefined &&
+            (typeof name !== "string" ||
+              name.length < 1 ||
+              name.length > 100 ||
+              name.includes(","))) ||
+          (uuid !== undefined &&
+            (typeof uuid !== "string" || !/^[0-9a-f-]{1,36}$/i.test(uuid))) ||
+          Object.keys(req.query).some((key) => !supported.has(key))
         )
           return reply
             .code(400)
             .send(
               errors("BadRequestHttpException", "Unsupported list parameters."),
             );
-        const scope = [user, user];
+        const conditions = [type === "owner" ? "s.owner_id=?" : visible];
+        const scope = type === "owner" ? [user] : [user, user];
+        const partial = (value: string) =>
+          `%${value.replace(/[!%_]/g, (char) => `!${char}`)}%`;
+        if (typeof name === "string") {
+          conditions.push("LOWER(s.name) LIKE LOWER(?) ESCAPE '!'");
+          scope.push(partial(name));
+        }
+        if (typeof uuid === "string") {
+          conditions.push("LOWER(s.id) LIKE LOWER(?) ESCAPE '!'");
+          scope.push(partial(uuid));
+        }
+        const where = conditions.join(" AND ");
         const { total, records } = await transaction(
           pool,
           async (db: Executor) => {
             const [count] = await rows<{ total: number }>(
               db,
-              `SELECT COUNT(*) AS total FROM servers s WHERE ${visible}`,
+              `SELECT COUNT(*) AS total FROM servers s WHERE ${where}`,
               scope,
             );
             const records = await rows<Server>(
               db,
-              `${projection} WHERE ${visible} ORDER BY s.name,s.id LIMIT ? OFFSET ?`,
+              `${projection} WHERE ${where} ORDER BY s.name,s.id LIMIT ? OFFSET ?`,
               [user, ...scope, size, (page - 1) * size],
             );
             return { total: Number(count.total), records };
           },
         );
         const pages = Math.max(1, Math.ceil(total / size));
-        const link = (number: number) =>
-          `${origin}/api/client?${new URLSearchParams({ ...(req.query.per_page === undefined ? {} : { per_page: String(size) }), page: String(number) })}`;
+        const link = (number: number) => {
+          const params = new URLSearchParams();
+          for (const [key, value] of Object.entries(req.query))
+            if (key !== "page" && typeof value === "string")
+              params.set(key, key === "per_page" ? String(size) : value);
+          params.set("page", String(number));
+          return `${origin}/api/client?${params}`;
+        };
         const links: Record<string, string> = {};
         if (page > 1) links.previous = link(page - 1);
         if (page < pages) links.next = link(page + 1);

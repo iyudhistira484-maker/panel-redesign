@@ -694,9 +694,7 @@ async function main() {
         }>;
         getServerDetails(id: string): Promise<{ uuid: string; name: string }>;
         getServerPage(page: number): Promise<unknown[]>;
-        getServerUsages(
-          id: string,
-        ): Promise<{
+        getServerUsages(id: string): Promise<{
           current_state: string;
           is_suspended: boolean;
           resources: Record<string, number>;
@@ -883,6 +881,86 @@ async function main() {
         pageInfo(await compatPage.json()),
         pageInfo(await nativePage.json()),
       );
+      type FilterPage = {
+        data: { attributes: { uuid: string } }[];
+        meta: {
+          pagination: {
+            total: number;
+            count: number;
+            per_page: number;
+            current_page: number;
+            total_pages: number;
+            links: { next?: string };
+          };
+        };
+      };
+      const filteredPath = (params: Record<string, string>) =>
+        `/api/client?${new URLSearchParams(params)}`;
+      const filtered = async (
+        base: string,
+        key: string,
+        params: Record<string, string>,
+      ) => {
+        const result = await fetch(`${base}${filteredPath(params)}`, {
+          headers: auth(key),
+        });
+        assert.equal(result.status, 200);
+        return (await result.json()) as FilterPage;
+      };
+      for (const params of [
+        { "filter[name]": "STAGING WORKLOAD" },
+        { "filter[uuid]": uuid },
+        { type: "owner", "filter[name]": "staging", "filter[uuid]": uuid },
+        { "filter[name]": "zzzz fixture not present" },
+      ] as Record<string, string>[]) {
+        const [native, compat] = await Promise.all([
+          filtered(legacyBase, legacyKey, params),
+          filtered(relayBase, relayKey, params),
+        ]);
+        const ids = (value: FilterPage) =>
+          value.data.map((item) => item.attributes.uuid).sort();
+        assert.deepEqual(ids(compat), ids(native));
+        assert.deepEqual(pageInfo(compat), pageInfo(native));
+      }
+      const filteredPage = await filtered(relayBase, relayKey, {
+        type: "owner",
+        "filter[name]": "staging",
+        per_page: "1",
+      });
+      assert.equal(filteredPage.meta.pagination.total, 2);
+      const next = filteredPage.meta.pagination.links.next;
+      assert.ok(next);
+      assert.equal(new URL(next).searchParams.get("filter[name]"), "staging");
+      assert.equal(new URL(next).searchParams.get("type"), "owner");
+      assert.equal(new URL(next).searchParams.get("page"), "2");
+      const nextPage = await filtered(
+        relayBase,
+        relayKey,
+        Object.fromEntries(new URL(next).searchParams),
+      );
+      assert.equal(nextPage.meta.pagination.total, 2);
+      assert.notEqual(
+        nextPage.data[0].attributes.uuid,
+        filteredPage.data[0].attributes.uuid,
+      );
+      const sharedName = await filtered(relayBase, sharedKey, {
+        "filter[name]": "staging",
+      });
+      assert.deepEqual(
+        sharedName.data.map((row) => row.attributes.uuid),
+        [uuid],
+      );
+      assert.equal(sharedName.meta.pagination.total, 1);
+      assert.ok(second);
+      for (const params of [
+        { "filter[uuid]": second },
+        { type: "owner", "filter[name]": "staging" },
+        { "filter[name]": "%" },
+      ] as Record<string, string>[]) {
+        const scoped = await filtered(relayBase, sharedKey, params);
+        assert.equal(scoped.meta.pagination.total, 0);
+        assert.deepEqual(scoped.data, []);
+      }
       for (const [token, allowed, denied] of [
         [sharedKey, uuid, second],
         [outsiderKey, undefined, uuid],
