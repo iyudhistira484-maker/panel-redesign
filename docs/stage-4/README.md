@@ -11,3 +11,7 @@ Untuk staging lokal, siapkan backend di port 3200 mengikuti [Tahap 2](../stage-2
 ## Login, verifikasi dua langkah, dan sesi
 
 Halaman masuk memakai endpoint `login`, `challenge`, `logout`, dan `GET /api/v1/account`. UI tidak menganggap tantangan 2FA sebagai login selesai: sesi harus dikonfirmasi oleh endpoint akun sebelum nama ditampilkan. Reload membaca sesi dari backend dan logout meminta backend mencabutnya. Password dan kode tidak disimpan di browser storage; cakupan ini belum menghubungkan dashboard atau enrollment 2FA. Tes browser memakai intersepsi API, sedangkan pengujian MySQL backend tetap terpisah.
+
+## Uji browser langsung tanpa mock
+
+[CI 45526792661](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45526792661) lulus semua 13 job. Job `identity` menjalankan Playwright terhadap frontend terbangun, proxy HTTPS loopback dengan sertifikat CI, proses API asli, MySQL, dan Mailpit. Akun uji disemai dengan 2FA; browser meminta reset, membuka email, mengatur password, menguji replay tautan di tab yang sama, login, membuktikan sesi belum otoritatif sebelum 2FA, memverifikasi cookie Secure/HttpOnly, lalu reload dan logout. Cookie sebelum logout kembali ditolak sesudah logout. Tidak ada mock request browser pada latihan ini. Enrolment 2FA di UI dan katalog baca-saja belum tercakup.
