@@ -925,7 +925,7 @@ export async function createApp({
     Body: {
       email: string;
       action: "grant" | "revoke";
-      permission?: "control.start" | "control.stop";
+      permission?: "control.start" | "control.stop" | "control.restart";
     };
   }>(
     "/api/v1/servers/:id/activity-access",
@@ -937,7 +937,7 @@ export async function createApp({
             email,
             permission: {
               type: "string",
-              enum: ["control.start", "control.stop"],
+              enum: ["control.start", "control.stop", "control.restart"],
             },
             action: { type: "string", enum: ["grant", "revoke"] },
           },

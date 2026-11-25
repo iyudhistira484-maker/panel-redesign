@@ -4,6 +4,7 @@ export const serverPermissions = [
   "control.start",
   "control.stop",
   "control.restart",
+  "control.restart",
   "database.read",
   "database.create",
   "database.update",

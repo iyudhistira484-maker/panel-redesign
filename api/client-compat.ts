@@ -55,7 +55,7 @@ export function registerClientCompatibility(
   resources?: (id: string) => Promise<unknown>,
   power?: (
     id: string,
-    action: "start" | "stop",
+    action: "start" | "stop" | "restart",
     actor: Actor,
   ) => Promise<unknown>,
 ) {
@@ -201,7 +201,7 @@ export function registerClientCompatibility(
   );
   app.post<{
     Params: { identifier: string };
-    Body: { signal: "start" | "stop" };
+    Body: { signal: "start" | "stop" | "restart" };
   }>(
     "/api/client/servers/:identifier/power",
     {
@@ -217,7 +217,7 @@ export function registerClientCompatibility(
           .send(errors("AuthenticationException", "Unauthenticated."));
       const { signal } = req.body ?? {};
       if (
-        (signal !== "start" && signal !== "stop") ||
+        (signal !== "start" && signal !== "stop" && signal !== "restart") ||
         Object.keys(req.body ?? {}).length !== 1
       )
         return reply
@@ -225,7 +225,7 @@ export function registerClientCompatibility(
           .send(
             errors(
               "BadRequestHttpException",
-              "Only start and stop signals are supported.",
+              "Only start, stop and restart signals are supported.",
             ),
           );
       const server = await resolve(req.params.identifier, principal.id);

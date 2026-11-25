@@ -696,6 +696,7 @@ async function main() {
         getServerPage(page: number): Promise<unknown[]>;
         startServer(id: string): Promise<boolean>;
         stopServer(id: string): Promise<boolean>;
+        restartServer(id: string): Promise<boolean>;
         getServerUsages(id: string): Promise<{
           current_state: string;
           is_suspended: boolean;
@@ -1097,7 +1098,7 @@ async function main() {
         const mutate = (
           id: string,
           action: "grant" | "revoke",
-          permission?: "control.start" | "control.stop",
+          permission?: "control.start" | "control.stop" | "control.restart",
         ) =>
           relay.inject({
             method: "POST",
@@ -1241,7 +1242,7 @@ async function main() {
           });
         assert.equal((await requestPower(relayKey, "start")).statusCode, 403);
         assert.equal(
-          (await requestPower(ownerPowerKey, "restart")).statusCode,
+          (await requestPower(ownerPowerKey, "kill")).statusCode,
           400,
         );
         assert.equal(
@@ -1272,13 +1273,15 @@ async function main() {
         async function sdkPower(
           base: string,
           key: string,
-          signal: "start" | "stop",
+          signal: "start" | "stop" | "restart",
         ) {
           const sdk = new NodeactylClient(base, key);
           try {
             return signal === "start"
               ? await sdk.startServer(identifier)
-              : await sdk.stopServer(identifier);
+              : signal === "stop"
+                ? await sdk.stopServer(identifier)
+                : await sdk.restartServer(identifier);
           } catch {
             throw new Error(
               `Nodeactyl ${signal} failed at loopback port ${new URL(base).port}`,
@@ -1290,12 +1293,22 @@ async function main() {
             `Client API power ${expected}`,
             async () => (await clientFor(uuid).state(uuid)) === expected,
           );
+        const restarted = async (before: string) =>
+          until(
+            "Wings process replaced by restart",
+            async () =>
+              (await inspect()) !== before &&
+              (await clientFor(uuid).state(uuid)) === "running",
+          );
         for (const [base, key] of [
           [legacyBase, legacyKey],
           [relayBase, ownerPowerKey],
         ] as const) {
           assert.equal(await sdkPower(base, key, "start"), true);
           await observed("running");
+          const before = await inspect();
+          assert.equal(await sdkPower(base, key, "restart"), true);
+          await restarted(before);
           assert.equal(await sdkPower(base, key, "stop"), true);
           await observed("offline");
         }
@@ -1323,6 +1336,40 @@ async function main() {
             404,
           );
           assert.equal(
+            (await mutate(uuid, "grant", "control.stop")).statusCode,
+            204,
+          );
+          assert.equal(
+            (await requestPower(sharedPowerKey, "restart")).statusCode,
+            404,
+          );
+          assert.equal(
+            (await mutate(uuid, "grant", "control.restart")).statusCode,
+            204,
+          );
+          assert.equal(
+            (await requestPower(sharedKey, "restart")).statusCode,
+            403,
+          );
+          const before = await inspect();
+          assert.equal(
+            await sdkPower(relayBase, sharedPowerKey, "restart"),
+            true,
+          );
+          await restarted(before);
+          assert.equal(
+            (await mutate(uuid, "revoke", "control.restart")).statusCode,
+            204,
+          );
+          assert.equal(
+            (await requestPower(sharedPowerKey, "restart")).statusCode,
+            404,
+          );
+          assert.equal(
+            (await mutate(uuid, "revoke", "control.stop")).statusCode,
+            204,
+          );
+          assert.equal(
             (await mutate(uuid, "revoke", "control.start")).statusCode,
             204,
           );
@@ -1347,6 +1394,35 @@ async function main() {
             [uuid],
           );
         }
+        const restartAudit = async () =>
+          rows<{ event: string }>(
+            pool,
+            "SELECT event FROM audit_log WHERE subject_id=? AND event IN ('wings.power_restart_requested','wings.power_restart_uncertain') ORDER BY id",
+            [uuid],
+          );
+        const priorAudit = (await restartAudit()).length;
+        await docker("docker", ["pause", "relay-wings-contract"], {
+          timeout: 5000,
+        });
+        try {
+          const failed = await requestPower(ownerPowerKey, "restart");
+          assert.equal(failed.statusCode, 502);
+          assert.equal(
+            failed.json().errors[0].detail,
+            "Power outcome unknown.",
+          );
+          assert.deepEqual((await restartAudit()).slice(priorAudit), [
+            { event: "wings.power_restart_requested" },
+            { event: "wings.power_restart_uncertain" },
+          ]);
+        } finally {
+          await docker("docker", ["unpause", "relay-wings-contract"], {
+            timeout: 5000,
+          });
+        }
+        // A request that timed out at Relay can still be processed after Wings resumes.
+        await sdkPower(relayBase, ownerPowerKey, "stop");
+        await observed("offline");
         if (browser) {
           await pool.execute(
             "INSERT INTO server_grants (server_id,user_id,permissions) SELECT ?,id,JSON_ARRAY('activity.read') FROM users WHERE email='collaborator@example.test'",

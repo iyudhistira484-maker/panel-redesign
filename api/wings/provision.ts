@@ -468,7 +468,7 @@ export function createProvisioner(
     },
     async power(
       id: string,
-      action: "start" | "stop",
+      action: "start" | "stop" | "restart",
       actor: Actor,
       scope: "admin" | "user" | "compat" = "admin",
     ) {
