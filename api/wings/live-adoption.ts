@@ -2597,9 +2597,23 @@ async function main() {
             timeout: 5000,
           });
         }
-        // A request that timed out at Relay can still be processed after Wings resumes.
+        // The paused request can reach Wings after resume. Require a stable
+        // offline fixture before starting independent file tests.
         await sdkPower(relayBase, ownerPowerKey, "stop");
-        await observed("offline");
+        let offlineSince = 0;
+        await until(
+          "settled offline fixture after simulated restart outage",
+          async () => {
+            const status = await client.state(uuid);
+            if (status !== "offline") {
+              offlineSince = 0;
+              if (status === "running") await client.power(uuid, "stop");
+              return false;
+            }
+            if (!offlineSince) offlineSince = performance.now();
+            return performance.now() - offlineSince >= 3000;
+          },
+        );
         const [listKey, downloadKey, sharedFileKey] = await Promise.all([
           issueKey(ownerSession, false, false, false, {
             clientListFiles: true,
