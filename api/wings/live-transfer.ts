@@ -533,7 +533,8 @@ async function main() {
     await app.listen({ port: 13201, host: "127.0.0.1" });
     if (standalone)
       receiver = await startInstance("destination", target, 13202);
-    if (!interrupted && !corrupt) sourceApp = await startInstance("source", source, 13203);
+    if (!interrupted && !corrupt)
+      sourceApp = await startInstance("source", source, 13203);
     const from = new WingsClient(source),
       to = new WingsClient(target);
     for (const client of [from, to])

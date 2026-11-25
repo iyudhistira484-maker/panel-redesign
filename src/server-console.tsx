@@ -1,3 +1,4 @@
+import { consoleSnapshotLimit, isConsoleMarker } from "./console-markers";
 import { useState } from "react";
 import type { Locale } from "./i18n";
 import { Button } from "./ui";
@@ -23,8 +24,8 @@ export function ServerConsole({ id, locale }: { id: string; locale: Locale }) {
       const data = (await response.json()) as Snapshot;
       if (
         !Array.isArray(data?.lines) ||
-        data.lines.length > 20 ||
-        !data.lines.every((line) => line === "RELAY_CONTRACT_READY") ||
+        data.lines.length > consoleSnapshotLimit ||
+        !data.lines.every(isConsoleMarker) ||
         typeof data.truncated !== "boolean"
       )
         throw new Error("Invalid fixture snapshot");

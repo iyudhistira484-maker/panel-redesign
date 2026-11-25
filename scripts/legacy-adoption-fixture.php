@@ -40,7 +40,7 @@ cat > /mnt/server/relay-start.sh <<'WORKLOAD'
 #!/bin/sh
 set -eu
 trap 'exit 0' TERM INT
-printf '%s\n' RELAY_CONTRACT_READY
+printf '%s\n' RELAY_CONTRACT_READY 'RELAY_DIAGNOSTIC runtime=ready config=loaded' 'RELAY_DIAGNOSTIC runtime=ready config=loaded token=fixture-console-secret'
 while :; do sleep 1 & wait "$!"; done
 WORKLOAD
 chmod 644 /mnt/server/relay-start.sh

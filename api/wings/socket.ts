@@ -1,3 +1,7 @@
+import {
+  consoleSnapshotLimit,
+  isConsoleMarker,
+} from "../../src/console-markers";
 import { stripVTControlCharacters } from "node:util";
 import { createHmac, randomUUID } from "node:crypto";
 import WebSocket from "ws";
@@ -104,8 +108,8 @@ export class WingsSocket {
         if (event !== "console output") return undefined;
         const safe = stripVTControlCharacters(frameText(args)).trim();
         // It is not safe to claim general secret masking. This fixture may publish only its known marker.
-        if (safe !== "RELAY_CONTRACT_READY") return undefined;
-        if (lines.length === 20) {
+        if (!isConsoleMarker(safe)) return undefined;
+        if (lines.length === consoleSnapshotLimit) {
           truncated = true;
           return { lines, truncated };
         }

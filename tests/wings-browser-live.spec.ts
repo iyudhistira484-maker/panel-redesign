@@ -92,7 +92,10 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       (r) => r.url() === `${origin}/api/v1/servers/${id}/console`,
     );
     await page.getByRole("button", { name: "Baca konsol staging" }).click();
-    expect((await response).status()).toBe(status);
+    const result = await response;
+    expect(result.status()).toBe(status);
+    if (status === 200)
+      expect(await result.text()).not.toContain("fixture-console-secret");
   }
   await open("collaborator@example.test");
   await readConsole(404);
@@ -115,6 +118,12 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   await readConsole(200);
   await expect(page.getByLabel("Cuplikan konsol Wings")).toContainText(
     "RELAY_CONTRACT_READY",
+  );
+  await expect(page.getByLabel("Cuplikan konsol Wings")).toContainText(
+    "RELAY_DIAGNOSTIC runtime=ready config=loaded",
+  );
+  await expect(page.getByLabel("Cuplikan konsol Wings")).not.toContainText(
+    "fixture-console-secret",
   );
   await readMetrics(200);
   await expect(page.getByLabel("Cuplikan sumber daya Wings")).toContainText(
