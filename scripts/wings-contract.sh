@@ -115,7 +115,7 @@ if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then
   docker run -d --name relay-adoption-panel --network host --entrypoint /bin/ash \
     -v "$PWD/scripts/legacy-adoption-fixture.php:/tmp/relay-fixture.php:ro" \
     -e APP_ENV=production -e APP_KEY="$app_key" -e APP_URL=http://127.0.0.1:13202 \
-    -e APP_DEBUG=false -e DB_CONNECTION=mysql -e DB_HOST=127.0.0.1 -e DB_PORT=13306 -e DB_DATABASE=panel_adoption_fixture \
+    -e PHP_CLI_SERVER_WORKERS=4 -e APP_DEBUG=false -e DB_CONNECTION=mysql -e DB_HOST=127.0.0.1 -e DB_PORT=13306 -e DB_DATABASE=panel_adoption_fixture \
     -e DB_USERNAME=panel_fixture -e DB_PASSWORD="$db_password" \
     -e CACHE_DRIVER=file -e SESSION_DRIVER=file -e QUEUE_CONNECTION=sync \
     -e PTERODACTYL_SEND_INSTALL_NOTIFICATION=false -e PTERODACTYL_SEND_REINSTALL_NOTIFICATION=false -e RELAY_LEGACY_FIXTURE=1 \
