@@ -81,6 +81,7 @@ function App() {
   const contentId = useId();
   const [sampleTab, setSampleTab] = useState("settings");
   const [samplePage, setSamplePage] = useState(1);
+  const [recoveryVisit, setRecoveryVisit] = useState(0);
   const [locale, setLocale] = useState<Locale>(readLocale),
     [page, setPage] = useState<Page>(getPage),
     [search, setSearch] = useState(""),
@@ -94,6 +95,8 @@ function App() {
   useEffect(() => {
     const update = () => {
       setPage(getPage());
+      if (location.hash.startsWith("#reset-password?"))
+        setRecoveryVisit((value) => value + 1);
       setDrawer(false);
     };
     window.addEventListener("hashchange", update);
@@ -416,7 +419,7 @@ function App() {
             </>
           ) : (
             <PasswordRecovery
-              key={page}
+              key={`${page}-${recoveryVisit}`}
               mode={page === "forgot-password" ? "forgot" : "reset"}
               locale={locale}
             />
