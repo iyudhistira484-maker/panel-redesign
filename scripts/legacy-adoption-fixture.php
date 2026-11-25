@@ -44,6 +44,8 @@ printf '%s\n' RELAY_CONTRACT_READY 'RELAY_DIAGNOSTIC runtime=ready config=loaded
 while :; do sleep 1 & wait "$!"; done
 WORKLOAD
 chmod 644 /mnt/server/relay-start.sh
+mkdir -p /mnt/server/fixture-docs
+printf '%s\n' fixture > /mnt/server/fixture-docs/example.txt
 SCRIPT,
     ]);
     $owner = DB::table('users')->insertGetId([

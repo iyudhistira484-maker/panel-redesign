@@ -1067,6 +1067,32 @@ export async function createApp({
       },
     );
   if (provisioner)
+    app.get<{ Params: { id: string }; Querystring: { directory?: string } }>(
+      "/api/v1/servers/:id/files",
+      { config: { rateLimit: { max: 15, timeWindow: "1 minute" } } },
+      async (req, reply) => {
+        reply.header("cache-control", "no-store");
+        const principal = await actor(
+          req.cookies[sessionCookie],
+          req.headers.authorization,
+        );
+        if (!principal || principal.channel !== "session")
+          return reply.code(401).send({ error: "unauthenticated" });
+        if (!UUID_V4.test(req.params.id))
+          return reply.code(404).send({ error: "server_not_found" });
+        try {
+          const path = req.query.directory ?? "/";
+          if (typeof path !== "string")
+            return reply.code(400).send({ error: "invalid_directory" });
+          return await provisioner.files(req.params.id, principal, path);
+        } catch (error) {
+          if (error instanceof ProvisionError)
+            return reply.code(error.status).send({ error: error.code });
+          throw error;
+        }
+      },
+    );
+  if (provisioner)
     app.get<{ Params: { id: string } }>(
       "/api/v1/servers/:id/stats",
       { config: { rateLimit: { max: 15, timeWindow: "1 minute" } } },

@@ -1,3 +1,4 @@
+import { ServerFiles } from "./server-files";
 import { ServerAccess } from "./server-access";
 import { ServerActivity } from "./server-activity";
 import { ServerConsole } from "./server-console";
@@ -121,7 +122,10 @@ export function StagingServers({ locale }: { locale: Locale }) {
                   <ServerConsole id={item.id} locale={locale} />
                   <ServerActivity id={item.id} locale={locale} />
                   {item.isOwner === true && (
-                    <ServerAccess id={item.id} locale={locale} />
+                    <>
+                      <ServerAccess id={item.id} locale={locale} />
+                      <ServerFiles id={item.id} locale={locale} />
+                    </>
                   )}
                 </section>
               )}

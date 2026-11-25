@@ -1,3 +1,5 @@
+export const fixturePathSegment = (value: string) =>
+  /^[A-Za-z0-9_][A-Za-z0-9_. -]{0,79}$/.test(value) && !/[\r\n]/.test(value);
 import { createHash } from "node:crypto";
 export const UUID_V4 =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -159,6 +161,62 @@ export class WingsClient {
     );
     const data = await this.#read(result, name === "murmur.ini" ? 65536 : 8192);
     return data.toString("utf8");
+  }
+  async fixtureDirectory(id: string, segments: string[]) {
+    const root = this.#server(id);
+    const list = async (path: string) => {
+      const response = await this.#send(
+        `${root}/files/list-directory?directory=${encodeURIComponent(path)}`,
+        200,
+      );
+      let data: unknown;
+      try {
+        data = JSON.parse(
+          (await this.#read(response, 131072)).toString("utf8"),
+        );
+      } catch {
+        throw new WingsUnavailable("payload");
+      }
+      if (!Array.isArray(data) || data.length > 100)
+        throw new WingsUnavailable("payload");
+      return data.flatMap((row) => {
+        if (
+          !row ||
+          typeof row.name !== "string" ||
+          !fixturePathSegment(row.name) ||
+          row.symlink !== false ||
+          !Number.isSafeInteger(row.size) ||
+          row.size < 0
+        )
+          return [];
+        if (
+          row.directory === true &&
+          row.file === false &&
+          typeof row.mode === "string" &&
+          row.mode.startsWith("d")
+        )
+          return [{ name: row.name, directory: true, size: Number(row.size) }];
+        if (
+          row.directory === false &&
+          row.file === true &&
+          typeof row.mode === "string" &&
+          row.mode.startsWith("-")
+        )
+          return [{ name: row.name, directory: false, size: Number(row.size) }];
+        return [];
+      });
+    };
+    if (segments.length > 4 || !segments.every(fixturePathSegment))
+      throw new WingsUnavailable("payload");
+    let path = "/";
+    let items = await list(path);
+    for (const segment of segments) {
+      if (!items.some((item) => item.directory && item.name === segment))
+        throw new WingsUnavailable("not_found");
+      path = path === "/" ? `/${segment}` : `${path}/${segment}`;
+      items = await list(path);
+    }
+    return items;
   }
   /** Bounded digest of all visible directories and regular-file bytes; fail closed on other entries. */
   async transferTreeDigest(id: string) {

@@ -104,7 +104,9 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   const readActivity = page.getByRole("button", {
     name: "Baca aktivitas server",
   });
+  const fileApi = `${origin}/api/v1/servers/${id}/files`;
   await open("collaborator@example.test");
+  expect((await page.context().request.get(fileApi)).status()).toBe(404);
   await readActivity.click();
   await expect(activity).toContainText("catalog.fixture_checked");
   await expect(activity.locator("time").first()).toBeVisible();
@@ -123,6 +125,28 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   await page.getByRole("button", { name: "Keluar", exact: true }).click();
   await expect(detail).toHaveCount(0);
   await open("adoption@example.test");
+  await page.getByRole("button", { name: "Buka daftar file" }).click();
+  const files = page.getByRole("list", { name: "Isi folder" });
+  await expect(files).toContainText("relay-start.sh");
+  await files.getByRole("button", { name: "fixture-docs" }).click();
+  await expect(files).toContainText("example.txt");
+  await page.getByRole("button", { name: "Folder induk" }).click();
+  await expect(files).toContainText("relay-start.sh");
+  expect(
+    (
+      await page
+        .context()
+        .request.get(fileApi, { params: { directory: "/../" } })
+    ).status(),
+  ).toBe(400);
+  expect(
+    (
+      await page
+        .context()
+        .request.get(fileApi, { params: { directory: "/fixture-docs/../../" } })
+    ).status(),
+  ).toBe(400);
+
   await send("Start", 202);
   await verify("running");
   await readConsole(200);

@@ -1,3 +1,4 @@
+import { fixturePathSegment } from "./client";
 import {
   upstreamProfiles,
   registeredWorkload,
@@ -269,6 +270,34 @@ export function createProvisioner(
   }
   return {
     provider,
+    async files(id: string, actor: Actor, path: string) {
+      const server = await load(pool, id);
+      if (!server || actor.channel !== "session" || server.ownerId !== actor.id)
+        throw new ProvisionError(404, "server_not_found");
+      if (!eligible(server))
+        throw new ProvisionError(422, "disposable_fixture_required");
+      if (server.phase !== "installed")
+        throw new ProvisionError(409, "server_not_installed");
+      const segments = path === "/" ? [] : path.slice(1).split("/");
+      if (
+        !path.startsWith("/") ||
+        segments.length > 4 ||
+        !segments.every((part) =>
+          /^[A-Za-z0-9_][A-Za-z0-9_. -]{0,79}$/.test(part),
+        )
+      )
+        throw new ProvisionError(400, "invalid_directory");
+      try {
+        return await client.fixtureDirectory(id, segments);
+      } catch (error) {
+        if (error instanceof WingsUnavailable)
+          throw new ProvisionError(
+            error.reason === "not_found" ? 404 : 502,
+            "directory_unavailable",
+          );
+        throw error;
+      }
+    },
     async stats(id: string, actor: Actor, scope: "admin" | "user" = "admin") {
       const server =
         scope === "admin"
