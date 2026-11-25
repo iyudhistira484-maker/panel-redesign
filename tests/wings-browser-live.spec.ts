@@ -87,7 +87,18 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       .click();
     expect((await response).status()).toBe(status);
   }
+  async function readConsole(status: number) {
+    const response = page.waitForResponse(
+      (r) => r.url() === `${origin}/api/v1/servers/${id}/console`,
+    );
+    await page.getByRole("button", { name: "Baca konsol staging" }).click();
+    expect((await response).status()).toBe(status);
+  }
   await open("collaborator@example.test");
+  await readConsole(404);
+  await expect(
+    page.getByText("Cuplikan konsol tidak tersedia", { exact: false }),
+  ).toBeVisible();
   await readMetrics(404);
   await expect(page.getByRole("alert")).toContainText(
     "Penggunaan sumber daya tidak tersedia",
@@ -101,6 +112,10 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   await open("adoption@example.test");
   await send("Start", 202);
   await verify("running");
+  await readConsole(200);
+  await expect(page.getByLabel("Cuplikan konsol Wings")).toContainText(
+    "RELAY_CONTRACT_READY",
+  );
   await readMetrics(200);
   await expect(page.getByLabel("Cuplikan sumber daya Wings")).toContainText(
     "MiB",
@@ -136,6 +151,11 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     await expect(page.getByText("Status Wings tidak tersedia.")).toBeVisible({
       timeout: 9000,
     });
+    await readConsole(502);
+    await expect(
+      page.getByText("Cuplikan konsol tidak tersedia", { exact: false }),
+    ).toBeVisible();
+    await expect(page.getByLabel("Cuplikan konsol Wings")).toHaveCount(0);
     expect(requests).toHaveLength(1);
   } finally {
     await docker("docker", ["unpause", fixtureDaemon], { timeout: 5000 });
