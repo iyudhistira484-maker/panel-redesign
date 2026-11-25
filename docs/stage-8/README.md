@@ -48,6 +48,14 @@ Tiket Relay hanya berlaku untuk satu server dan satu koneksi, selama maksimal 15
 
 `GET /api/client/servers/:identifier/files/list?directory=/fixture-docs` mengembalikan `list` berisi `file_object`. Gunakan kunci dengan `clientListFiles: true`; subuser juga perlu grant `file.read`. `GET /api/client/servers/:identifier/files/download?file=/fixture-docs/binary.txt` mengembalikan `signed_url` dengan URL unduhan. Gunakan kunci dengan `clientDownload: true`; subuser juga perlu grant `file.read-content`. Keduanya opt-in terpisah dan default mati. Unduhan memeriksa lagi izin saat penukaran tiket dan sebelum mengembalikan byte. Tiket hanya berlaku untuk satu file dan server, sekali pakai, maksimal 15 detik, dan tersimpan pada proses Relay yang menerbitkannya.
 
-Hanya fixture shell disposable yang terpasang: daftar maksimal 100 entri per direktori, kedalaman 4, tanpa symlink, dan unduhan file reguler maksimal 16 KiB. Tidak ada upload, edit, atau hapus di API kompatibilitas ini.
+Hanya fixture shell disposable yang terpasang: daftar maksimal 100 entri per direktori, kedalaman 4, tanpa symlink, dan unduhan file reguler maksimal 16 KiB. Upload dan hapus tidak didukung; edit teks terbatas dijelaskan di bawah.
 
 [CI 45577144106](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45577144106) lulus 14 job. Nodeactyl 3.3.0 tidak mengekspos metode daftar/unduh file, sehingga tes memakai HTTP langsung dengan kontrak Client API yang sama pada Pterodactyl v1.15.2 dan Relay. Tes membandingkan nama, tipe dan ukuran entri non-symlink serta byte file biner, lalu memverifikasi batas izin, pencabutan, kedaluwarsa, replay, dan penukaran untuk nama file atau server lain.
+
+## Baca dan edit teks bersyarat melalui Client API
+
+`GET /api/client/servers/:identifier/files/contents?file=/fixture-docs/example.txt` menggunakan akses `clientDownload`/`file.read-content` dan mengembalikan byte `text/plain` dengan ETag SHA-256 kuat. `POST /api/client/servers/:identifier/files/write?file=/fixture-docs/example.txt` hanya untuk pemilik dengan kunci yang mengaktifkan `clientEditFile: true`, pada fixture shell terpasang dan offline. Kirim badan UTF-8 mentah (maksimal 16 KiB) dan ETag dari GET dalam `If-Match`. Relay mengembalikan 428 tanpa precondition valid, 412 jika versi sudah berubah, dan 204 setelah byte dibaca balik dari Wings. Pterodactyl tidak mewajibkan header tambahan ini; kompatibilitas tulis tidak penuh.
+
+Editor API dan editor web menggunakan lock per server yang sama dalam satu proses Relay. Ini bukan operasi CAS di Wings: perubahan dari proses lain atau alat eksternal tidak dicakup oleh lock tersebut. Upload, penghapusan, dan edit path lain tetap tidak didukung.
+
+[CI 45579635583](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45579635583) lulus 14 job setelah pengulangan job kualifikasi Forgejo. Job legacy Panel membandingkan baca/tulis HTTP pada Panel v1.15.2 dan Relay, membuktikan penolakan kunci khusus unduhan, UTF-8 invalid, file lain, dan ETag usang, serta mencocokkan BOM/CRLF dan byte UTF-8 setelah penulisan. Fixture dikembalikan ke byte awal sebelum kontrak browser.
