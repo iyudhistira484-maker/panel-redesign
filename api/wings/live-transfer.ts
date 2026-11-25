@@ -99,6 +99,7 @@ async function main() {
     process.env.RELAY_TRANSFER_SCENARIO ?? "",
   );
   const mumble = process.env.RELAY_TRANSFER_SCENARIO?.startsWith("mumble-");
+  const corrupt = process.env.RELAY_TRANSFER_SCENARIO === "corrupt-archive";
   const dropReport = ["missing-report", "mumble-missing-report"].includes(
     process.env.RELAY_TRANSFER_SCENARIO ?? "",
   );
@@ -107,9 +108,45 @@ async function main() {
   let targetFetched = false;
   let upstream: ClientRequest | undefined;
   let uploadStarted = false;
+  let corruptStatus: number | undefined;
+  let uploads = 0;
   const sink = createServer((req, res) => {
     if (req.method !== "POST" || req.url !== "/api/transfers") {
       res.writeHead(404).end();
+      return;
+    }
+    if (corrupt) {
+      uploads++;
+      void (async () => {
+        const chunks: Buffer[] = [];
+        let size = 0;
+        for await (const chunk of req) {
+          size += chunk.length;
+          if (size > 1024 * 1024)
+            throw new Error("Fixture upload exceeds bound");
+          chunks.push(chunk);
+        }
+        const body = Buffer.concat(chunks);
+        const divider = body.indexOf("\r\n\r\n");
+        assert.ok(divider >= 0 && divider < 1024);
+        assert.match(body.subarray(0, divider).toString(), /name="archive"/);
+        const start = divider + 4;
+        assert.equal(body.subarray(start, start + 3).toString("hex"), "1f8b08");
+        assert.equal(body[start + 3] & 2, 0); // No optional gzip header CRC.
+        body[start + 4] ^= 1; // MTIME byte: extraction still succeeds, checksum must not.
+        const response = await fetch(`${target.origin}/api/transfers`, {
+          method: "POST",
+          headers: {
+            "content-type": req.headers["content-type"] ?? "",
+            authorization: req.headers.authorization ?? "",
+          },
+          body: new Uint8Array(body),
+          signal: AbortSignal.timeout(15000),
+        });
+        corruptStatus = response.status;
+        await response.body?.cancel();
+        res.writeHead(response.status).end();
+      })().catch(() => res.writeHead(502).end());
       return;
     }
     // Hold the transfer open after its first body chunk: no acknowledgement or destination write.
@@ -295,9 +332,10 @@ async function main() {
     { prefix: "/target/api/remote" },
   );
   const password = randomBytes(32).toString("hex");
-  const uploadNode = interrupted
-    ? { ...target, origin: "http://127.0.0.1:18182" }
-    : target;
+  const uploadNode =
+    interrupted || corrupt
+      ? { ...target, origin: "http://127.0.0.1:18182" }
+      : target;
   const transfer = fixtureTransferService(
     pool,
     { id: sourceId, node: source },
@@ -314,7 +352,7 @@ async function main() {
   };
   const receiverKey = randomBytes(32),
     receiverPepper = randomBytes(32);
-  const standalone = !interrupted && !dropReport;
+  const standalone = !interrupted && !dropReport && !corrupt;
   async function startInstance(
     role: "source" | "destination",
     node: WingsNode,
@@ -577,7 +615,7 @@ async function main() {
     assert.ok(!rejected.ok);
     await rejected.body?.cancel();
     assert.equal(completion, undefined);
-    if (interrupted)
+    if (interrupted || corrupt)
       await new Promise<void>((resolve, reject) => {
         sink.once("error", reject);
         sink.listen(18182, "127.0.0.1", resolve);
@@ -685,6 +723,14 @@ async function main() {
       } else {
         assert.equal(completion, undefined);
       }
+    } else if (corrupt) {
+      await eventually(
+        "corrupt upload refusal and destination failure",
+        () => corruptStatus !== undefined && completion !== undefined,
+      );
+      assert.equal(corruptStatus, 500);
+      assert.equal(completion, false);
+      assert.equal(uploads, 1);
     } else if (receiver) {
       await eventually("application destination callback", async () =>
         Boolean(await ledger.reported(transferId ?? "")),
@@ -707,9 +753,9 @@ async function main() {
       );
       assert.equal(failure, false);
     }
-    if (dropReport || interrupted) {
-      assert.equal(completion, partial ? false : undefined);
-      if (interrupted) {
+    if (dropReport || interrupted || corrupt) {
+      assert.equal(completion, partial || corrupt ? false : undefined);
+      if (interrupted || corrupt) {
         await assert.rejects(to.state(fixture.uuid), { reason: "not_found" });
       } else {
         assert.equal(reportDropped, true);
@@ -819,7 +865,8 @@ async function main() {
         digest(original),
       );
       // Dispose both copies only after checking that reconciliation preserved them.
-      if (!interrupted) await to.remove(fixture.uuid);
+      if (!interrupted && !corrupt) await to.remove(fixture.uuid);
+      if (corrupt) assert.equal(uploads, 1);
       await from.remove(fixture.uuid);
       console.log(
         "Missing destination report quarantined; source and reservation preserved before fixture teardown",

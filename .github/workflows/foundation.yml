@@ -124,7 +124,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [reported, missing-report, sender-killed, partial-target, mumble-reported, mumble-missing-report, same-pair]
+        scenario: [reported, missing-report, sender-killed, partial-target, mumble-reported, mumble-missing-report, same-pair, corrupt-archive]
     services:
       mysql:
         image: mysql:8.4.8
