@@ -15,3 +15,7 @@ Irisan awal: **Detail server → Kelola akses aktivitas**. Pemilik dapat memberi
 Pemilik dapat memberi/cabut `control.start` dan `control.stop` secara independen dari baris subuser aktif, dengan konfirmasi. Mutasi memerlukan kepemilikan dan sesi browser; transaksi mengubah satu izin dan mempertahankan izin lain. Audit mencatat pemberian/pencabutan. Akun belum terdaftar sebagai subuser harus diberi akses awal terlebih dahulu.
 
 [CI 45541752889](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45541752889) lulus 14 job. Pemilik memberi Start dari UI; subuser memakai sesi HTTPS untuk menyalakan workload Wings sungguhan dan ditolak untuk Stop. Setelah Start dicabut dari UI, sesi yang sama langsung ditolak untuk Start tetapi masih dapat membaca aktivitas. Audit grant/revoke terlihat. Tes ini tidak mengklaim skenario Stop-only end-to-end.
+
+### Bukti Stop-only
+
+[CI 45542374771](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45542374771) lulus seluruh 14 job. Pemilik memberi Stop dari UI pada workload yang berjalan. Dengan sesi yang sama, subuser menghentikan workload sampai Wings benar-benar `offline`, tetapi ditolak saat meminta Start. Setelah pemilik mencabut Stop, permintaan Stop langsung mendapat 404 meski akun masih login dan tetap punya `activity.read`. Pemberian dan pencabutan Stop terlihat di riwayat audit.
