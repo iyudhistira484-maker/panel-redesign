@@ -117,6 +117,25 @@ async function main() {
     ? "https://127.0.0.1:4443"
     : "https://relay.example.test";
   const mail = stagingMail(origin);
+  let interceptNextApplicationCreate = false;
+  let interceptedDelivery: (() => Promise<Response>) | undefined;
+  let interceptedDispatches = 0;
+  const applicationDispatchRequest: typeof fetch = async (input, init) => {
+    if (!interceptNextApplicationCreate) return fetch(input, init);
+    assert.equal(String(input), `${node.origin}/api/servers`);
+    assert.equal(init?.method, "POST");
+    interceptNextApplicationCreate = false;
+    interceptedDispatches++;
+    interceptedDelivery = () =>
+      fetch(input, { ...init, signal: AbortSignal.timeout(5_000) });
+    throw new Error("Disposable transport did not receive an acknowledgement");
+  };
+  async function deliverInterruptedCreate() {
+    const deliver = interceptedDelivery;
+    interceptedDelivery = undefined;
+    assert.ok(deliver);
+    assert.equal((await deliver()).status, 202);
+  }
   const relayFor = (configured: typeof node) =>
     createApp({
       pool,
@@ -126,6 +145,7 @@ async function main() {
       catalogNodeKey: key,
       allowedCatalogNodeOrigins: [configured.origin],
       wingsTestNode: configured,
+      ...(configured === node ? { applicationDispatchRequest } : {}),
       enableDisposableProvisioning: true,
       deliverReset: mail.deliverReset,
     });
@@ -1178,7 +1198,10 @@ async function main() {
         await pool.execute(
           "UPDATE users SET is_admin=TRUE WHERE email='outsider@example.test'",
         );
-        const newKey = async (createServers: boolean) => {
+        const newKey = async (
+          createServers: boolean,
+          reconcileServers = false,
+        ) => {
           const result = await relay.inject({
             method: "POST",
             remoteAddress: "127.0.0.12",
@@ -1187,16 +1210,18 @@ async function main() {
             payload: {
               label: "Disposable create contract",
               createServers,
-              readServers: !createServers,
+              readServers: !createServers && !reconcileServers,
+              reconcileServers,
             },
           });
           assert.equal(result.statusCode, 201);
           return result.json<{ token: string }>().token;
         };
         try {
-          const [writer, reader] = await Promise.all([
+          const [writer, reader, reconciler] = await Promise.all([
             newKey(true),
             newKey(false),
+            newKey(false, true),
           ]);
           const [nodeRow] = await rows<{ id: number }>(
             pool,
@@ -1297,39 +1322,131 @@ async function main() {
             inventory.data.map((row) => row.attributes.uuid),
             [made.attributes.uuid],
           );
-          const unavailable = createBody(
-            ownerRow.id,
-            eggRow.id,
-            outage,
-            "relay-uncertain-shell",
+          const reconcilePath = (id: number) =>
+            `${appServerPath}/${id}/reconcile`;
+          const reconcile = (id: number, key = reconciler) =>
+            appRequest(base, reconcilePath(id), key, undefined, "POST");
+          assert.equal(
+            (await reconcile(made.attributes.id, reader)).status,
+            403,
           );
-          await docker("docker", ["pause", "relay-wings-contract"], {
-            timeout: 5000,
-          });
-          try {
-            const failed = await post(writer, unavailable);
-            assert.equal(failed.status, 502);
-            const report = (await failed.json()) as {
-              meta: { server: AppFixture["attributes"] };
+          assert.equal(
+            (await reconcile(made.attributes.id, writer)).status,
+            403,
+          );
+          const [old] = await rows<{ id: number }>(
+            pool,
+            "SELECT application_id AS id FROM servers WHERE id=?",
+            [uuid],
+          );
+          assert.equal((await reconcile(old.id)).status, 404);
+          type Reconciled = {
+            object: string;
+            attributes: {
+              uuid: string;
+              phase: string;
+              presence: string;
+              state: string | null;
             };
-            assert.equal(report.meta.server.status, "uncertain");
-            const reserved = await detail(report.meta.server.id);
+          };
+          const observation = async (id: number) => {
+            const response = await reconcile(id);
+            assert.equal(response.status, 200);
+            return ((await response.json()) as Reconciled).attributes;
+          };
+          const uncertain = async (allocation: number, externalId: string) => {
+            const body = createBody(
+              ownerRow.id,
+              eggRow.id,
+              allocation,
+              externalId,
+            );
+            interceptNextApplicationCreate = true;
+            const failed = await post(writer, body);
+            assert.equal(failed.status, 502);
+            const result = (
+              (await failed.json()) as {
+                meta: { server: AppFixture["attributes"] };
+              }
+            ).meta.server;
+            assert.equal(result.status, "uncertain");
+            assert.equal(result.allocation, allocation);
+            const reserved = await detail(result.id);
             assert.equal(
               ((await reserved.json()) as AppFixture).attributes.status,
               "uncertain",
             );
-            assert.equal((await post(writer, unavailable)).status, 409);
-            const attempts = await rows(
-              pool,
-              "SELECT id FROM audit_log WHERE event='wings.application_provision_requested' AND subject_id=?",
-              [report.meta.server.uuid],
+            assert.equal((await post(writer, body)).status, 409);
+            return result;
+          };
+          const missing = await uncertain(outage, "relay-absent-shell");
+          // Drop this captured attempt: it never reaches Wings.
+          interceptedDelivery = undefined;
+          assert.deepEqual(await observation(missing.id), {
+            uuid: missing.uuid,
+            phase: "uncertain",
+            presence: "absent",
+            state: null,
+          });
+          const late = await uncertain(
+            await reserve(25620),
+            "relay-late-shell",
+          );
+          assert.deepEqual(await observation(late.id), {
+            uuid: late.uuid,
+            phase: "uncertain",
+            presence: "absent",
+            state: null,
+          });
+          // Deliver the original captured request once; only the real Wings callback may mark it installed.
+          await deliverInterruptedCreate();
+          await until("authenticated late Wings install callback", async () => {
+            const response = await detail(late.id);
+            return (
+              response.ok &&
+              ((await response.json()) as AppFixture).attributes.status === null
             );
-            assert.equal(attempts.length, 1);
-          } finally {
-            await docker("docker", ["unpause", "relay-wings-contract"], {
-              timeout: 5000,
-            });
+          });
+          assert.deepEqual(await observation(late.id), {
+            uuid: late.uuid,
+            phase: "installed",
+            presence: "present",
+            state: "offline",
+          });
+          assert.ok(
+            (
+              await client.readFixtureFile(late.uuid, "relay-start.sh")
+            ).includes("RELAY_CONTRACT_READY"),
+          );
+          assert.equal(interceptedDispatches, 2);
+          assert.deepEqual(await observation(missing.id), {
+            uuid: missing.uuid,
+            phase: "uncertain",
+            presence: "absent",
+            state: null,
+          });
+          for (const entry of [missing, late]) {
+            assert.equal(
+              (
+                await rows(
+                  pool,
+                  "SELECT id FROM audit_log WHERE event='wings.application_provision_requested' AND subject_id=?",
+                  [entry.uuid],
+                )
+              ).length,
+              1,
+            );
           }
+          assert.equal(
+            (
+              await post(
+                writer,
+                createBody(ownerRow.id, eggRow.id, outage, "no-release"),
+              )
+            ).status,
+            409,
+          );
+          await client.remove(late.uuid);
           await client.remove(made.attributes.uuid);
         } finally {
           await pool.execute(

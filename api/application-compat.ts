@@ -54,6 +54,10 @@ export function registerApplicationInventory(
   create?: {
     claim(db: Executor, id: string, actorId: string): Promise<void>;
     dispatch(id: string): Promise<string>;
+    probe(id: string): Promise<{
+      presence: "present" | "absent" | "unreachable";
+      state: string | null;
+    }>;
   },
 ) {
   async function authorize(
@@ -64,7 +68,8 @@ export function registerApplicationInventory(
       | "read_servers"
       | "read_nodes"
       | "read_allocations"
-      | "create_servers" = "read_servers",
+      | "create_servers"
+      | "reconcile_servers" = "read_servers",
   ) {
     const token = /^rlya_[A-Za-z0-9_-]{43}$/.exec(
       auth.startsWith("Bearer ") ? auth.slice(7) : "",
@@ -72,7 +77,7 @@ export function registerApplicationInventory(
     const [key] = token
       ? await rows<Record<typeof scope, number> & { user_id: string }>(
           db,
-          `SELECT k.user_id,k.read_servers,k.read_nodes,k.read_allocations,k.create_servers FROM application_keys k JOIN users u ON u.id=k.user_id WHERE k.digest=? AND k.expires_at>UTC_TIMESTAMP(3) AND u.is_admin=TRUE${scope === "create_servers" ? " FOR UPDATE" : ""}`,
+          `SELECT k.user_id,k.read_servers,k.read_nodes,k.read_allocations,k.create_servers,k.reconcile_servers FROM application_keys k JOIN users u ON u.id=k.user_id WHERE k.digest=? AND k.expires_at>UTC_TIMESTAMP(3) AND u.is_admin=TRUE${scope === "create_servers" ? " FOR UPDATE" : ""}`,
           [digest(token)],
         )
       : [];
@@ -232,6 +237,97 @@ export function registerApplicationInventory(
               : "ProvisionException",
             error.code,
           );
+        throw error;
+      }
+    },
+  );
+  app.post<{ Params: { id: string }; Querystring: Record<string, unknown> }>(
+    `${path}/:id/reconcile`,
+    {
+      bodyLimit: 1024,
+      config: { rateLimit: { max: 12, timeWindow: "1 minute" } },
+    },
+    async (req, reply) => {
+      const authorization = req.headers.authorization ?? "";
+      const query = async (db: Executor) => {
+        const number = Number(req.params.id);
+        if (!/^[1-9]\d{0,9}$/.test(req.params.id) || !validId(number))
+          return undefined;
+        const [server] = await rows<{ uuid: string; phase: string }>(
+          db,
+          "SELECT s.id AS uuid,p.phase FROM servers s JOIN wings_provisions p ON p.server_id=s.id WHERE s.application_id=? AND p.application_origin=TRUE",
+          [number],
+        );
+        return server;
+      };
+      const missing = () =>
+        deny(
+          reply,
+          404,
+          "NotFoundHttpException",
+          "Application fixture not found.",
+        );
+      const applicable = (phase: string) =>
+        ["uncertain", "installing", "installed", "install_failed"].includes(
+          phase,
+        );
+      try {
+        if (!(await authorize(pool, authorization, reply, "reconcile_servers")))
+          return reply;
+        if (Object.keys(req.query).length || req.body !== undefined)
+          return deny(
+            reply,
+            400,
+            "BadRequestHttpException",
+            "Reconciliation takes no input.",
+          );
+        const initial = await query(pool);
+        if (!create || !initial) return missing();
+        if (!applicable(initial.phase))
+          return deny(
+            reply,
+            409,
+            "ConflictHttpException",
+            "Reconciliation not applicable.",
+          );
+        const observed = await create.probe(initial.uuid);
+        return transaction(pool, async (db) => {
+          const actor = await authorize(
+            db,
+            authorization,
+            reply,
+            "reconcile_servers",
+          );
+          if (!actor) return reply;
+          const current = await query(db);
+          if (!current || current.uuid !== initial.uuid) return missing();
+          if (!applicable(current.phase))
+            return deny(
+              reply,
+              409,
+              "ConflictHttpException",
+              "Reconciliation not applicable.",
+            );
+          await db.execute(
+            "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,?,?)",
+            [
+              actor,
+              `wings.application_reconcile_${observed.presence}`,
+              current.uuid,
+            ],
+          );
+          return {
+            object: "server_reconciliation",
+            attributes: {
+              uuid: current.uuid,
+              phase: current.phase,
+              ...observed,
+            },
+          };
+        });
+      } catch (error) {
+        if (error instanceof ProvisionError)
+          return deny(reply, error.status, "ProvisionException", error.code);
         throw error;
       }
     },

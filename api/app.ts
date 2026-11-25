@@ -37,6 +37,7 @@ export type Options = {
   pepper: Buffer;
   deliverReset: (message: ResetMessage) => Promise<void>;
   wingsTestNode?: WingsNode;
+  applicationDispatchRequest?: typeof fetch;
   enableDisposableProvisioning?: boolean;
   catalogNodeKey?: Buffer;
   allowedCatalogNodeOrigins?: readonly string[];
@@ -101,6 +102,7 @@ export async function createApp({
   pepper,
   deliverReset,
   wingsTestNode,
+  applicationDispatchRequest,
   enableDisposableProvisioning,
   catalogNodeKey,
   allowedCatalogNodeOrigins,
@@ -124,7 +126,14 @@ export async function createApp({
     );
   const provisioner =
     enableDisposableProvisioning && wingsTestNode && catalogNodeKey
-      ? createProvisioner(pool, wingsTestNode, catalogNodeKey, pepper, origin)
+      ? createProvisioner(
+          pool,
+          wingsTestNode,
+          catalogNodeKey,
+          pepper,
+          origin,
+          applicationDispatchRequest,
+        )
       : undefined;
   const receiver =
     fixtureReceiver && provisioner && wingsTestNode && catalogNodeKey
@@ -182,7 +191,8 @@ export async function createApp({
       ) &&
       !(
         req.method === "POST" &&
-        req.routeOptions.url === "/api/application/servers" &&
+        (req.routeOptions.url === "/api/application/servers" ||
+          req.routeOptions.url === "/api/application/servers/:id/reconcile") &&
         req.headers.origin === undefined &&
         req.headers.cookie === undefined &&
         /^Bearer rlya_[A-Za-z0-9_-]{43}$/.test(req.headers.authorization ?? "")
@@ -334,6 +344,7 @@ export async function createApp({
       readNodes?: boolean;
       readAllocations?: boolean;
       createServers?: boolean;
+      reconcileServers?: boolean;
     };
   }>(
     "/api/v1/account/application-keys",
@@ -347,6 +358,7 @@ export async function createApp({
             readNodes: { type: "boolean" },
             readAllocations: { type: "boolean" },
             createServers: { type: "boolean" },
+            reconcileServers: { type: "boolean" },
           },
           ["label"],
         ),
@@ -366,7 +378,7 @@ export async function createApp({
         const id = randomUUID(),
           token = `rlya_${randomBytes(32).toString("base64url")}`;
         await db.execute(
-          "INSERT INTO application_keys (id,user_id,digest,label,read_servers,read_nodes,read_allocations,create_servers,expires_at) VALUES (?,?,?,?,?,?,?,?,TIMESTAMPADD(DAY,30,UTC_TIMESTAMP(3)))",
+          "INSERT INTO application_keys (id,user_id,digest,label,read_servers,read_nodes,read_allocations,create_servers,reconcile_servers,expires_at) VALUES (?,?,?,?,?,?,?,?,?,TIMESTAMPADD(DAY,30,UTC_TIMESTAMP(3)))",
           [
             id,
             account.id,
@@ -376,6 +388,7 @@ export async function createApp({
             req.body.readNodes === true,
             req.body.readAllocations === true,
             req.body.createServers === true,
+            req.body.reconcileServers === true,
           ],
         );
         await audit(db, "identity.application_key_created", account.id);

@@ -77,10 +77,14 @@ export function createProvisioner(
   key: Buffer,
   pepper: Buffer,
   origin: string,
+  applicationDispatchRequest?: typeof fetch,
 ) {
   const node = validateNode(rawNode);
   const crypt = cryptoContext(key, pepper, "node-token");
   const client = new WingsClient(node);
+  const appDispatch = applicationDispatchRequest
+    ? new WingsClient(node, applicationDispatchRequest)
+    : client;
   const socket = new WingsSocket(node, origin);
   const fromNode = (s: ServerRow) => {
     if (s.origin !== node.origin || s.tokenId !== node.tokenId) return false;
@@ -377,10 +381,10 @@ export function createProvisioner(
   }
   const uploadAllowed = (id: string, actor: Actor) =>
     ownerFileScope(id, actor, "upload");
-  async function dispatchInstallation(id: string) {
+  async function dispatchInstallation(id: string, transport = client) {
     let next: Phase = "installing";
     try {
-      await client.create(id);
+      await transport.create(id);
     } catch {
       next = "uncertain";
     }
@@ -404,7 +408,7 @@ export function createProvisioner(
         )
           throw new ProvisionError(422, "fixture_placement_not_supported");
         await db.execute(
-          "INSERT INTO wings_provisions (server_id,phase) VALUES (?,'dispatching')",
+          "INSERT INTO wings_provisions (server_id,phase,application_origin) VALUES (?,'dispatching',TRUE)",
           [id],
         );
         await db.execute(
@@ -412,7 +416,17 @@ export function createProvisioner(
           [actorId, id],
         );
       },
-      dispatch: dispatchInstallation,
+      dispatch: (id: string) => dispatchInstallation(id, appDispatch),
+      async probe(id: string) {
+        const server = await load(pool, id);
+        if (
+          !server ||
+          !fromNode(server) ||
+          !server.document.equals(Buffer.from(disposableEgg))
+        )
+          throw new ProvisionError(404, "fixture_not_found");
+        return observe(id);
+      },
     },
     async files(
       id: string,
