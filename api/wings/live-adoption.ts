@@ -722,6 +722,7 @@ async function main() {
         const key = `rly_${randomBytes(32).toString("base64url")}`;
         const result = await relay.inject({
           method: "POST",
+          remoteAddress: fileScopes.clientEditFile ? "127.0.0.8" : "127.0.0.1",
           url: "/api/v1/account/keys",
           headers: { ...headers, ...session },
           payload: {
