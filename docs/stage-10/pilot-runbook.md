@@ -45,3 +45,9 @@ Catat di tiket atau PR, tanpa kredensial atau isi artefak:
 | Keputusan staging: lanjut atau tahan, beserta alasan | Menunggu operator |
 
 Jika salah satu bukti tidak tersedia, tandai **tahan**, jangan setujui cutover. Setelah run independen lulus, pilih satu layanan staging yang benar-benar bisa menerima permintaan. Tambahkan pemeriksaan kesehatan dari sisi pengguna dan uji penulisan baru setelah pemulihan; pengujian shell hanya membuktikan pembacaan file. Untuk keputusan produksi, tentukan target downtime dan kehilangan data, penanggung jawab keputusan, dan prosedur rollback yang teruji untuk tipe workload itu.
+
+## Uji layanan HTTP setelah restore
+
+Workflow menambahkan layanan HTTP disposable di workload Wings yang sama, pada alokasi loopback. Setelah restore, runner melakukan GET dan mencocokkan isi checkpoint, POST record baru, GET ulang, lalu stop/start workload dari Wings dan GET lagi untuk membuktikan record baru tetap ada. Endpoint fixture hanya menulis satu record berukuran maksimum 64 byte; jangan gunakan sebagai layanan produksi. Pemeriksaan HTTP ikut dihitung dalam batas 120 detik.
+
+Status saat implementasi: GET, POST, baca ulang, dan persistensi setelah restart lulus pada BusyBox lokal; lint dan build lulus. Bukti lintas runner menunggu push dan dispatch GitHub. Uji mandiri operator belum dilakukan karena dispatch CLI operator gagal dengan 403; ini tidak dihitung sebagai kelulusan operator.
