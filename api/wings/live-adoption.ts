@@ -772,6 +772,104 @@ async function main() {
           { event: "wings.power_start_requested", subject_id: uuid },
           { event: "wings.power_stop_requested", subject_id: uuid },
         ]);
+        const secondRelay = relay2;
+        assert.ok(secondRelay);
+        const mutate = (
+          id: string,
+          action: "grant" | "revoke",
+          permission?: "control.start" | "control.stop",
+        ) =>
+          relay.inject({
+            method: "POST",
+            url: `/api/v1/servers/${id}/activity-access`,
+            headers: { ...headers, ...ownerSession },
+            payload: {
+              email: "collaborator@example.test",
+              action,
+              ...(permission ? { permission } : {}),
+            },
+          });
+        const dispatchGrantedPower = (
+          id: string,
+          action: "start" | "stop",
+          session = collaborator,
+        ) =>
+          (id === uuid ? relay : secondRelay).inject({
+            method: "POST",
+            remoteAddress: "127.0.0.3",
+            url: `/api/v1/servers/${id}/power`,
+            headers: { ...headers, ...session },
+            payload: { action, confirm: true },
+          });
+        try {
+          for (const id of [uuid, second])
+            assert.equal((await mutate(id, "grant")).statusCode, 204);
+          assert.equal(
+            (await mutate(uuid, "grant", "control.start")).statusCode,
+            204,
+          );
+          assert.equal(
+            (await mutate(second, "grant", "control.stop")).statusCode,
+            204,
+          );
+          if ((await clientFor(second).state(second)) === "offline")
+            assert.equal(
+              (await dispatchGrantedPower(second, "start", ownerSession))
+                .statusCode,
+              202,
+            );
+          await until(
+            "server B running before isolation test",
+            async () => (await clientFor(second).state(second)) === "running",
+          );
+          assert.equal(
+            (await dispatchGrantedPower(uuid, "stop")).statusCode,
+            404,
+          );
+          assert.equal(
+            (await dispatchGrantedPower(second, "start")).statusCode,
+            404,
+          );
+          assert.equal(
+            (await dispatchGrantedPower(uuid, "start")).statusCode,
+            202,
+          );
+          await until(
+            "server A running with delegated Start",
+            async () => (await clientFor(uuid).state(uuid)) === "running",
+          );
+          assert.equal(
+            (await mutate(uuid, "revoke", "control.start")).statusCode,
+            204,
+          );
+          assert.equal(
+            (await dispatchGrantedPower(uuid, "start")).statusCode,
+            404,
+          );
+          assert.equal(
+            (await dispatchGrantedPower(second, "stop")).statusCode,
+            202,
+          );
+          await until(
+            "server B offline with unchanged delegated Stop",
+            async () => (await clientFor(second).state(second)) === "offline",
+          );
+          assert.equal(await clientFor(uuid).state(uuid), "running");
+          assert.equal(
+            (await dispatchGrantedPower(uuid, "stop", ownerSession)).statusCode,
+            202,
+          );
+          await until(
+            "server A offline before browser rehearsal",
+            async () => (await clientFor(uuid).state(uuid)) === "offline",
+          );
+        } finally {
+          for (const id of [uuid, second])
+            await pool.execute(
+              "DELETE FROM server_grants WHERE server_id=? AND user_id=(SELECT id FROM users WHERE email='collaborator@example.test')",
+              [id],
+            );
+        }
         if (browser) {
           await pool.execute(
             "INSERT INTO server_grants (server_id,user_id,permissions) SELECT ?,id,JSON_ARRAY('activity.read') FROM users WHERE email='collaborator@example.test'",
