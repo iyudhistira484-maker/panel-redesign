@@ -27,3 +27,21 @@
 ## Profil pilot kecil yang dipilih
 
 [CI 45645682262](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45645682262) lulus dengan kunci runtime independen dan **256 MiB / 2.048 file** (data sintetis pada workload shell Wings, bukan aplikasi tertentu). Restore termasuk unduh dan pencabutan ulang memakan **19.663 ms**; checkpoint hingga simulasi kehilangan **209 ms**. Keduanya lulus batas latihan. [Foundation 45645681348](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45645681348) lulus. Profil ini cukup untuk pilot staging kecil; tidak menyatakan dukungan untuk beban yang lebih besar atau karakteristik aplikasi seperti database aktif. Operator kedua masih perlu mengulang secara mandiri sebelum mempertimbangkan pilot produksi.
+
+## Serah terima ke operator kedua
+
+Minta operator yang tidak menyiapkan latihan awal menjalankan workflow sendiri dari tab **Actions**, pada commit yang sudah ditinjau. Operator tidak perlu melihat nilai secret: workflow mengambilnya langsung. Pertahankan `require_independent_keys=true`. Pengulangan oleh penulis harness tidak dihitung sebagai verifikasi operator kedua.
+
+Catat di tiket atau PR, tanpa kredensial atau isi artefak:
+
+| Bukti | Diisi oleh operator |
+| --- | --- |
+| Operator, waktu UTC, commit, URL run | Belum diisi |
+| Kedua job lulus dan `independent_keys=true` | Belum diverifikasi |
+| 256 MiB / 2.048 file dan checksum lulus | Belum diverifikasi |
+| Arsip rusak ditolak dan izin dicabut ulang | Belum diverifikasi |
+| Waktu pemulihan ≤120 detik dan checkpoint hingga simulasi kehilangan ≤30 detik | Belum diverifikasi |
+| Langkah yang tidak dapat diikuti tanpa bantuan | Belum dicatat |
+| Keputusan staging: lanjut atau tahan, beserta alasan | Menunggu operator |
+
+Jika salah satu bukti tidak tersedia, tandai **tahan**, jangan setujui cutover. Setelah run independen lulus, pilih satu layanan staging yang benar-benar bisa menerima permintaan. Tambahkan pemeriksaan kesehatan dari sisi pengguna dan uji penulisan baru setelah pemulihan; pengujian shell hanya membuktikan pembacaan file. Untuk keputusan produksi, tentukan target downtime dan kehilangan data, penanggung jawab keputusan, dan prosedur rollback yang teruji untuk tipe workload itu.
