@@ -15,13 +15,15 @@ if (($argv[1] ?? '') === 'status') {
     echo json_encode($server, JSON_THROW_ON_ERROR);
     exit;
 }
-if (($argv[1] ?? '') === 'client-key') {
-    $account = DB::table('users')->where('email', 'adoption@example.test')->first(['id']);
+if (in_array(($argv[1] ?? ''), ['client-key', 'application-key'], true)) {
+    $application = $argv[1] === 'application-key';
+    $account = DB::table('users')->where('email', $application ? 'outsider@example.test' : 'adoption@example.test')->first(['id']);
     if (!$account) { throw new RuntimeException('Fixture account missing'); }
     $service = $app->make(\Pterodactyl\Services\Api\KeyCreationService::class);
-    $key = $service->setKeyType(\Pterodactyl\Models\ApiKey::TYPE_ACCOUNT)->handle([
+    if ($application) { DB::table('users')->where('id', $account->id)->update(['root_admin' => true]); }
+    $key = $service->setKeyType($application ? \Pterodactyl\Models\ApiKey::TYPE_APPLICATION : \Pterodactyl\Models\ApiKey::TYPE_ACCOUNT)->handle([
         'user_id' => $account->id, 'memo' => 'Disposable Relay comparison', 'allowed_ips' => [],
-    ]);
+    ], $application ? ['r_servers' => 1] : []);
     echo $key->identifier . $app->make('encrypter')->decrypt($key->token);
     exit;
 }

@@ -1,3 +1,4 @@
+import { registerApplicationInventory } from "./application-compat";
 import { registerClientCompatibility } from "./client-compat";
 import {
   createFixtureReceiver,
@@ -311,6 +312,75 @@ export async function createApp({
     provisioner?.compatCommand,
     provisioner?.compatStream,
     provisioner?.compatFiles,
+  );
+  registerApplicationInventory(app, pool, origin, (key) =>
+    crypt.digest("application-key", key),
+  );
+  app.post<{ Body: { label: string; readServers: boolean } }>(
+    "/api/v1/account/application-keys",
+    {
+      config: authLimit,
+      schema: {
+        body: object({ label: text(1, 80), readServers: { type: "boolean" } }),
+      },
+    },
+    async (req, reply) => {
+      const result = await transaction(pool, async (db) => {
+        const account = await session(req.cookies[sessionCookie], db, true);
+        if (!account?.authenticated) return { status: 401 } as const;
+        if (!account.is_admin) return { status: 403 } as const;
+        const current = await rows(
+          db,
+          "SELECT id FROM application_keys WHERE user_id=? AND expires_at>UTC_TIMESTAMP(3) LIMIT 10",
+          [account.id],
+        );
+        if (current.length >= 10) return { status: 409 } as const;
+        const id = randomUUID(),
+          token = `rlya_${randomBytes(32).toString("base64url")}`;
+        await db.execute(
+          "INSERT INTO application_keys (id,user_id,digest,label,read_servers,expires_at) VALUES (?,?,?,?,?,TIMESTAMPADD(DAY,30,UTC_TIMESTAMP(3)))",
+          [
+            id,
+            account.id,
+            crypt.digest("application-key", token),
+            req.body.label,
+            req.body.readServers,
+          ],
+        );
+        await audit(db, "identity.application_key_created", account.id);
+        return { status: 201, id, token } as const;
+      });
+      return result.status === 201
+        ? reply.code(201).send({ id: result.id, token: result.token })
+        : reply
+            .code(result.status)
+            .send({ error: "application_key_creation_denied" });
+    },
+  );
+  app.delete<{ Params: { id: string } }>(
+    "/api/v1/account/application-keys/:id",
+    { schema: { params: object({ id: uuid }) } },
+    async (req, reply) => {
+      const status = await transaction(pool, async (db) => {
+        const account = await session(req.cookies[sessionCookie], db, true);
+        if (!account?.authenticated) return 401;
+        const [key] = await rows(
+          db,
+          "SELECT id FROM application_keys WHERE id=? AND user_id=? FOR UPDATE",
+          [req.params.id, account.id],
+        );
+        if (!key) return 404;
+        await db.execute(
+          "DELETE FROM application_keys WHERE id=? AND user_id=?",
+          [req.params.id, account.id],
+        );
+        await audit(db, "identity.application_key_revoked", account.id);
+        return 204;
+      });
+      return status === 204
+        ? reply.code(204).send()
+        : reply.code(status).send({ error: "application_key_not_found" });
+    },
   );
   const generic = { error: "invalid_credentials" };
   app.get("/health/live", async () => ({ status: "ok" }));

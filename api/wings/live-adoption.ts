@@ -2292,6 +2292,208 @@ async function main() {
           404,
         );
         assert.equal((await fetch(expiringDownload)).status, 404);
+        const applicationPath = "/api/application/servers";
+        const managementPath = "/api/v1/account/application-keys";
+        const mintApplication = (
+          session: typeof ownerSession,
+          readServers: boolean,
+        ) =>
+          relay.inject({
+            method: "POST",
+            remoteAddress: "127.0.0.11",
+            url: managementPath,
+            headers: { ...headers, ...session },
+            payload: { label: "Disposable inventory comparison", readServers },
+          });
+        assert.equal(
+          (await mintApplication(ownerSession, true)).statusCode,
+          403,
+        );
+        await pool.execute(
+          "UPDATE users SET is_admin=TRUE WHERE email='outsider@example.test'",
+        );
+        try {
+          const [withRead, withoutRead, legacyAppResult] = await Promise.all([
+            mintApplication(outsider, true),
+            mintApplication(outsider, false),
+            docker(
+              "docker",
+              [
+                "exec",
+                "relay-adoption-panel",
+                "php",
+                "/tmp/relay-fixture.php",
+                "application-key",
+              ],
+              { timeout: 10000 },
+            ),
+          ]);
+          assert.equal(withRead.statusCode, 201);
+          assert.equal(withoutRead.statusCode, 201);
+          const application = withRead.json<{ id: string; token: string }>(),
+            denied = withoutRead.json<{ token: string }>();
+          const legacyApplication = legacyAppResult.stdout.trim();
+          assert.match(legacyApplication, /^ptla_[A-Za-z0-9]+$/);
+          const inventory = (
+            base: string,
+            key: string,
+            path = applicationPath,
+          ) => fetch(`${base}${path}`, { headers: auth(key) });
+          assert.equal((await inventory(relayBase, relayKey)).status, 401);
+          assert.equal((await inventory(relayBase, denied.token)).status, 403);
+          assert.equal(
+            (
+              await fetch(`${relayBase}/api/client`, {
+                headers: auth(application.token),
+              })
+            ).status,
+            401,
+          );
+          assert.equal(
+            (await relay.inject({ url: applicationPath, headers: outsider }))
+              .statusCode,
+            401,
+          );
+          type Entry = {
+            object: string;
+            attributes: {
+              id: number;
+              uuid: string;
+              identifier: string;
+              name: string;
+              status: string | null;
+            };
+          };
+          async function snapshot(base: string, key: string) {
+            const entries: Entry[] = [];
+            const pagination = [];
+            for (const page of [1, 2]) {
+              const response = await inventory(
+                base,
+                key,
+                `${applicationPath}?per_page=1&page=${page}`,
+              );
+              assert.equal(response.status, 200);
+              const body = (await response.json()) as {
+                object: string;
+                data: Entry[];
+                meta: {
+                  pagination: {
+                    count: number;
+                    total: number;
+                    per_page: number;
+                    current_page: number;
+                    total_pages: number;
+                    links: { next?: string; previous?: string };
+                  };
+                };
+              };
+              assert.equal(body.object, "list");
+              const { links, ...meta } = body.meta.pagination;
+              pagination.push(meta);
+              const link = page === 1 ? links.next : links.previous;
+              assert.ok(link);
+              assert.equal(new URL(link).searchParams.get("per_page"), "1");
+              assert.equal(
+                new URL(link).searchParams.get("page"),
+                String(page === 1 ? 2 : 1),
+              );
+              const entry = body.data[0];
+              assert.equal(entry.object, "server");
+              assert.ok(
+                Number.isSafeInteger(entry.attributes.id) &&
+                  entry.attributes.id > 0,
+              );
+              const detail = await inventory(
+                base,
+                key,
+                `${applicationPath}/${entry.attributes.id}`,
+              );
+              assert.equal(detail.status, 200);
+              assert.deepEqual(await detail.json(), entry);
+              if (base === relayBase)
+                assert.deepEqual(Object.keys(entry.attributes).sort(), [
+                  "id",
+                  "identifier",
+                  "name",
+                  "status",
+                  "uuid",
+                ]);
+              entries.push(entry);
+            }
+            return {
+              pagination,
+              records: entries
+                .map(
+                  ({
+                    attributes: { id: _, uuid, identifier, name, status },
+                  }) => ({ uuid, identifier, name, status }),
+                )
+                .sort((a, b) => a.uuid.localeCompare(b.uuid)),
+            };
+          }
+          assert.deepEqual(
+            await snapshot(relayBase, application.token),
+            await snapshot(legacyBase, legacyApplication),
+          );
+          assert.equal(
+            (
+              await inventory(
+                relayBase,
+                application.token,
+                `${applicationPath}/${uuid}`,
+              )
+            ).status,
+            404,
+          );
+          assert.equal(
+            (
+              await inventory(
+                relayBase,
+                application.token,
+                `${applicationPath}?include=node`,
+              )
+            ).status,
+            400,
+          );
+          assert.equal(
+            (
+              await fetch(`${relayBase}${applicationPath}`, {
+                method: "POST",
+                headers: { ...headers, ...auth(application.token) },
+              })
+            ).status,
+            404,
+          );
+          await pool.execute(
+            "UPDATE users SET is_admin=FALSE WHERE email='outsider@example.test'",
+          );
+          assert.equal(
+            (await inventory(relayBase, application.token)).status,
+            401,
+          );
+          await pool.execute(
+            "UPDATE users SET is_admin=TRUE WHERE email='outsider@example.test'",
+          );
+          assert.equal(
+            (
+              await relay.inject({
+                method: "DELETE",
+                url: `${managementPath}/${application.id}`,
+                headers: { ...headers, ...outsider },
+              })
+            ).statusCode,
+            204,
+          );
+          assert.equal(
+            (await inventory(relayBase, application.token)).status,
+            401,
+          );
+        } finally {
+          await pool.execute(
+            "UPDATE users SET is_admin=FALSE WHERE email='outsider@example.test'",
+          );
+        }
         if (browser) {
           await pool.execute(
             "INSERT INTO server_grants (server_id,user_id,permissions) SELECT ?,id,JSON_ARRAY('activity.read') FROM users WHERE email='collaborator@example.test'",
