@@ -888,16 +888,27 @@ export async function createApp({
   );
   app.post<{
     Params: { id: string };
-    Body: { email: string; action: "grant" | "revoke" };
+    Body: {
+      email: string;
+      action: "grant" | "revoke";
+      permission?: "control.start" | "control.stop";
+    };
   }>(
     "/api/v1/servers/:id/activity-access",
     {
       config: { rateLimit: { max: 20, timeWindow: "1 minute" } },
       schema: {
-        body: object({
-          email,
-          action: { type: "string", enum: ["grant", "revoke"] },
-        }),
+        body: object(
+          {
+            email,
+            permission: {
+              type: "string",
+              enum: ["control.start", "control.stop"],
+            },
+            action: { type: "string", enum: ["grant", "revoke"] },
+          },
+          ["email", "action"],
+        ),
       },
     },
     async (req, reply) => {
@@ -922,6 +933,43 @@ export async function createApp({
           [req.body.email.toLowerCase()],
         );
         if (!target || target.id === principal.id) return 422;
+        const permission = req.body.permission;
+        if (permission) {
+          const [grant] = await rows<{ permissions: string[] | string }>(
+            db,
+            "SELECT permissions FROM server_grants WHERE server_id=? AND user_id=? FOR UPDATE",
+            [req.params.id, target.id],
+          );
+          if (!grant) return 409;
+          const current: string[] =
+            typeof grant.permissions === "string"
+              ? JSON.parse(grant.permissions)
+              : grant.permissions;
+          const adding = req.body.action === "grant";
+          if (current.includes(permission) === adding) return 409;
+          const updated = adding
+            ? [...current, permission]
+            : current.filter((value) => value !== permission);
+          if (updated.length)
+            await db.execute(
+              "UPDATE server_grants SET permissions=? WHERE server_id=? AND user_id=?",
+              [JSON.stringify(updated), req.params.id, target.id],
+            );
+          else
+            await db.execute(
+              "DELETE FROM server_grants WHERE server_id=? AND user_id=?",
+              [req.params.id, target.id],
+            );
+          await db.execute(
+            "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,?,?)",
+            [
+              principal.id,
+              `catalog.${permission}.${req.body.action}`,
+              req.params.id,
+            ],
+          );
+          return 204;
+        }
         const [existing] = await rows<{ exact: number }>(
           db,
           "SELECT (JSON_LENGTH(permissions)=1 AND JSON_CONTAINS(permissions,JSON_QUOTE('activity.read'))) AS exact FROM server_grants WHERE server_id=? AND user_id=? FOR UPDATE",

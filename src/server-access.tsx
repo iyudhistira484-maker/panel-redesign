@@ -2,6 +2,7 @@ import { useId, useState, type FormEvent } from "react";
 import type { Locale } from "./i18n";
 import { Button, TextInput } from "./ui";
 
+type PowerPermission = "control.start" | "control.stop";
 type Subuser = { id: string; email: string; permissions: string[] };
 type Snapshot = { items: Subuser[]; truncated: boolean };
 export function ServerAccess({ id, locale }: { id: string; locale: Locale }) {
@@ -12,6 +13,11 @@ export function ServerAccess({ id, locale }: { id: string; locale: Locale }) {
   const [list, setList] = useState<Snapshot | null>(null);
   const [listError, setListError] = useState(false);
   const [confirm, setConfirm] = useState<string | null>(null);
+  const [powerChange, setPowerChange] = useState<{
+    address: string;
+    permission: PowerPermission;
+    action: "grant" | "revoke";
+  } | null>(null);
   const base = `/api/v1/servers/${encodeURIComponent(id)}`;
   async function readList() {
     setList(null);
@@ -51,9 +57,9 @@ export function ServerAccess({ id, locale }: { id: string; locale: Locale }) {
       setBusy(false);
     }
   }
-  const [result, setResult] = useState<"grant" | "revoke" | "error" | null>(
-    null,
-  );
+  const [result, setResult] = useState<
+    "grant" | "revoke" | "power" | "error" | null
+  >(null);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const action = (event.nativeEvent as SubmitEvent).submitter?.getAttribute(
@@ -61,9 +67,14 @@ export function ServerAccess({ id, locale }: { id: string; locale: Locale }) {
     );
     if (action === "grant" || action === "revoke") await change(email, action);
   }
-  async function change(address: string, action: "grant" | "revoke") {
+  async function change(
+    address: string,
+    action: "grant" | "revoke",
+    permission?: PowerPermission,
+  ) {
     if (busy) return;
     setConfirm(null);
+    setPowerChange(null);
     setBusy(true);
     setResult(null);
     try {
@@ -74,10 +85,12 @@ export function ServerAccess({ id, locale }: { id: string; locale: Locale }) {
           "content-type": "application/json",
           "x-relay-request": "1",
         },
-        body: JSON.stringify({ email: address, action }),
+        body: JSON.stringify({ email: address, action, permission }),
         signal: AbortSignal.timeout(10000),
       });
-      setResult(response.status === 204 ? action : "error");
+      setResult(
+        response.status === 204 ? (permission ? "power" : action) : "error",
+      );
       if (list) await readList();
     } catch {
       setResult("error");
@@ -120,6 +133,13 @@ export function ServerAccess({ id, locale }: { id: string; locale: Locale }) {
               : "Akses tidak dapat diubah. Periksa akun dan izin yang sudah ada."}
           </p>
         )}
+        {result === "power" && (
+          <output>
+            {en
+              ? "Power permission updated."
+              : "Izin kontrol server diperbarui."}
+          </output>
+        )}
         {(result === "grant" || result === "revoke") && (
           <output>
             {result === "grant"
@@ -152,6 +172,65 @@ export function ServerAccess({ id, locale }: { id: string; locale: Locale }) {
               <li key={row.id}>
                 <strong>{row.email}</strong>
                 <p>{row.permissions.join(", ")}</p>
+                {(["control.start", "control.stop"] as const).map(
+                  (permission) => {
+                    const name =
+                      permission === "control.start" ? "Start" : "Stop";
+                    const action = row.permissions.includes(permission)
+                      ? "revoke"
+                      : "grant";
+                    return (
+                      <Button
+                        key={permission}
+                        disabled={busy}
+                        onClick={() => {
+                          setConfirm(null);
+                          setPowerChange({
+                            address: row.email,
+                            permission,
+                            action,
+                          });
+                        }}
+                      >
+                        {action === "grant"
+                          ? en
+                            ? `Grant ${name}`
+                            : `Beri izin ${name}`
+                          : en
+                            ? `Revoke ${name}`
+                            : `Cabut izin ${name}`}
+                      </Button>
+                    );
+                  },
+                )}
+                {powerChange?.address === row.email && (
+                  <div>
+                    <p>
+                      {row.email} · {powerChange.permission} ·{" "}
+                      {powerChange.action}
+                    </p>
+                    <Button
+                      disabled={busy}
+                      onClick={() =>
+                        void change(
+                          row.email,
+                          powerChange.action,
+                          powerChange.permission,
+                        )
+                      }
+                    >
+                      {en
+                        ? "Confirm permission change"
+                        : "Konfirmasi perubahan izin"}
+                    </Button>
+                    <Button
+                      disabled={busy}
+                      onClick={() => setPowerChange(null)}
+                    >
+                      {en ? "Cancel" : "Batal"}
+                    </Button>
+                  </div>
+                )}
                 {row.permissions.length === 1 &&
                   row.permissions[0] === "activity.read" &&
                   (confirm === row.email ? (
