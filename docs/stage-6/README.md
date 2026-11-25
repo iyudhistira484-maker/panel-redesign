@@ -19,3 +19,9 @@ Pemilik dapat memberi/cabut `control.start` dan `control.stop` secara independen
 ### Bukti Stop-only
 
 [CI 45542374771](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45542374771) lulus seluruh 14 job. Pemilik memberi Stop dari UI pada workload yang berjalan. Dengan sesi yang sama, subuser menghentikan workload sampai Wings benar-benar `offline`, tetapi ditolak saat meminta Start. Setelah pemilik mencabut Stop, permintaan Stop langsung mendapat 404 meski akun masih login dan tetap punya `activity.read`. Pemberian dan pencabutan Stop terlihat di riwayat audit.
+
+## Isolasi izin antarserver dan penutupan cakupan staging
+
+[CI 45543074170](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45543074170) lulus 14 job. Kontrak `legacy-panel` menggunakan satu sesi subuser, dua workload, dua node Wings sungguhan, dan dua binding API Relay. Pemilik memberi Start di A dan Stop di B melalui API; aksi kebalikan ditolak di masing-masing server. Setelah Start di A dicabut, sesi yang sama ditolak untuk Start di A tetapi berhasil menghentikan B sampai `offline`, sementara A tetap `running`. Tes lintas server adalah pengujian API dan Wings; pengujian UI grant/revoke tetap dijalankan dalam job yang sama.
+
+Cakupan Tahap 6 yang disepakati untuk akun yang sudah ada selesai di staging. Undangan email, pengelolaan izin umum, dan cutover produksi tidak termasuk.
