@@ -1110,6 +1110,7 @@ async function main() {
           relay.inject({
             method: "POST",
             url: `/api/v1/servers/${id}/activity-access`,
+            remoteAddress: "127.0.0.6",
             headers: { ...headers, ...ownerSession },
             payload: {
               email: "collaborator@example.test",
