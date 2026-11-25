@@ -110,7 +110,7 @@ SCRIPT,
         'created_at' => now(), 'updated_at' => now(), 'external_id' => 'fixture:Legacy A',
         'uuid' => $uuid, 'uuidShort' => substr($uuid, 0, 8), 'node_id' => $node,
         'name' => 'Existing staging workload', 'description' => 'Disposable', 'status' => 'installing',
-        'owner_id' => $owner, 'memory' => 128, 'swap' => 0, 'disk' => 64, 'io' => 500, 'cpu' => 50,
+        'owner_id' => $owner, 'memory' => 128, 'swap' => 0, 'disk' => 256, 'io' => 500, 'cpu' => 50,
         'allocation_id' => $allocation, 'nest_id' => $nest, 'egg_id' => $egg, 'startup' => $startup, 'image' => $image,
     ]);
     DB::table('allocations')->where('id', $allocation)->update(['server_id' => $server]);
