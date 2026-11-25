@@ -1495,6 +1495,19 @@ async function main() {
             ).status,
             409,
           );
+          const probeReserved = (
+            key: string,
+            payload: ReturnType<typeof createBody>,
+          ) =>
+            relay
+              .inject({
+                method: "POST",
+                remoteAddress: "127.0.0.13",
+                url: appServerPath,
+                headers: { authorization: `Bearer ${key}` },
+                payload,
+              })
+              .then((response) => ({ status: response.statusCode }));
           const destroy = (id: number, key = deleter, suffix = "") =>
             appRequest(
               base,
@@ -1564,7 +1577,7 @@ async function main() {
           assert.equal((await destroy(late.id)).status, 409);
           assert.equal(
             (
-              await post(
+              await probeReserved(
                 writer,
                 createBody(
                   ownerRow.id,
@@ -1624,7 +1637,7 @@ async function main() {
           assert.equal(deletionEvidenceChecks, 1);
           assert.equal(
             (
-              await post(
+              await probeReserved(
                 writer,
                 createBody(
                   ownerRow.id,
