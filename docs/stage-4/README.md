@@ -15,3 +15,9 @@ Halaman masuk memakai endpoint `login`, `challenge`, `logout`, dan `GET /api/v1/
 ## Uji browser langsung tanpa mock
 
 [CI 45526792661](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45526792661) lulus semua 13 job. Job `identity` menjalankan Playwright terhadap frontend terbangun, proxy HTTPS loopback dengan sertifikat CI, proses API asli, MySQL, dan Mailpit. Akun uji disemai dengan 2FA; browser meminta reset, membuka email, mengatur password, menguji replay tautan di tab yang sama, login, membuktikan sesi belum otoritatif sebelum 2FA, memverifikasi cookie Secure/HttpOnly, lalu reload dan logout. Cookie sebelum logout kembali ditolak sesudah logout. Tidak ada mock request browser pada latihan ini. Enrolment 2FA di UI dan katalog baca-saja belum tercakup.
+
+## Pendaftaran 2FA dari UI
+
+Setelah login, akun tanpa 2FA bisa mengaktifkannya dengan kata sandi saat ini, memasukkan kunci Base32 secara manual ke autentikator TOTP, lalu memasukkan kode enam digit. Sepuluh kode pemulihan ditampilkan setelah konfirmasi; setelah pengguna menutupnya, UI tidak menyimpan atau menampilkannya lagi. Tidak ada QR eksternal atau penyimpanan browser. Reload saat kode masih ditampilkan akan menghilangkannya, jadi simpan terlebih dahulu.
+
+[CI 45527498941](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45527498941) lulus seluruh 13 job. Tes HTTPS sekarang memakai akun tanpa 2FA, mendaftarkannya dari UI dengan TOTP nyata, lalu login lagi dengan satu kode pemulihan yang ditampilkan. Daftar server baca-saja masih belum tercakup.
