@@ -1,0 +1,5 @@
+# Tahap 7 — file server staging
+
+Irisan awal **Detail server → Buka daftar file**: pemilik fixture Wings terpasang dapat melihat nama, tipe folder/file, dan ukuran file; dapat membuka folder serta kembali ke induknya. Tidak ada pembacaan isi file, unduh, unggah, edit, atau hapus. Backend memeriksa sesi dan kepemilikan; izin aktivitas dan power tidak memberi akses file. Listing dibatasi 100 entri, 128 KiB per respons Wings, empat segmen nama yang divalidasi, dan hanya file reguler/folder. Relay tidak menampilkan symlink atau memakainya sebagai segmen; isolasi filesystem tetap bergantung pada Wings, bukan klaim keamanan terhadap semua perubahan file concurrent.
+
+[CI 45544257538](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45544257538) lulus semua 14 job. Chromium/HTTPS dengan Wings sungguhan membuka root dan fixture-docs, melihat example.txt dan kembali ke induk. Permintaan sesi subuser serta navigasi symlink mendapat 404; path dengan `..` mendapat 400. Tidak ada deployment VPS atau produksi.
