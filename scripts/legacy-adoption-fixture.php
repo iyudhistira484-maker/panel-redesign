@@ -20,10 +20,14 @@ if (in_array(($argv[1] ?? ''), ['client-key', 'application-key'], true)) {
     $account = DB::table('users')->where('email', $application ? 'outsider@example.test' : 'adoption@example.test')->first(['id']);
     if (!$account) { throw new RuntimeException('Fixture account missing'); }
     $service = $app->make(\Pterodactyl\Services\Api\KeyCreationService::class);
-    if ($application) { DB::table('users')->where('id', $account->id)->update(['root_admin' => true]); }
+    if ($application) {
+        DB::table('users')->where('id', $account->id)->update(['root_admin' => true]);
+        $node = DB::table('nodes')->where('uuid', '33113cc5-78fb-4cd0-881b-326c3888b38b')->value('id');
+        DB::table('allocations')->updateOrInsert(['node_id' => $node, 'ip' => '127.0.0.1', 'port' => 25617], ['server_id' => null]);
+    }
     $key = $service->setKeyType($application ? \Pterodactyl\Models\ApiKey::TYPE_APPLICATION : \Pterodactyl\Models\ApiKey::TYPE_ACCOUNT)->handle([
         'user_id' => $account->id, 'memo' => 'Disposable Relay comparison', 'allowed_ips' => [],
-    ], $application ? ['r_servers' => 1] : []);
+    ], $application ? ['r_servers' => 1, 'r_nodes' => 1, 'r_allocations' => 1] : []);
     echo $key->identifier . $app->make('encrypter')->decrypt($key->token);
     exit;
 }
@@ -31,7 +35,7 @@ DB::transaction(function () use ($uuid, $app) {
     $location = DB::table('locations')->insertGetId(['short' => 'fixture']);
     $node = DB::table('nodes')->insertGetId([
         'uuid' => '3ab63670-f83b-4a2c-adeb-5b2852859319', 'public' => 1,
-        'name' => 'Adoption node', 'location_id' => $location, 'fqdn' => '127.0.0.1',
+        'created_at' => now(), 'updated_at' => now(), 'name' => 'Adoption node', 'location_id' => $location, 'fqdn' => '127.0.0.1',
         'scheme' => 'http', 'memory' => 1024, 'disk' => 1024, 'daemonListen' => 18080,
         'daemon_token_id' => getenv('RELAY_WINGS_TEST_TOKEN_ID'),
         'daemon_token' => $app->make('encrypter')->encrypt(getenv('RELAY_WINGS_TEST_TOKEN')),
@@ -106,7 +110,7 @@ SCRIPT,
     $otherEgg = DB::table('eggs')->insertGetId($copy);
     $secondNode = DB::table('nodes')->insertGetId([
         'uuid' => '33113cc5-78fb-4cd0-881b-326c3888b38b', 'public' => 1,
-        'name' => 'Second adoption node', 'location_id' => $location, 'fqdn' => '127.0.0.1',
+        'created_at' => now(), 'updated_at' => now(), 'name' => 'Second adoption node', 'location_id' => $location, 'fqdn' => '127.0.0.1',
         'scheme' => 'http', 'memory' => 1024, 'disk' => 1024, 'daemonListen' => 18081,
         'daemon_token_id' => getenv('RELAY_SECOND_NODE_TOKEN_ID'),
         'daemon_token' => $app->make('encrypter')->encrypt(getenv('RELAY_SECOND_NODE_TOKEN')),

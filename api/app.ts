@@ -316,12 +316,27 @@ export async function createApp({
   registerApplicationInventory(app, pool, origin, (key) =>
     crypt.digest("application-key", key),
   );
-  app.post<{ Body: { label: string; readServers: boolean } }>(
+  app.post<{
+    Body: {
+      label: string;
+      readServers?: boolean;
+      readNodes?: boolean;
+      readAllocations?: boolean;
+    };
+  }>(
     "/api/v1/account/application-keys",
     {
       config: authLimit,
       schema: {
-        body: object({ label: text(1, 80), readServers: { type: "boolean" } }),
+        body: object(
+          {
+            label: text(1, 80),
+            readServers: { type: "boolean" },
+            readNodes: { type: "boolean" },
+            readAllocations: { type: "boolean" },
+          },
+          ["label"],
+        ),
       },
     },
     async (req, reply) => {
@@ -338,13 +353,15 @@ export async function createApp({
         const id = randomUUID(),
           token = `rlya_${randomBytes(32).toString("base64url")}`;
         await db.execute(
-          "INSERT INTO application_keys (id,user_id,digest,label,read_servers,expires_at) VALUES (?,?,?,?,?,TIMESTAMPADD(DAY,30,UTC_TIMESTAMP(3)))",
+          "INSERT INTO application_keys (id,user_id,digest,label,read_servers,read_nodes,read_allocations,expires_at) VALUES (?,?,?,?,?,?,?,TIMESTAMPADD(DAY,30,UTC_TIMESTAMP(3)))",
           [
             id,
             account.id,
             crypt.digest("application-key", token),
             req.body.label,
-            req.body.readServers,
+            req.body.readServers === true,
+            req.body.readNodes === true,
+            req.body.readAllocations === true,
           ],
         );
         await audit(db, "identity.application_key_created", account.id);

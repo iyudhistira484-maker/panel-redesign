@@ -2307,13 +2307,18 @@ async function main() {
         const mintApplication = (
           session: typeof ownerSession,
           readServers: boolean,
+          scopes: { readNodes?: boolean; readAllocations?: boolean } = {},
         ) =>
           relay.inject({
             method: "POST",
             remoteAddress: "127.0.0.11",
             url: managementPath,
             headers: { ...headers, ...session },
-            payload: { label: "Disposable inventory comparison", readServers },
+            payload: {
+              label: "Disposable inventory comparison",
+              readServers,
+              ...scopes,
+            },
           });
         assert.equal(
           (await mintApplication(ownerSession, true)).statusCode,
@@ -2363,6 +2368,195 @@ async function main() {
             (await relay.inject({ url: applicationPath, headers: outsider }))
               .statusCode,
             401,
+          );
+          const [nodeKeyResult, allocationKeyResult] = await Promise.all([
+            mintApplication(outsider, false, { readNodes: true }),
+            mintApplication(outsider, false, { readAllocations: true }),
+          ]);
+          assert.equal(nodeKeyResult.statusCode, 201);
+          assert.equal(allocationKeyResult.statusCode, 201);
+          const nodeKey = nodeKeyResult.json<{ token: string }>().token;
+          const allocationKey = allocationKeyResult.json<{ token: string }>()
+            .token;
+          const nodesPath = "/api/application/nodes";
+          await pool.execute(
+            "INSERT INTO allocations (id,node_id,ip,port) VALUES (?,?,'127.0.0.1',25617)",
+            [randomUUID(), secondNodeId],
+          );
+          assert.equal(
+            (await inventory(relayBase, application.token, nodesPath)).status,
+            403,
+          );
+          assert.equal(
+            (await inventory(relayBase, allocationKey, nodesPath)).status,
+            403,
+          );
+          assert.equal(
+            (await inventory(relayBase, nodeKey, applicationPath)).status,
+            403,
+          );
+          assert.equal(
+            (await inventory(relayBase, allocationKey, applicationPath)).status,
+            403,
+          );
+          assert.equal(
+            (await inventory(relayBase, relayKey, nodesPath)).status,
+            401,
+          );
+          type Pagination = {
+            total: number;
+            count: number;
+            per_page: number;
+            current_page: number;
+            total_pages: number;
+            links: { next?: string };
+          };
+          async function placement(
+            base: string,
+            nodesKey: string,
+            allocKey: string,
+            serverKey: string,
+          ) {
+            type NodeEntry = {
+              object: string;
+              attributes: { id: number; uuid: string; name: string };
+            };
+            type AllocationEntry = {
+              object: string;
+              attributes: {
+                id: number;
+                ip: string;
+                port: number;
+                assigned: boolean;
+                alias: string | null;
+                notes: string | null;
+              };
+            };
+            async function page<T>(key: string, path: string, n: number) {
+              const response = await inventory(
+                base,
+                key,
+                `${path}?per_page=1&page=${n}`,
+              );
+              assert.equal(
+                response.status,
+                200,
+                `Placement page on ${new URL(base).port}, ${path}: ${response.status}`,
+              );
+              const body = (await response.json()) as {
+                object: string;
+                data: T[];
+                meta: { pagination: Pagination };
+              };
+              assert.equal(body.object, "list");
+              const { links, ...meta } = body.meta.pagination;
+              assert.equal(meta.count, 1);
+              assert.equal(meta.total, 2);
+              assert.equal(meta.total_pages, 2);
+              assert.equal(meta.current_page, n);
+              assert.equal(meta.per_page, 1);
+              if (n === 1 && base === relayBase) {
+                assert.ok(links.next);
+                const next = new URL(links.next);
+                assert.equal(next.pathname, path);
+                assert.equal(next.searchParams.get("per_page"), "1");
+              }
+              return body.data[0];
+            }
+            const serverList = (await (
+              await inventory(base, serverKey)
+            ).json()) as {
+              data: {
+                attributes: { uuid: string; node: number; allocation: number };
+              }[];
+            };
+            const output = [];
+            for (const n of [1, 2]) {
+              const entry = await page<NodeEntry>(nodesKey, nodesPath, n);
+              assert.equal(entry.object, "node");
+              assert.ok(Number.isSafeInteger(entry.attributes.id));
+              if (base === relayBase)
+                assert.deepEqual(Object.keys(entry.attributes).sort(), [
+                  "id",
+                  "name",
+                  "uuid",
+                ]);
+              const localPath = `${nodesPath}/${entry.attributes.id}`;
+              const detail = await inventory(base, nodesKey, localPath);
+              assert.equal(detail.status, 200);
+              assert.deepEqual(await detail.json(), entry);
+              const allocationPath = `${localPath}/allocations`;
+              if (base === relayBase) {
+                assert.equal(
+                  (await inventory(base, nodesKey, allocationPath)).status,
+                  403,
+                );
+                assert.equal(
+                  (await inventory(base, serverKey, allocationPath)).status,
+                  403,
+                );
+              }
+              const slots = await Promise.all([
+                page<AllocationEntry>(allocKey, allocationPath, 1),
+                page<AllocationEntry>(allocKey, allocationPath, 2),
+              ]);
+              assert.ok(
+                slots.every(
+                  (slot) =>
+                    slot.object === "allocation" &&
+                    Number.isSafeInteger(slot.attributes.id),
+                ),
+              );
+              const server = serverList.data.find(
+                (row) =>
+                  row.attributes.uuid ===
+                  (entry.attributes.uuid === nodeId ? uuid : second),
+              );
+              assert.equal(server?.attributes.node, entry.attributes.id);
+              const primary = slots.find(
+                (slot) => slot.attributes.id === server?.attributes.allocation,
+              );
+              assert.equal(
+                primary?.attributes.port,
+                entry.attributes.uuid === nodeId ? 25610 : 25611,
+              );
+              output.push({
+                uuid: entry.attributes.uuid,
+                slots: slots
+                  .map(({ attributes: { id: _, ...slot } }) => slot)
+                  .sort((a, b) => a.port - b.port),
+              });
+            }
+            return output.sort((a, b) => a.uuid.localeCompare(b.uuid));
+          }
+          assert.deepEqual(
+            await placement(
+              relayBase,
+              nodeKey,
+              allocationKey,
+              application.token,
+            ),
+            await placement(
+              legacyBase,
+              legacyApplication,
+              legacyApplication,
+              legacyApplication,
+            ),
+          );
+          assert.equal(
+            (await inventory(relayBase, nodeKey, `${nodesPath}/4294967295`))
+              .status,
+            404,
+          );
+          assert.equal(
+            (
+              await inventory(
+                relayBase,
+                allocationKey,
+                `${nodesPath}/4294967295/allocations`,
+              )
+            ).status,
+            404,
           );
           type Entry = {
             object: string;
@@ -2433,10 +2627,12 @@ async function main() {
               assert.deepEqual(await detail.json(), entry);
               if (base === relayBase)
                 assert.deepEqual(Object.keys(entry.attributes).sort(), [
+                  "allocation",
                   "external_id",
                   "id",
                   "identifier",
                   "name",
+                  "node",
                   "status",
                   "uuid",
                 ]);
