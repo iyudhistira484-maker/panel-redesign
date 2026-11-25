@@ -57,6 +57,17 @@ jobs:
       - run: npm run test:identity
         env:
           RELAY_STAGING_DATABASE_URL: mysql://relay:disposable-ci@127.0.0.1:${{ job.services.mysql.ports[3306] }}/relay_test
+      - run: npm run build
+      - name: Use runner Chromium or install Playwright browser
+        run: |
+          if command -v google-chrome >/dev/null; then
+            echo "RELAY_CHROMIUM_PATH=$(command -v google-chrome)" >> "$GITHUB_ENV"
+          else
+            npx playwright install --with-deps chromium
+          fi
+      - run: bash scripts/auth-browser-contract.sh
+        env:
+          RELAY_STAGING_DATABASE_URL: mysql://relay:disposable-ci@127.0.0.1:${{ job.services.mysql.ports[3306] }}/relay_test
   wings-bootstrap:
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
