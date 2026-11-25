@@ -12,6 +12,9 @@ test("password recovery submits same-origin and displays a generic confirmation"
   });
   await page.goto("/#authView");
   await page.getByRole("link", { name: "Lupa kata sandi" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Lupa kata sandi", exact: true }),
+  ).toBeVisible();
   await page
     .getByRole("textbox", { name: "Email" })
     .fill("someone@example.test");
