@@ -706,6 +706,7 @@ async function main() {
         ) =>
           relay.inject({
             method: "POST",
+            remoteAddress: "127.0.0.2", // Keep API-only checks out of the Chromium rate bucket.
             url: `/api/v1/servers/${id}/power`,
             headers: { ...headers, ...session },
             payload: { confirm: true, action },
