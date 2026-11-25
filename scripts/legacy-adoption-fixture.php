@@ -90,6 +90,7 @@ SCRIPT,
     }
     $allocation = DB::table('allocations')->insertGetId(['node_id' => $node, 'ip' => '127.0.0.1', 'port' => 25610]);
     $server = DB::table('servers')->insertGetId([
+        'created_at' => now(), 'updated_at' => now(),
         'uuid' => $uuid, 'uuidShort' => substr($uuid, 0, 8), 'node_id' => $node,
         'name' => 'Existing staging workload', 'description' => 'Disposable', 'status' => 'installing',
         'owner_id' => $owner, 'memory' => 128, 'swap' => 0, 'disk' => 64, 'io' => 500, 'cpu' => 50,

@@ -2373,7 +2373,11 @@ async function main() {
                 key,
                 `${applicationPath}?per_page=1&page=${page}`,
               );
-              assert.equal(response.status, 200);
+              assert.equal(
+                response.status,
+                200,
+                `Application list at ${new URL(base).port} returned ${response.status}`,
+              );
               const body = (await response.json()) as {
                 object: string;
                 data: Entry[];
@@ -2409,7 +2413,11 @@ async function main() {
                 key,
                 `${applicationPath}/${entry.attributes.id}`,
               );
-              assert.equal(detail.status, 200);
+              assert.equal(
+                detail.status,
+                200,
+                `Application detail at ${new URL(base).port} returned ${detail.status}`,
+              );
               assert.deepEqual(await detail.json(), entry);
               if (base === relayBase)
                 assert.deepEqual(Object.keys(entry.attributes).sort(), [
