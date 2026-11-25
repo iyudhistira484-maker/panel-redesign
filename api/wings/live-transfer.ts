@@ -110,6 +110,7 @@ async function main() {
   let uploadStarted = false;
   let corruptStatus: number | undefined;
   let uploads = 0;
+  let corruptError: string | undefined;
   const sink = createServer((req, res) => {
     if (req.method !== "POST" || req.url !== "/api/transfers") {
       res.writeHead(404).end();
@@ -117,6 +118,7 @@ async function main() {
     }
     if (corrupt) {
       uploads++;
+      let stage = "read multipart";
       void (async () => {
         const chunks: Buffer[] = [];
         let size = 0;
@@ -127,13 +129,16 @@ async function main() {
           chunks.push(chunk);
         }
         const body = Buffer.concat(chunks);
+        stage = "find archive part";
         const divider = body.indexOf("\r\n\r\n");
         assert.ok(divider >= 0 && divider < 1024);
         assert.match(body.subarray(0, divider).toString(), /name="archive"/);
+        stage = "check gzip header";
         const start = divider + 4;
         assert.equal(body.subarray(start, start + 3).toString("hex"), "1f8b08");
         assert.equal(body[start + 3] & 2, 0); // No optional gzip header CRC.
         body[start + 4] ^= 1; // MTIME byte: extraction still succeeds, checksum must not.
+        stage = "forward archive";
         const response = await fetch(`${target.origin}/api/transfers`, {
           method: "POST",
           headers: {
@@ -146,7 +151,10 @@ async function main() {
         corruptStatus = response.status;
         await response.body?.cancel();
         res.writeHead(response.status).end();
-      })().catch(() => res.writeHead(502).end());
+      })().catch(() => {
+        corruptError = stage;
+        res.writeHead(502).end();
+      });
       return;
     }
     // Hold the transfer open after its first body chunk: no acknowledgement or destination write.
@@ -726,7 +734,14 @@ async function main() {
     } else if (corrupt) {
       await eventually(
         "corrupt upload refusal and destination failure",
-        () => corruptStatus !== undefined && completion !== undefined,
+        () =>
+          Boolean(corruptError) ||
+          (corruptStatus !== undefined && completion !== undefined),
+      );
+      assert.equal(
+        corruptError,
+        undefined,
+        `Fixture proxy failed at ${corruptError}`,
       );
       assert.equal(corruptStatus, 500);
       assert.equal(completion, false);
