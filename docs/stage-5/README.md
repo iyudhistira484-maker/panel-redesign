@@ -19,3 +19,9 @@ Run ini tidak hijau penuh: job transfer `mumble-missing-report` gagal terpisah d
 Pada detail server staging, **Baca penggunaan sumber daya** menampilkan cuplikan CPU, memori dan batasnya, disk, waktu aktif, serta byte jaringan yang diterima/dikirim. Satu permintaan mengambil satu cuplikan Wings; Relay tidak mengirim kredensial Wings ke browser, tidak melakukan polling, dan membersihkan cuplikan lama saat refresh. API hanya menerima sesi pemilik pada fixture disposable yang terpasang. Grant baca runtime tidak memberi akses metrik.
 
 [CI 45533251879](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45533251879) lulus semua 13 job. Chromium tanpa mock menampilkan cuplikan dari Wings saat workload aktif dan membuktikan subuser baca-saja ditolak, selain regresi Start/Stop dan timeout.
+
+## Cuplikan konsol baca-saja
+
+Pada detail server staging, **Baca konsol staging** mengambil maksimal 20 baris penanda `RELAY_CONTRACT_READY` dari Wings. Ini sengaja bukan konsol umum: output lain tidak diteruskan karena belum ada kebijakan untuk menangani rahasia pada log workload. Tidak ada input perintah, streaming, atau kredensial Wings di browser. Endpoint hanya untuk sesi pemilik fixture terpasang.
+
+[Job browser → Wings 138936080772](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45534025222/job/138936080772) lulus: pemilik melihat penanda dari workload, subuser baca-saja ditolak, dan saat daemon Wings dijeda UI menghapus cuplikan lama dan menampilkan galat. Satu job transfer Mumble terpisah gagal pada run yang sama.
