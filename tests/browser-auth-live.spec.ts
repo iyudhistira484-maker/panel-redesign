@@ -181,7 +181,7 @@ test("staging server list shows only owned or shared rows and never falls back t
       nest = randomUUID(),
       egg = randomUUID();
     await pool.execute(
-      "INSERT INTO nodes VALUES (?, 'Fixture node', ?, ?, X'00')",
+      "INSERT INTO nodes (id,name,origin,token_id,token_cipher) VALUES (?, 'Fixture node', ?, ?, X'00')",
       [node, `https://${node}.example.test`, node],
     );
     await pool.execute("INSERT INTO nests VALUES (?,?)", [nest, nest]);
@@ -194,11 +194,10 @@ test("staging server list shows only owned or shared rows and never falls back t
       "Staging private workload",
     ].entries()) {
       const allocation = randomUUID();
-      await pool.execute("INSERT INTO allocations VALUES (?,?,'127.0.0.1',?)", [
-        allocation,
-        node,
-        25500 + i,
-      ]);
+      await pool.execute(
+        "INSERT INTO allocations (id,node_id,ip,port) VALUES (?,?,'127.0.0.1',?)",
+        [allocation, node, 25500 + i],
+      );
       await pool.execute(
         "INSERT INTO servers(id,name,node_id,owner_id,egg_id,allocation_id) VALUES (?,?,?,?,?,?)",
         [i === 0 ? server : randomUUID(), name, node, ids[0], egg, allocation],
