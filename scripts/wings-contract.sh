@@ -86,7 +86,7 @@ else
   docker network create --internal "$network" >/dev/null
 fi
 http_fixture=0
-if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == offhost-restore ]]; then http_fixture=1; fi
+if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == offhost-restore || "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then http_fixture=1; fi
 cat <<'DOCKERFILE' | docker build --build-arg HTTP_FIXTURE="$http_fixture" --tag relay-wings-contract-workload:ci -
 FROM alpine:3.22.2
 ARG HTTP_FIXTURE=0

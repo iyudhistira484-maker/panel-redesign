@@ -28,3 +28,78 @@ esac
 printf 'Content-Type: text/plain\\r\\nCache-Control: no-store\\r\\n\\r\\n'
 cat record.txt
 `;
+
+import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+const docker = promisify(execFile);
+
+export async function fixtureHttp(uuid: string, body?: string) {
+  const address = (
+    await docker(
+      "docker",
+      [
+        "inspect",
+        "--format",
+        '{{(index .NetworkSettings.Networks "relay-wings-contract-net").IPAddress}}',
+        uuid,
+      ],
+      { timeout: 5000 },
+    )
+  ).stdout.trim();
+  assert.match(address, /^\d+\.\d+\.\d+\.\d+$/);
+  return (
+    await docker(
+      "docker",
+      [
+        "run",
+        "--rm",
+        "--network",
+        "relay-wings-contract-net",
+        "--entrypoint",
+        "busybox",
+        "relay-wings-contract-workload:ci",
+        "wget",
+        "-T",
+        "2",
+        "-qO-",
+        ...(body === undefined ? [] : ["--post-data", body]),
+        `http://${address}:25610/cgi-bin/record`,
+      ],
+      { timeout: 8000 },
+    )
+  ).stdout;
+}
+
+export async function observeHttpSwitch(
+  uuid: string,
+  expected: string,
+  operation: () => Promise<void>,
+) {
+  let finished = false;
+  let samples = 0;
+  let failures = 0;
+  const observe = async () => {
+    do {
+      const content = await fixtureHttp(uuid).catch(() => null);
+      if (content !== expected) failures++;
+      samples++;
+      if (!finished) await new Promise((resolve) => setTimeout(resolve, 200));
+    } while (!finished);
+  };
+  const started = performance.now();
+  const probe = observe();
+  try {
+    await operation();
+  } finally {
+    finished = true;
+    await probe;
+  }
+  assert.equal(await fixtureHttp(uuid), expected);
+  assert.equal(
+    failures,
+    0,
+    "HTTP client observed interruption or unexpected data",
+  );
+  return { samples, switchMs: Math.round(performance.now() - started) };
+}

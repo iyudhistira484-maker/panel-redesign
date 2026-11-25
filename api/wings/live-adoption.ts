@@ -18,7 +18,13 @@ import { cryptoContext } from "../security";
 import { UUID_V4, WingsClient, WingsUnavailable } from "./client";
 import { lifecycleFixture } from "./lifecycle-fixture";
 import { disposableEgg } from "./provision";
-import { checkpointRecord, recordCgi, startup } from "./offhost-http-fixture";
+import {
+  checkpointRecord,
+  fixtureHttp,
+  observeHttpSwitch,
+  recordCgi,
+  startup,
+} from "./offhost-http-fixture";
 import { offhostKey } from "./offhost-keys";
 import { registerRemote } from "./remote";
 
@@ -422,12 +428,50 @@ async function main() {
       );
       await fixtureScript("application-create-cleanup");
     }
+    const switchRecord = `relay-cutover-${randomUUID()}`;
+    const setupSwitchHttp = async (setup: boolean) => {
+      const root = process.env.RELAY_WINGS_CONTRACT_DATA ?? "";
+      assert.match(root, /^\/tmp\/tmp\.[A-Za-z0-9]+\/data\/volumes$/);
+      await docker(
+        "docker",
+        [
+          "exec",
+          "relay-wings-contract",
+          "sh",
+          "-ec",
+          setup
+            ? `
+        cd "$1"
+        cp -p relay-start.sh relay-start.original
+        mkdir -p relay-pilot-http/cgi-bin
+        printf '%s' "$2" > relay-start.sh
+        printf '%s' "$3" > relay-pilot-http/cgi-bin/record
+        printf '%s' "$4" > relay-pilot-http/record.txt
+        chmod 0755 relay-start.sh relay-pilot-http/cgi-bin/record
+        chown -R "$(stat -c '%u:%g' .)" relay-pilot-http
+      `
+            : `cd "$1"; mv relay-start.original relay-start.sh; rm -r relay-pilot-http`,
+          "http-switch",
+          `${root}/${uuid}`,
+          startup,
+          recordCgi,
+          checkpointRecord,
+        ],
+        { timeout: 5000 },
+      );
+    };
+    if (actual) await setupSwitchHttp(true);
     for (const id of workloadIds) await clientFor(id).power(id, "start");
     await until("source running", async () =>
       (
         await Promise.all(workloadIds.map((id) => clientFor(id).state(id)))
       ).every((state) => state === "running"),
     );
+    if (actual)
+      await until(
+        "legacy HTTP checkpoint",
+        async () => (await fixtureHttp(uuid)) === checkpointRecord,
+      );
     const before = await Promise.all(workloadIds.map(inspect)),
       hash = await Promise.all(workloadIds.map(checksum));
     if (actual) {
@@ -785,7 +829,13 @@ async function main() {
       }
     }
     const calls = legacyCalls;
-    await restart();
+    const cutover = actual
+      ? await observeHttpSwitch(uuid, checkpointRecord, () => restart())
+      : (await restart(), undefined);
+    if (actual) {
+      assert.equal(await fixtureHttp(uuid, switchRecord), switchRecord);
+      assert.equal(await fixtureHttp(uuid), switchRecord);
+    }
     assert.equal(legacyCalls, calls);
     assert.deepEqual(await Promise.all(workloadIds.map(inspect)), before);
     assert.deepEqual(await Promise.all(workloadIds.map(checksum)), hash);
@@ -3992,10 +4042,15 @@ async function main() {
         }
       };
     }
-    await copyFile(`${config}.backup`, config);
-    if (actual && secondConfig)
-      await copyFile(`${secondConfig}.backup`, secondConfig);
-    await restart();
+    const restoreLegacy = async () => {
+      await copyFile(`${config}.backup`, config);
+      if (actual && secondConfig)
+        await copyFile(`${secondConfig}.backup`, secondConfig);
+      await restart();
+    };
+    const rollback = actual
+      ? await observeHttpSwitch(uuid, switchRecord, restoreLegacy)
+      : (await restoreLegacy(), undefined);
     if (actual)
       assert.deepEqual(
         await Promise.all([legacyStatus(), legacyStatus("second")]),
@@ -4004,6 +4059,24 @@ async function main() {
     else assert.ok(legacyCalls > calls);
     assert.deepEqual(await Promise.all(workloadIds.map(inspect)), before);
     assert.deepEqual(await Promise.all(workloadIds.map(checksum)), hash);
+    if (actual) {
+      assert.ok(cutover && rollback);
+      console.log(
+        `::notice::HTTP adoption cutover_ms=${cutover.switchMs} cutover_samples=${cutover.samples} rollback_ms=${rollback.switchMs} rollback_samples=${rollback.samples} observed_failures=0 relay_write_retained=true`,
+      );
+      await client.power(uuid, "stop");
+      await until(
+        "HTTP fixture stopped for cleanup",
+        async () => (await client.state(uuid)) === "offline",
+      );
+      await setupSwitchHttp(false);
+      // Avoid a delayed stop completion racing the independent power contract.
+      await until("shell fixture resumed", async () => {
+        const state = await client.state(uuid);
+        if (state === "offline") await client.power(uuid, "start");
+        return state === "running";
+      });
+    }
     await verifyPower?.();
     await verifyCreate?.();
     await verifyRecovery?.();
