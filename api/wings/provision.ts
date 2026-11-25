@@ -381,6 +381,18 @@ export function createProvisioner(
         }
       });
     },
+    async compatResources(id: string) {
+      const server = await load(pool, id);
+      if (!server || !eligible(server) || server.phase !== "installed")
+        throw new ProvisionError(503, "fixture_unavailable");
+      try {
+        return await client.clientResources(id);
+      } catch (error) {
+        if (error instanceof WingsUnavailable)
+          throw new ProvisionError(502, "wings_resources_unavailable");
+        throw error;
+      }
+    },
     async stats(id: string, actor: Actor, scope: "admin" | "user" = "admin") {
       const server =
         scope === "admin"

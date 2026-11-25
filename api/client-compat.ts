@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { rows, transaction, type Executor } from "./db";
 import type { Pool } from "mysql2/promise";
+import { ProvisionError } from "./wings/provision";
 import { UUID_V4 } from "./wings/client";
 
 type Server = {
@@ -50,6 +51,7 @@ export function registerClientCompatibility(
   pool: Pool,
   origin: string,
   authenticate: (authorization: string) => Promise<string | null>,
+  resources?: (id: string) => Promise<unknown>,
 ) {
   for (const path of ["/api/client", "/api/client/"])
     app.get<{ Querystring: Record<string, unknown> }>(
@@ -115,6 +117,50 @@ export function registerClientCompatibility(
         };
       },
     );
+  async function resolve(identifier: string, user: string) {
+    const full = UUID_V4.test(identifier);
+    if (!full && !/^[a-f0-9]{8}$/.test(identifier)) return null;
+    const records = await rows<Server>(
+      pool,
+      `${projection} WHERE ${visible} AND ${full ? "s.id=?" : "s.id LIKE ?"} LIMIT 2`,
+      [user, user, user, full ? identifier : `${identifier}-%`],
+    );
+    return records.length === 1 ? records[0] : null;
+  }
+  app.get<{ Params: { identifier: string } }>(
+    "/api/client/servers/:identifier/resources",
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (req, reply) => {
+      reply.header("cache-control", "no-store");
+      const user = await authenticate(req.headers.authorization ?? "");
+      if (!user)
+        return reply
+          .code(401)
+          .send(errors("AuthenticationException", "Unauthenticated."));
+      const server = await resolve(req.params.identifier, user);
+      if (!server)
+        return reply
+          .code(404)
+          .send(errors("NotFoundHttpException", "Server not found."));
+      const unavailable = (status: number) =>
+        reply.code(status).send({
+          errors: [
+            {
+              code: "DaemonConnectionException",
+              status: String(status),
+              detail: "Server resources unavailable.",
+            },
+          ],
+        });
+      if (!resources) return unavailable(503);
+      try {
+        return { object: "stats", attributes: await resources(server.id) };
+      } catch (error) {
+        if (error instanceof ProvisionError) return unavailable(error.status);
+        throw error;
+      }
+    },
+  );
   app.get<{ Params: { identifier: string } }>(
     "/api/client/servers/:identifier",
     { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
@@ -130,15 +176,8 @@ export function registerClientCompatibility(
         reply
           .code(404)
           .send(errors("NotFoundHttpException", "Server not found."));
-      const full = UUID_V4.test(identifier);
-      if (!full && !/^[a-f0-9]{8}$/.test(identifier)) return missing();
-      const records = await rows<Server>(
-        pool,
-        `${projection} WHERE ${visible} AND ${full ? "s.id=?" : "s.id LIKE ?"} LIMIT 2`,
-        [user, user, user, full ? identifier : `${identifier}-%`],
-      );
-      if (records.length !== 1) return missing();
-      const [record] = records;
+      const record = await resolve(identifier, user);
+      if (!record) return missing();
       return {
         ...item(record, user),
         meta: {

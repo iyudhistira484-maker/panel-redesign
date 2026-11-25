@@ -694,6 +694,13 @@ async function main() {
         }>;
         getServerDetails(id: string): Promise<{ uuid: string; name: string }>;
         getServerPage(page: number): Promise<unknown[]>;
+        getServerUsages(
+          id: string,
+        ): Promise<{
+          current_state: string;
+          is_suspended: boolean;
+          resources: Record<string, number>;
+        }>;
       };
       const { NodeactylClient } = createRequire(import.meta.url)(
         "nodeactyl",
@@ -771,6 +778,85 @@ async function main() {
         authorization: `Bearer ${key}`,
         accept: "application/vnd.pterodactyl.v1+json",
       });
+      const identifier = uuid.slice(0, 8);
+      const resourcesPath = `/api/client/servers/${identifier}/resources`;
+      const checks = [
+        [legacyBase, legacyKey],
+        [relayBase, relayKey],
+      ] as const;
+      const signatures = await Promise.all(
+        checks.map(async ([base, key]) => {
+          try {
+            const usage = await new NodeactylClient(base, key).getServerUsages(
+              identifier,
+            );
+            const metricNames = Object.keys(usage.resources).sort();
+            assert.deepEqual(metricNames, [
+              "cpu_absolute",
+              "disk_bytes",
+              "memory_bytes",
+              "network_rx_bytes",
+              "network_tx_bytes",
+              "uptime",
+            ]);
+            for (const value of Object.values(usage.resources))
+              assert.ok(Number.isFinite(value) && value >= 0);
+            assert.equal(usage.current_state, "running");
+            assert.equal(usage.is_suspended, false);
+            const raw = await fetch(`${base}${resourcesPath}`, {
+              headers: auth(key),
+            });
+            assert.equal(raw.status, 200);
+            const payload = (await raw.json()) as {
+              object: string;
+              attributes: object;
+            };
+            assert.equal(payload.object, "stats");
+            return Object.keys(payload.attributes).sort();
+          } catch {
+            throw new Error(
+              `Nodeactyl resources contract failed on loopback port ${new URL(base).port}`,
+            );
+          }
+        }),
+      );
+      assert.deepEqual(signatures[0], signatures[1]);
+      assert.equal(
+        (await relay.inject({ url: resourcesPath, headers: auth(sharedKey) }))
+          .statusCode,
+        200,
+      );
+      assert.equal(
+        (await relay.inject({ url: resourcesPath, headers: auth(outsiderKey) }))
+          .statusCode,
+        404,
+      );
+      assert.equal(
+        (await relay.inject({ url: resourcesPath, headers: ownerSession }))
+          .statusCode,
+        401,
+      );
+      await docker("docker", ["pause", "relay-wings-contract"], {
+        timeout: 5000,
+      });
+      try {
+        const failed = await relay.inject({
+          url: resourcesPath,
+          headers: auth(relayKey),
+        });
+        assert.equal(failed.statusCode, 502);
+        assert.equal(failed.json().errors[0].status, "502");
+        assert.equal(failed.json().attributes, undefined);
+      } finally {
+        await docker("docker", ["unpause", "relay-wings-contract"], {
+          timeout: 5000,
+        });
+      }
+      assert.equal(
+        (await relay.inject({ url: resourcesPath, headers: auth(relayKey) }))
+          .statusCode,
+        200,
+      );
       const listPath = "/api/client?per_page=1&page=1";
       const [nativePage, compatPage] = await Promise.all([
         fetch(`${legacyBase}${listPath}`, { headers: auth(legacyKey) }),

@@ -265,10 +265,16 @@ export async function createApp({
       ? { id: u.id, admin: !!u.is_admin, channel: "session" }
       : null;
   }
-  registerClientCompatibility(app, pool, origin, async (authorization) => {
-    const principal = await actor(undefined, authorization);
-    return principal?.channel === "api-key" ? principal.id : null;
-  });
+  registerClientCompatibility(
+    app,
+    pool,
+    origin,
+    async (authorization) => {
+      const principal = await actor(undefined, authorization);
+      return principal?.channel === "api-key" ? principal.id : null;
+    },
+    provisioner?.compatResources,
+  );
   const generic = { error: "invalid_credentials" };
   app.get("/health/live", async () => ({ status: "ok" }));
   app.get("/health/ready", async (_req, reply) => {

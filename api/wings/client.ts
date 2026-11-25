@@ -107,7 +107,7 @@ export class WingsClient {
     );
     await response.body?.cancel();
   }
-  async state(id: string) {
+  async #serverDetails(id: string) {
     const response = await this.#send(
       this.#server(id),
       200,
@@ -129,10 +129,42 @@ export class WingsClient {
       case "running":
       case "stopping":
       case "offline":
-        return data.state;
+        return { data, state: data.state };
       default:
         throw new WingsUnavailable("payload");
     }
+  }
+  async state(id: string) {
+    return (await this.#serverDetails(id)).state;
+  }
+  async clientResources(id: string) {
+    const { data, state } = await this.#serverDetails(id);
+    const usage = data.utilization as Record<string, unknown> | null;
+    const network = usage?.network as Record<string, unknown> | null;
+    const nonnegative = (value: unknown, integer = true) => {
+      if (
+        typeof value !== "number" ||
+        !Number.isFinite(value) ||
+        value < 0 ||
+        (integer && !Number.isSafeInteger(value))
+      )
+        throw new WingsUnavailable("payload");
+      return value;
+    };
+    if (typeof data.is_suspended !== "boolean")
+      throw new WingsUnavailable("payload");
+    return {
+      current_state: state,
+      is_suspended: data.is_suspended,
+      resources: {
+        memory_bytes: nonnegative(usage?.memory_bytes),
+        cpu_absolute: nonnegative(usage?.cpu_absolute, false),
+        disk_bytes: nonnegative(usage?.disk_bytes),
+        network_rx_bytes: nonnegative(network?.rx_bytes),
+        network_tx_bytes: nonnegative(network?.tx_bytes),
+        uptime: nonnegative(usage?.uptime),
+      },
+    };
   }
   async transferTo(id: string, target: WingsNode, capability: string) {
     const destination = validateNode(target);
