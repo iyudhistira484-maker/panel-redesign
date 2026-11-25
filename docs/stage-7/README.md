@@ -23,3 +23,9 @@ Pemilik bisa membuka file `.txt` reguler hingga 16 KiB dari daftar file. Relay m
 Operasi memakai penguncian per-server selama request di satu proses Relay (termasuk dispatch power yang memakai penguncian sama), bukan compare-and-swap atomik di Wings. Penulis eksternal atau beberapa proses Relay masih bisa berlomba antara pembacaan dan penulisan, sehingga ini bukan editor umum atau jaminan konkurensi produksi.
 
 [CI 45549312654](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45549312654) lulus 14 job. Chromium menyimpan ke Wings, membuka kembali isi yang berubah, membuktikan versi lama mendapat 409 tanpa menimpa hasil, dan subuser mendapat 404. Membuat file, unggah, dan hapus belum tercakup.
+
+## Penutupan cakupan staging
+
+[CI 45551306303](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45551306303) lulus 14 job. Chromium menyimpan perubahan di A, lalu Wings A dijeda sebelum percobaan simpan berikutnya. Relay tidak dapat memverifikasi status sebelum penulisan dan mengembalikan 502; UI tidak mengklaim sukses, memblokir simpan ulang, dan mengirim tepat satu POST. Setelah Wings dilanjutkan, muat ulang dari UI membaca versi terakhir yang berhasil. Setelah tes, pembacaan dari kedua node membuktikan file A berubah sesuai hasil Chromium dan file B dengan nama serta jalur identik tetap utuh byte demi byte.
+
+Ini menutup cakupan daftar, pratinjau, unduhan, dan edit satu file fixture yang disepakati di staging. Kegagalan setelah write diterima tetapi sebelum read-back tidak diinjeksi secara langsung; editor umum, unggah, hapus, penulisan serentak lintas proses, dan cutover tidak tercakup.
