@@ -1,6 +1,6 @@
 # Runbook latihan pilot staging
 
-**Cakupan:** runner GitHub-hosted disposable, data buatan, satu server Wings. Jangan arahkan workflow ke VPS atau data produksi. Payload **128 MiB dalam 512 file** adalah tolok ukur awal, bukan bukti bahwa ukurannya mewakili kandidat pilot. Catat ukuran dan jumlah file dari kandidat sebelum keputusan pilot.
+**Cakupan:** runner GitHub-hosted disposable, data buatan, satu server Wings. Jangan arahkan workflow ke VPS atau data produksi. Payload **256 MiB dalam 2.048 file** adalah tolok ukur awal, bukan bukti bahwa ukurannya mewakili kandidat pilot. Catat ukuran dan jumlah file dari kandidat sebelum keputusan pilot.
 
 ## Persiapan operator
 
@@ -23,3 +23,7 @@
 ## Bukti mode kunci independen
 
 [CI 45644310891](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45644310891): kedua job lulus dengan `independent_keys=true`. Runner memperoleh kunci runtime dari secret terpisah, bukan dari artefak. Pemulihan 128 MiB / 512 file, termasuk unduhan dan pencabutan ulang, selesai dalam **23.209 ms**; checkpoint ke simulasi kehilangan **77 ms**. Keduanya memenuhi batas latihan, bukan SLA produksi. Berikutnya: pilih satu kandidat pilot, dokumentasikan ukuran dan jumlah file tanpa menyalin data produksi, lalu minta operator kedua mengulang runbook dengan fixture setara serta menyepakati batas end-to-end dan kondisi rollback.
+
+## Profil pilot kecil yang dipilih
+
+[CI 45645682262](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45645682262) lulus dengan kunci runtime independen dan **256 MiB / 2.048 file** (data sintetis pada workload shell Wings, bukan aplikasi tertentu). Restore termasuk unduh dan pencabutan ulang memakan **19.663 ms**; checkpoint hingga simulasi kehilangan **209 ms**. Keduanya lulus batas latihan. [Foundation 45645681348](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45645681348) lulus. Profil ini cukup untuk pilot staging kecil; tidak menyatakan dukungan untuk beban yang lebih besar atau karakteristik aplikasi seperti database aktif. Operator kedua masih perlu mengulang secara mandiri sebelum mempertimbangkan pilot produksi.
