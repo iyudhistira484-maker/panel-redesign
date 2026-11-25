@@ -1092,6 +1092,20 @@ async function main() {
         ).statusCode,
         403,
       );
+      assert.equal(
+        (
+          await relay.inject({
+            method: "POST",
+            url: "/api/remote/sftp/auth",
+            headers: {
+              authorization: nodeBearer,
+              origin: "https://foreign.example.test",
+            },
+            payload: validSftp,
+          })
+        ).statusCode,
+        403,
+      );
       const sftpWork = await mkdtemp("/tmp/relay-sftp-");
       try {
         const askpass = `${sftpWork}/askpass`;

@@ -174,6 +174,15 @@ export async function createApp({
     timeWindow: "1 minute",
     skipOnError: false,
   });
+  const sftpAuth =
+    provisioner &&
+    wingsTestNode &&
+    catalogNodeKey &&
+    process.env.RELAY_DISPOSABLE_WINGS_CI === "1" &&
+    process.env.RUNNER_ENVIRONMENT === "github-hosted" &&
+    process.env.RELAY_BOOTSTRAP_SCENARIO === "legacy-panel"
+      ? stagingSftpAuth(pool, wingsTestNode, catalogNodeKey, pepper)
+      : undefined;
   app.addHook("onRequest", async (req, reply) => {
     reply.header("Cache-Control", "no-store");
     if (
@@ -186,6 +195,13 @@ export async function createApp({
             req.routeOptions.url ===
               "/api/remote/servers/:uuid/transfer/:result")) &&
         req.method === "POST"
+      ) &&
+      !(
+        sftpAuth &&
+        req.method === "POST" &&
+        req.routeOptions.url === "/api/remote/sftp/auth" &&
+        req.headers.origin === undefined &&
+        req.headers.cookie === undefined
       ) &&
       !(
         req.method === "POST" &&
@@ -1479,13 +1495,7 @@ export async function createApp({
           undefined,
           receiver?.provider ?? provisioner?.provider,
           receiver?.onTransfer,
-          provisioner &&
-            catalogNodeKey &&
-            process.env.RELAY_DISPOSABLE_WINGS_CI === "1" &&
-            process.env.RUNNER_ENVIRONMENT === "github-hosted" &&
-            process.env.RELAY_BOOTSTRAP_SCENARIO === "legacy-panel"
-            ? stagingSftpAuth(pool, wingsTestNode, catalogNodeKey, pepper)
-            : undefined,
+          sftpAuth,
         ),
       { prefix: "/api/remote" },
     );
