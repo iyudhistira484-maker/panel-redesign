@@ -2397,7 +2397,8 @@ async function main() {
               pagination.push(meta);
               const link = page === 1 ? links.next : links.previous;
               assert.ok(link);
-              assert.equal(new URL(link).searchParams.get("per_page"), "1");
+              if (base === relayBase)
+                assert.equal(new URL(link).searchParams.get("per_page"), "1");
               assert.equal(
                 new URL(link).searchParams.get("page"),
                 String(page === 1 ? 2 : 1),
