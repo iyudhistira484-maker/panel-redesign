@@ -37,7 +37,7 @@ export async function applyLegacyFixture(
     throw new Error("Unsupported staging primary IP");
 
   const batch = report.servers
-    .map(({ uuid, ownerId, nodeId, eggId, nestId, port }) => {
+    .map(({ uuid, ownerId, nodeId, eggId, nestId, port, externalId }) => {
       if (
         typeof uuid !== "string" ||
         typeof ownerId !== "string" ||
@@ -57,6 +57,7 @@ export async function applyLegacyFixture(
         throw new Error("Loopback Wings only");
       return {
         uuid,
+        externalId,
         ownerId,
         nodeId,
         eggId,
@@ -133,6 +134,7 @@ export async function applyLegacyFixture(
     if (existing.length) {
       for (const {
         uuid,
+        externalId,
         ownerId,
         nodeId,
         eggId,
@@ -148,11 +150,12 @@ export async function applyLegacyFixture(
         JOIN nodes n ON n.id=s.node_id JOIN allocations a ON a.id=s.allocation_id AND a.node_id=s.node_id
         JOIN users u ON u.id=s.owner_id JOIN eggs e ON e.id=s.egg_id JOIN nests t ON t.id=e.nest_id
         JOIN wings_provisions p ON p.server_id=s.id
-        WHERE s.id=? AND s.name=? AND s.owner_id=? AND u.password_hash='disabled' AND u.is_admin=0
+        WHERE s.id=? AND s.external_id <=> ? AND s.name=? AND s.owner_id=? AND u.password_hash='disabled' AND u.is_admin=0
         AND s.node_id=? AND n.origin=? AND n.token_id=? AND s.egg_id=? AND e.nest_id=? AND e.version='PTDL_v2' AND e.document=?
         AND s.allocation_id=? AND a.ip='127.0.0.1' AND a.port=? AND p.phase='installed' FOR UPDATE`,
           [
             uuid,
+            externalId,
             name,
             ownerId,
             nodeId,
@@ -245,14 +248,22 @@ export async function applyLegacyFixture(
         "INSERT INTO eggs (id,nest_id,name,version,document) VALUES (?,?,?,'PTDL_v2',?)",
         [eggId, nestId, `Adoption ${eggId}`, document],
       );
-    for (const { uuid, ownerId, eggId, port, allocationId, nodeId } of batch) {
+    for (const {
+      uuid,
+      externalId,
+      ownerId,
+      eggId,
+      port,
+      allocationId,
+      nodeId,
+    } of batch) {
       await db.execute(
         "INSERT INTO allocations (id,node_id,ip,port) VALUES (?,?,'127.0.0.1',?)",
         [allocationId, nodeId, port],
       );
       await db.execute(
-        "INSERT INTO servers (id,name,node_id,owner_id,egg_id,allocation_id) VALUES (?,?,?,?,?,?)",
-        [uuid, name, nodeId, ownerId, eggId, allocationId],
+        "INSERT INTO servers (id,name,node_id,owner_id,egg_id,allocation_id,external_id) VALUES (?,?,?,?,?,?,?)",
+        [uuid, name, nodeId, ownerId, eggId, allocationId, externalId],
       );
       await db.execute(
         "INSERT INTO wings_provisions (server_id,phase) VALUES (?,'installed')",

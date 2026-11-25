@@ -219,9 +219,18 @@ async function main() {
         subusers: 1,
       });
       assert.deepEqual(report.servers, [
-        { uuid, ownerId: owner, nodeId, eggId: egg, nestId: nest, port: 25610 },
+        {
+          uuid,
+          externalId: "fixture:Legacy A",
+          ownerId: owner,
+          nodeId,
+          eggId: egg,
+          nestId: nest,
+          port: 25610,
+        },
         {
           uuid: second,
+          externalId: null,
           ownerId: owner,
           nodeId: secondNodeId,
           eggId: secondEgg,
@@ -286,6 +295,7 @@ async function main() {
         ...template,
         id: extraId,
         uuid: extra,
+        external_id: null,
         owner_id: otherOwner.id,
         allocation_id: extraAllocation,
       });
@@ -2358,6 +2368,7 @@ async function main() {
             object: string;
             attributes: {
               id: number;
+              external_id: string | null;
               uuid: string;
               identifier: string;
               name: string;
@@ -2422,6 +2433,7 @@ async function main() {
               assert.deepEqual(await detail.json(), entry);
               if (base === relayBase)
                 assert.deepEqual(Object.keys(entry.attributes).sort(), [
+                  "external_id",
                   "id",
                   "identifier",
                   "name",
@@ -2435,8 +2447,15 @@ async function main() {
               records: entries
                 .map(
                   ({
-                    attributes: { id: _, uuid, identifier, name, status },
-                  }) => ({ uuid, identifier, name, status }),
+                    attributes: {
+                      id: _,
+                      uuid,
+                      identifier,
+                      name,
+                      status,
+                      external_id,
+                    },
+                  }) => ({ uuid, identifier, name, status, external_id }),
                 )
                 .sort((a, b) => a.uuid.localeCompare(b.uuid)),
             };
@@ -2444,6 +2463,109 @@ async function main() {
           assert.deepEqual(
             await snapshot(relayBase, application.token),
             await snapshot(legacyBase, legacyApplication),
+          );
+          const externalId = "fixture:Legacy A";
+          const externalPath = `${applicationPath}/external/${encodeURIComponent(externalId)}`;
+          for (const [base, key] of [
+            [legacyBase, legacyApplication],
+            [relayBase, application.token],
+          ] as const) {
+            const found = await inventory(base, key, externalPath);
+            assert.equal(found.status, 200);
+            const entry = (await found.json()) as Entry;
+            assert.equal(entry.attributes.external_id, externalId);
+            assert.equal(entry.attributes.uuid, uuid);
+            assert.deepEqual(
+              await (
+                await inventory(
+                  base,
+                  key,
+                  `${applicationPath}/${entry.attributes.id}`,
+                )
+              ).json(),
+              entry,
+            );
+            assert.equal(
+              (
+                await inventory(
+                  base,
+                  key,
+                  `${applicationPath}/external/missing-external-id`,
+                )
+              ).status,
+              404,
+            );
+            const query = (part: string, page = 1) =>
+              `${applicationPath}?${new URLSearchParams({ "filter[uuid]": part, per_page: "1", page: String(page) })}`;
+            const filtered = async (part: string, page = 1) => {
+              const response = await inventory(base, key, query(part, page));
+              assert.equal(response.status, 200);
+              return (await response.json()) as {
+                data: Entry[];
+                meta: {
+                  pagination: {
+                    total: number;
+                    count: number;
+                    current_page: number;
+                    links: { next?: string; previous?: string };
+                  };
+                };
+              };
+            };
+            const one = await filtered(uuid.toUpperCase());
+            assert.equal(one.meta.pagination.total, 1);
+            assert.deepEqual(
+              one.data.map((row) => row.attributes.uuid),
+              [uuid],
+            );
+            const empty = await filtered(
+              "00000000-0000-4000-8000-000000000000",
+            );
+            assert.equal(empty.meta.pagination.total, 0);
+            assert.deepEqual(empty.data, []);
+            const first = await filtered("-"),
+              secondPage = await filtered("-", 2);
+            assert.equal(first.meta.pagination.total, 2);
+            assert.equal(secondPage.meta.pagination.total, 2);
+            assert.deepEqual(
+              [
+                first.data[0].attributes.uuid,
+                secondPage.data[0].attributes.uuid,
+              ].sort(),
+              [uuid, second].sort(),
+            );
+            if (base === relayBase) {
+              const next = first.meta.pagination.links.next;
+              assert.ok(next);
+              const link = new URL(next);
+              assert.equal(link.searchParams.get("filter[uuid]"), "-");
+              assert.equal(link.searchParams.get("per_page"), "1");
+              const followed = await inventory(
+                base,
+                key,
+                `${link.pathname}${link.search}`,
+              );
+              assert.equal(followed.status, 200);
+              assert.deepEqual(await followed.json(), secondPage);
+            }
+          }
+          assert.equal(
+            (await inventory(relayBase, denied.token, externalPath)).status,
+            403,
+          );
+          assert.equal(
+            (await inventory(relayBase, relayKey, externalPath)).status,
+            401,
+          );
+          assert.equal(
+            (
+              await inventory(
+                relayBase,
+                application.token,
+                `${applicationPath}?filter%5Buuid%5D=%25`,
+              )
+            ).status,
+            400,
           );
           assert.equal(
             (

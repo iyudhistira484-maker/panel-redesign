@@ -12,7 +12,7 @@ docker exec -e "MYSQL_PWD=$password" relay-adoption-db mariadb-dump -uroot --sin
   "${client[@]}" panel_snapshot_ci
 "${client[@]}" <<SQL
 CREATE USER 'relay_snapshot'@'%' IDENTIFIED BY '$reader_password';
-GRANT SELECT (id,uuid,owner_id,node_id,egg_id,nest_id,allocation_id,status,installed_at) ON panel_snapshot_ci.servers TO 'relay_snapshot'@'%';
+GRANT SELECT (id,uuid,external_id,owner_id,node_id,egg_id,nest_id,allocation_id,status,installed_at) ON panel_snapshot_ci.servers TO 'relay_snapshot'@'%';
 GRANT SELECT (id,uuid) ON panel_snapshot_ci.users TO 'relay_snapshot'@'%';
 GRANT SELECT (id,uuid) ON panel_snapshot_ci.nodes TO 'relay_snapshot'@'%';
 GRANT SELECT (id,uuid) ON panel_snapshot_ci.nests TO 'relay_snapshot'@'%';

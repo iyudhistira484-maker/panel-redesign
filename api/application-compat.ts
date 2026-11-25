@@ -1,3 +1,4 @@
+import { isExternalServerId } from "./external-server-id";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { Pool } from "mysql2/promise";
 import { rows, transaction, type Executor } from "./db";
@@ -5,16 +6,18 @@ import { rows, transaction, type Executor } from "./db";
 type Inventory = {
   id: number;
   uuid: string;
+  external_id: string | null;
   name: string;
   phase: string | null;
 };
-const projection = `SELECT s.application_id AS id,s.id AS uuid,s.name,p.phase FROM servers s LEFT JOIN wings_provisions p ON p.server_id=s.id`;
+const projection = `SELECT s.application_id AS id,s.id AS uuid,s.external_id,s.name,p.phase FROM servers s LEFT JOIN wings_provisions p ON p.server_id=s.id`;
 const visible = `(p.phase IS NULL OR p.phase <> 'deleted')`;
 const item = (row: Inventory) => ({
   object: "server",
   attributes: {
     id: row.id,
     uuid: row.uuid,
+    external_id: row.external_id,
     identifier: row.uuid.slice(0, 8),
     name: row.name,
     status: row.phase === "installed" ? null : (row.phase ?? "draft"),
@@ -79,32 +82,47 @@ export function registerApplicationInventory(
           return reply;
         const page = integer(req.query.page, 1, 999_999_999),
           size = integer(req.query.per_page, 50, 100);
+        const uuid = req.query["filter[uuid]"];
         if (
+          (uuid !== undefined &&
+            (typeof uuid !== "string" || !/^[a-f0-9-]{1,36}$/i.test(uuid))) ||
           !page ||
           !size ||
           Object.keys(req.query).some(
-            (key) => key !== "page" && key !== "per_page",
+            (key) =>
+              key !== "page" && key !== "per_page" && key !== "filter[uuid]",
           )
         )
           return deny(
             reply,
             400,
             "BadRequestHttpException",
-            "Only page and per_page are supported.",
+            "Invalid pagination or UUID filter.",
           );
+        const where =
+          uuid === undefined ? visible : `${visible} AND LOWER(s.id) LIKE ?`;
+        const params =
+          uuid === undefined ? [] : [`%${String(uuid).toLowerCase()}%`];
         const [count] = await rows<{ total: number }>(
           db,
-          `SELECT COUNT(*) AS total FROM servers s LEFT JOIN wings_provisions p ON p.server_id=s.id WHERE ${visible}`,
+          `SELECT COUNT(*) AS total FROM servers s LEFT JOIN wings_provisions p ON p.server_id=s.id WHERE ${where}`,
+          params,
         );
         const total = Number(count.total),
           pages = Math.max(1, Math.ceil(total / size));
         const records = await rows<Inventory>(
           db,
-          `${projection} WHERE ${visible} ORDER BY s.application_id LIMIT ? OFFSET ?`,
-          [size, (page - 1) * size],
+          `${projection} WHERE ${where} ORDER BY s.application_id LIMIT ? OFFSET ?`,
+          [...params, size, (page - 1) * size],
         );
-        const link = (number: number) =>
-          `${origin}${path}?per_page=${size}&page=${number}`;
+        const link = (number: number) => {
+          const query = new URLSearchParams({
+            per_page: String(size),
+            page: String(number),
+          });
+          if (typeof uuid === "string") query.set("filter[uuid]", uuid);
+          return `${origin}${path}?${query}`;
+        };
         const links: Record<string, string> = {};
         if (page > 1) links.previous = link(page - 1);
         if (page < pages) links.next = link(page + 1);
@@ -123,6 +141,32 @@ export function registerApplicationInventory(
           },
         };
       }),
+  );
+  app.get<{
+    Params: { externalId: string };
+    Querystring: Record<string, unknown>;
+  }>(`${path}/external/:externalId`, { config }, async (req, reply) =>
+    transaction(pool, async (db) => {
+      if (!(await authorize(db, req.headers.authorization ?? "", reply)))
+        return reply;
+      if (Object.keys(req.query).length)
+        return deny(
+          reply,
+          400,
+          "BadRequestHttpException",
+          "Relationships are not supported.",
+        );
+      const [record] = isExternalServerId(req.params.externalId)
+        ? await rows<Inventory>(
+            db,
+            `${projection} WHERE ${visible} AND s.external_id=?`,
+            [req.params.externalId],
+          )
+        : [];
+      return record
+        ? item(record)
+        : deny(reply, 404, "NotFoundHttpException", "Server not found.");
+    }),
   );
   app.get<{ Params: { id: string }; Querystring: Record<string, unknown> }>(
     `${path}/:id`,

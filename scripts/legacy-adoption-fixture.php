@@ -90,7 +90,7 @@ SCRIPT,
     }
     $allocation = DB::table('allocations')->insertGetId(['node_id' => $node, 'ip' => '127.0.0.1', 'port' => 25610]);
     $server = DB::table('servers')->insertGetId([
-        'created_at' => now(), 'updated_at' => now(),
+        'created_at' => now(), 'updated_at' => now(), 'external_id' => 'fixture:Legacy A',
         'uuid' => $uuid, 'uuidShort' => substr($uuid, 0, 8), 'node_id' => $node,
         'name' => 'Existing staging workload', 'description' => 'Disposable', 'status' => 'installing',
         'owner_id' => $owner, 'memory' => 128, 'swap' => 0, 'disk' => 64, 'io' => 500, 'cpu' => 50,
@@ -115,6 +115,7 @@ SCRIPT,
     $other = (array) DB::table('servers')->where('id', $server)->first();
     unset($other['id']);
     $other['uuid'] = getenv('RELAY_ADOPTION_SECOND_UUID');
+    $other['external_id'] = null;
     $other['uuidShort'] = substr($other['uuid'], 0, 8);
     $other['node_id'] = $secondNode;
     $other['egg_id'] = $otherEgg;

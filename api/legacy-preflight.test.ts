@@ -41,6 +41,7 @@ test("legacy preflight is deterministic and preserves mapped UUIDs without chang
   assert.deepEqual(report.servers, [
     {
       uuid: manifest.servers[0].uuid,
+      externalId: null,
       ownerId: manifest.users[0].uuid,
       nodeId: manifest.nodes[0].uuid,
       eggId: manifest.eggs[0].uuid,

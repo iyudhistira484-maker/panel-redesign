@@ -1,3 +1,4 @@
+import { isExternalServerId } from "../external-server-id";
 import { isIP } from "node:net";
 import { serverPermissions } from "../policy";
 import { UUID_V4 } from "../wings/client";
@@ -21,6 +22,7 @@ export const legacyColumns: Record<Table, string[]> = {
   servers: [
     "id",
     "uuid",
+    "external_id",
     "owner_id",
     "node_id",
     "egg_id",
@@ -51,8 +53,16 @@ export function legacyPreflight(input: unknown) {
     for (const item of values) {
       if (
         !record(item) ||
-        Object.keys(item).length !== legacyColumns[table].length ||
-        !legacyColumns[table].every((key) => Object.hasOwn(item, key)) ||
+        Object.keys(item).length !==
+          legacyColumns[table].length -
+            (table === "servers" && !Object.hasOwn(item, "external_id")
+              ? 1
+              : 0) ||
+        !legacyColumns[table].every(
+          (key) =>
+            (table === "servers" && key === "external_id") ||
+            Object.hasOwn(item, key),
+        ) ||
         !integer(item.id) ||
         byId.has(item.id)
       )
@@ -109,6 +119,7 @@ export function legacyPreflight(input: unknown) {
       });
   }
   const servers = [];
+  const externalIds = new Set<string>();
   const primaryAllocations: { serverId: string; ip: string }[] = [];
   for (const server of map.get("servers")?.values() ?? []) {
     const owner = get("users", server.owner_id),
@@ -131,12 +142,19 @@ export function legacyPreflight(input: unknown) {
       !server.installed_at
     )
       throw new Error("Legacy server is not installed and normal");
+    const externalId = server.external_id ?? null;
+    if (externalId !== null) {
+      if (!isExternalServerId(externalId) || externalIds.has(externalId))
+        throw new Error("Invalid or duplicate legacy external server ID");
+      externalIds.add(externalId);
+    }
     primaryAllocations.push({
       serverId: String(server.uuid),
       ip: String(allocation.ip),
     });
     servers.push({
       uuid: server.uuid,
+      externalId,
       ownerId: owner.uuid,
       nodeId: node.uuid,
       eggId: egg.uuid,
