@@ -65,6 +65,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
         async () => {
           if (await label.isVisible()) return true;
           await expect(refresh).toBeEnabled();
+          if (await label.isVisible()) return true;
           const response = page.waitForResponse((r) => r.url() === runtime);
           await refresh.click();
           await response;

@@ -55,7 +55,9 @@ export function ServerPower({ id, locale }: { id: string; locale: Locale }) {
             ? "verified"
             : desired
               ? "pending"
-              : null,
+              : result === state && message === "verified"
+                ? "verified"
+                : null,
       );
       if (desired === result) setDesired(null);
     } catch {

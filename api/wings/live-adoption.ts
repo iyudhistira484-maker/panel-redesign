@@ -779,7 +779,11 @@ async function main() {
           try {
             const run = await docker(
               "./node_modules/.bin/playwright",
-              ["test", "tests/wings-browser-live.spec.ts"],
+              [
+                "test",
+                "tests/wings-browser-live.spec.ts",
+                "--reporter=line,github",
+              ],
               {
                 env: {
                   ...process.env,
@@ -790,6 +794,14 @@ async function main() {
               },
             );
             console.log(run.stdout);
+          } catch (error) {
+            // Playwright reporter annotations are captured by execFile; forward
+            // only sanitized output from this credential-isolated fixture.
+            const failure = error as { stdout?: string; stderr?: string };
+            for (const output of [failure.stdout, failure.stderr])
+              if (output)
+                console.log(output.replaceAll(password, "[redacted]"));
+            throw new Error("Disposable Wings browser contract failed");
           } finally {
             await pool.execute("DELETE FROM server_grants WHERE server_id=?", [
               uuid,
