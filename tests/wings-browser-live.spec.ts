@@ -41,10 +41,8 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     assert.ok(fixture);
     const state = page.waitForResponse((r) => r.url() === runtime);
     await page
-      .getByRole("listitem")
-      .filter({ hasText: fixture.name })
+      .locator(`[data-server-id="${id}"]`)
       .getByRole("button", { name: "Detail server" })
-      .first()
       .click();
     expect((await state).status()).toBe(200);
     await expect(

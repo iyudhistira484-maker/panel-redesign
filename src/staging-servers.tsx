@@ -91,7 +91,7 @@ export function StagingServers({ locale }: { locale: Locale }) {
           aria-label={en ? "Accessible servers" : "Server yang dapat diakses"}
         >
           {items.map((item) => (
-            <li key={item.id}>
+            <li key={item.id} data-server-id={item.id}>
               {item.name}{" "}
               <Button
                 aria-expanded={opened === item.id}
