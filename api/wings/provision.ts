@@ -270,7 +270,7 @@ export function createProvisioner(
   }
   return {
     provider,
-    async files(id: string, actor: Actor, path: string) {
+    async files(id: string, actor: Actor, path: string, preview?: string) {
       const server = await load(pool, id);
       if (!server || actor.channel !== "session" || server.ownerId !== actor.id)
         throw new ProvisionError(404, "server_not_found");
@@ -286,7 +286,14 @@ export function createProvisioner(
       )
         throw new ProvisionError(400, "invalid_directory");
       try {
-        return await client.fixtureDirectory(id, segments);
+        if (preview === undefined)
+          return await client.fixtureDirectory(id, segments);
+        if (!fixturePathSegment(preview) || !preview.endsWith(".txt"))
+          throw new ProvisionError(400, "invalid_text_file");
+        const text = await client.fixtureText(id, segments, preview);
+        if (text === null)
+          throw new ProvisionError(422, "text_preview_unavailable");
+        return { name: preview, text };
       } catch (error) {
         if (error instanceof WingsUnavailable)
           throw new ProvisionError(

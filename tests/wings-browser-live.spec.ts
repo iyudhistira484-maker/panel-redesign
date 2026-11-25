@@ -107,6 +107,15 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   const fileApi = `${origin}/api/v1/servers/${id}/files`;
   await open("collaborator@example.test");
   expect((await page.context().request.get(fileApi)).status()).toBe(404);
+  expect(
+    (
+      await page
+        .context()
+        .request.get(fileApi, {
+          params: { directory: "/fixture-docs", preview: "example.txt" },
+        })
+    ).status(),
+  ).toBe(404);
   await readActivity.click();
   await expect(activity).toContainText("catalog.fixture_checked");
   await expect(activity.locator("time").first()).toBeVisible();
@@ -138,6 +147,30 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   ).toBe(404);
   await files.getByRole("button", { name: "fixture-docs" }).click();
   await expect(files).toContainText("example.txt");
+  await files.getByRole("button", { name: "example.txt", exact: true }).click();
+  const preview = page.getByRole("region", { name: "Pratinjau teks" });
+  await expect(preview.locator("pre")).toHaveText(
+    "<strong>fixture preview</strong>",
+  );
+  await expect(preview.locator("strong")).toHaveCount(0);
+  await files.getByRole("button", { name: "binary.txt", exact: true }).click();
+  await expect(page.getByText("Pratinjau teks tidak tersedia.")).toBeVisible();
+  await expect(preview).toHaveCount(0);
+  for (const [name, status] of [
+    ["large.txt", 422],
+    ["link.txt", 404],
+    ["../example.txt", 400],
+  ] as const) {
+    expect(
+      (
+        await page
+          .context()
+          .request.get(fileApi, {
+            params: { directory: "/fixture-docs", preview: name },
+          })
+      ).status(),
+    ).toBe(status);
+  }
   await page.getByRole("button", { name: "Folder induk" }).click();
   await expect(files).toContainText("relay-start.sh");
   expect(

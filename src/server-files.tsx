@@ -9,7 +9,45 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
   const [items, setItems] = useState<Entry[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
+  const [preview, setPreview] = useState<{ name: string; text: string } | null>(
+    null,
+  );
+  const [previewError, setPreviewError] = useState(false);
+  async function openText(name: string) {
+    setPreview(null);
+    setPreviewError(false);
+    setBusy(true);
+    try {
+      const query = new URLSearchParams({
+        directory: `/${path.join("/")}`,
+        preview: name,
+      });
+      const response = await fetch(
+        `/api/v1/servers/${encodeURIComponent(id)}/files?${query}`,
+        {
+          cache: "no-store",
+          credentials: "same-origin",
+          signal: AbortSignal.timeout(30000),
+        },
+      );
+      if (!response.ok) throw new Error("Preview unavailable");
+      const data = await response.json();
+      if (
+        data?.name !== name ||
+        typeof data.text !== "string" ||
+        data.text.length > 16384
+      )
+        throw new Error("Invalid preview");
+      setPreview(data);
+    } catch {
+      setPreviewError(true);
+    } finally {
+      setBusy(false);
+    }
+  }
   async function load(parts: string[]) {
+    setPreview(null);
+    setPreviewError(false);
     setBusy(true);
     setItems(null);
     setError(false);
@@ -79,7 +117,19 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
           {items.map((item) => (
             <li key={item.name}>
               {item.directory && path.length < 4 ? (
-                <Button onClick={() => void load([...path, item.name])}>
+                <Button
+                  disabled={busy}
+                  onClick={() => void load([...path, item.name])}
+                >
+                  {item.name}
+                </Button>
+              ) : !item.directory &&
+                item.name.endsWith(".txt") &&
+                item.size <= 16384 ? (
+                <Button
+                  disabled={busy}
+                  onClick={() => void openText(item.name)}
+                >
                   {item.name}
                 </Button>
               ) : (
@@ -91,6 +141,17 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
             </li>
           ))}
         </ul>
+      )}
+      {previewError && (
+        <p role="alert">
+          {en ? "Text preview unavailable." : "Pratinjau teks tidak tersedia."}
+        </p>
+      )}
+      {preview && (
+        <section aria-label={en ? "Text preview" : "Pratinjau teks"}>
+          <h4>{preview.name}</h4>
+          <pre>{preview.text}</pre>
+        </section>
       )}
     </section>
   );

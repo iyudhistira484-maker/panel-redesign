@@ -46,7 +46,10 @@ WORKLOAD
 chmod 644 /mnt/server/relay-start.sh
 mkdir -p /mnt/server/fixture-docs
 ln -sfn fixture-docs /mnt/server/fixture-link
-printf '%s\n' fixture > /mnt/server/fixture-docs/example.txt
+printf '%s\n' '<strong>fixture preview</strong>' > /mnt/server/fixture-docs/example.txt
+printf '\000fixture' > /mnt/server/fixture-docs/binary.txt
+dd if=/dev/zero of=/mnt/server/fixture-docs/large.txt bs=1024 count=17 2>/dev/null
+ln -sfn example.txt /mnt/server/fixture-docs/link.txt
 SCRIPT,
     ]);
     $owner = DB::table('users')->insertGetId([

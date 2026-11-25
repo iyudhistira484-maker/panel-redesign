@@ -218,6 +218,35 @@ export class WingsClient {
     }
     return items;
   }
+  async fixtureText(id: string, directories: string[], name: string) {
+    if (!fixturePathSegment(name) || !name.endsWith(".txt"))
+      throw new WingsUnavailable("payload");
+    const entry = (await this.fixtureDirectory(id, directories)).find(
+      (item) => item.name === name && !item.directory,
+    );
+    if (!entry) throw new WingsUnavailable("not_found");
+    if (entry.size > 16384) return null;
+    const path = `/${[...directories, name].join("/")}`;
+    const response = await this.#send(
+      `${this.#server(id)}/files/contents?file=${encodeURIComponent(path)}`,
+      200,
+    );
+    const data = await this.#read(response, 16384);
+    try {
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(data);
+      return [...text].every(
+        (char) =>
+          char === "\t" ||
+          char === "\n" ||
+          char === "\r" ||
+          (char.charCodeAt(0) >= 32 && char.charCodeAt(0) !== 127),
+      )
+        ? text
+        : null;
+    } catch {
+      return null;
+    }
+  }
   /** Bounded digest of all visible directories and regular-file bytes; fail closed on other entries. */
   async transferTreeDigest(id: string) {
     const root = this.#server(id);

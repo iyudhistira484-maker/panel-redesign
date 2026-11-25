@@ -1067,7 +1067,10 @@ export async function createApp({
       },
     );
   if (provisioner)
-    app.get<{ Params: { id: string }; Querystring: { directory?: string } }>(
+    app.get<{
+      Params: { id: string };
+      Querystring: { directory?: string; preview?: string };
+    }>(
       "/api/v1/servers/:id/files",
       { config: { rateLimit: { max: 15, timeWindow: "1 minute" } } },
       async (req, reply) => {
@@ -1084,7 +1087,15 @@ export async function createApp({
           const path = req.query.directory ?? "/";
           if (typeof path !== "string")
             return reply.code(400).send({ error: "invalid_directory" });
-          return await provisioner.files(req.params.id, principal, path);
+          const preview = req.query.preview;
+          if (preview !== undefined && typeof preview !== "string")
+            return reply.code(400).send({ error: "invalid_text_file" });
+          return await provisioner.files(
+            req.params.id,
+            principal,
+            path,
+            preview,
+          );
         } catch (error) {
           if (error instanceof ProvisionError)
             return reply.code(error.status).send({ error: error.code });
