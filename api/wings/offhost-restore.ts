@@ -191,6 +191,6 @@ main().catch((error: unknown) => {
           ?.split("\n")
           .find((line) => line.includes("offhost-restore.ts:"))
       : undefined;
-  console.error("Relay/Wings isolated restore assertions failed", frame ?? "");
+  console.error("::error::Relay/Wings isolated restore assertions failed", frame ?? "");
   process.exitCode = 1;
 });

@@ -85,8 +85,12 @@ if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == gitea-qualification ]]; then
 else
   docker network create --internal "$network" >/dev/null
 fi
-cat <<'DOCKERFILE' | docker build --tag relay-wings-contract-workload:ci -
+http_fixture=0
+if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == offhost-restore ]]; then http_fixture=1; fi
+cat <<'DOCKERFILE' | docker build --build-arg HTTP_FIXTURE="$http_fixture" --tag relay-wings-contract-workload:ci -
 FROM alpine:3.22.2
+ARG HTTP_FIXTURE=0
+RUN if [ "$HTTP_FIXTURE" = 1 ]; then apk add --no-cache busybox-extras && busybox-extras --list | grep -x httpd; fi
 ENTRYPOINT ["/bin/sh", "/home/container/relay-start.sh"]
 DOCKERFILE
 if [[ "$harness" == api/wings/live-contract.ts ]]; then

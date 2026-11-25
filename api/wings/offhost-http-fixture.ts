@@ -4,7 +4,7 @@ export const startup = `#!/bin/sh
 set -eu
 cd /home/container
 printf '%s\\n' RELAY_CONTRACT_READY
-exec busybox httpd -f -p "\${SERVER_PORT:?}" -h /home/container/relay-pilot-http
+exec busybox-extras httpd -f -p "\${SERVER_PORT:?}" -h /home/container/relay-pilot-http
 `;
 export const recordCgi = `#!/bin/sh
 set -eu
