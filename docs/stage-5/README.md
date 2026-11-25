@@ -41,3 +41,9 @@ Kode penerima Wings v1.13.5 menghitung SHA-256 lewat `TeeReader` selama ekstraks
 Cuplikan kini juga mengenali pesan konstan `RELAY_DIAGNOSTIC runtime=ready config=loaded` dari fixture adopsi. Filter kecocokan persis menolak varian yang membawa suffix, termasuk token sintetis uji, sebelum respons mencapai browser. Batas tetap 20 baris; tidak ada log mentah atau klaim penyamaran rahasia umum. [CI 45537872126](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45537872126) lulus seluruh 14 job, dengan browser/Wings membuktikan tampilan diagnostik, pemeriksaan payload dan DOM untuk token sintetis, penolakan subuser, serta pembersihan hasil saat daemon tidak merespons.
 
 [Draf laporan upstream checksum](../../patches/wings/UPSTREAM.md) siap ditinjau; belum dikirim.
+
+## Riwayat aktivitas server
+
+**Detail server → Baca aktivitas server** menampilkan hingga 100 event audit terbaru dari backend, dengan nama tampilan pelaku jika tersedia dan waktu kejadian. Izin baca mengikuti endpoint aktivitas yang sudah ada: pemilik, admin, atau subuser dengan `activity.read`. Permintaan Start/Stop dan hasil tidak diketahui adalah event berbeda; riwayat tidak menganggap HTTP 202 sebagai keberhasilan.
+
+[CI 45538583110](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45538583110) lulus seluruh 14 job. Chromium dengan Wings sungguhan menampilkan riwayat untuk pemilik dan subuser `activity.read`, termasuk hasil Start yang tidak diketahui saat daemon dijeda. Pengujian HTTPS dengan sesi asli juga membuktikan akun tanpa izin mendapat 404.
