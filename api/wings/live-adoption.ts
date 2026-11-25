@@ -694,6 +694,8 @@ async function main() {
         }>;
         getServerDetails(id: string): Promise<{ uuid: string; name: string }>;
         getServerPage(page: number): Promise<unknown[]>;
+        startServer(id: string): Promise<boolean>;
+        stopServer(id: string): Promise<boolean>;
         getServerUsages(id: string): Promise<{
           current_state: string;
           is_suspended: boolean;
@@ -703,13 +705,20 @@ async function main() {
       const { NodeactylClient } = createRequire(import.meta.url)(
         "nodeactyl",
       ) as { NodeactylClient: new (url: string, key: string) => Integration };
-      async function issueKey(session: typeof ownerSession) {
+      async function issueKey(
+        session: typeof ownerSession,
+        clientPower = false,
+      ) {
         const key = `rly_${randomBytes(32).toString("base64url")}`;
         const result = await relay.inject({
           method: "POST",
           url: "/api/v1/account/keys",
           headers: { ...headers, ...session },
-          payload: { label: "Disposable client comparison", key },
+          payload: {
+            label: "Disposable client comparison",
+            key,
+            ...(clientPower ? { clientPower: true } : {}),
+          },
         });
         assert.equal(result.statusCode, 201);
         return `${key}.${result.json<{ suffix: string }>().suffix}`;
@@ -1217,6 +1226,112 @@ async function main() {
               "DELETE FROM server_grants WHERE server_id=? AND user_id=(SELECT id FROM users WHERE email='collaborator@example.test')",
               [id],
             );
+        }
+        const [ownerPowerKey, sharedPowerKey] = await Promise.all([
+          issueKey(ownerSession, true),
+          issueKey(collaborator, true),
+        ]);
+        const clientPath = `/api/client/servers/${identifier}/power`;
+        const requestPower = (key: string, signal: string) =>
+          relay.inject({
+            method: "POST",
+            url: clientPath,
+            headers: auth(key),
+            payload: { signal },
+          });
+        assert.equal((await requestPower(relayKey, "start")).statusCode, 403);
+        assert.equal(
+          (await requestPower(ownerPowerKey, "restart")).statusCode,
+          400,
+        );
+        assert.equal(
+          (
+            await relay.inject({
+              method: "POST",
+              url: clientPath,
+              headers: { ...headers, ...ownerSession },
+              payload: { signal: "start" },
+            })
+          ).statusCode,
+          401,
+        );
+        async function sdkPower(
+          base: string,
+          key: string,
+          signal: "start" | "stop",
+        ) {
+          const sdk = new NodeactylClient(base, key);
+          try {
+            return signal === "start"
+              ? await sdk.startServer(identifier)
+              : await sdk.stopServer(identifier);
+          } catch {
+            throw new Error(
+              `Nodeactyl ${signal} failed at loopback port ${new URL(base).port}`,
+            );
+          }
+        }
+        const observed = async (expected: string) =>
+          until(
+            `Client API power ${expected}`,
+            async () => (await clientFor(uuid).state(uuid)) === expected,
+          );
+        for (const [base, key] of [
+          [legacyBase, legacyKey],
+          [relayBase, ownerPowerKey],
+        ] as const) {
+          assert.equal(await sdkPower(base, key, "start"), true);
+          await observed("running");
+          assert.equal(await sdkPower(base, key, "stop"), true);
+          await observed("offline");
+        }
+        try {
+          assert.equal((await mutate(uuid, "grant")).statusCode, 204);
+          assert.equal(
+            (await requestPower(sharedPowerKey, "start")).statusCode,
+            404,
+          );
+          assert.equal(
+            (await mutate(uuid, "grant", "control.start")).statusCode,
+            204,
+          );
+          assert.equal(
+            (await requestPower(sharedKey, "start")).statusCode,
+            403,
+          );
+          assert.equal(
+            (await requestPower(sharedPowerKey, "start")).statusCode,
+            204,
+          );
+          await observed("running");
+          assert.equal(
+            (await requestPower(sharedPowerKey, "stop")).statusCode,
+            404,
+          );
+          assert.equal(
+            (await mutate(uuid, "revoke", "control.start")).statusCode,
+            204,
+          );
+          assert.equal(
+            (await requestPower(sharedPowerKey, "start")).statusCode,
+            404,
+          );
+          assert.equal(
+            (
+              await relay.inject({
+                url: resourcesPath,
+                headers: auth(sharedPowerKey),
+              })
+            ).statusCode,
+            200,
+          );
+          assert.equal(await sdkPower(relayBase, ownerPowerKey, "stop"), true);
+          await observed("offline");
+        } finally {
+          await pool.execute(
+            "DELETE FROM server_grants WHERE server_id=? AND user_id=(SELECT id FROM users WHERE email='collaborator@example.test')",
+            [uuid],
+          );
         }
         if (browser) {
           await pool.execute(

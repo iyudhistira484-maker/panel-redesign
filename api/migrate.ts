@@ -34,6 +34,7 @@ export async function migrate(pool: Pool, direction: "up" | "down") {
         { version: 9, file: "009_server_grants" },
         { version: 10, file: "010_mumble_max_users" },
         { version: 11, file: "011_secondary_allocations" },
+        { version: 12, file: "012_client_power" },
       ];
       if (direction === "down") migrations.reverse();
       for (const { version, file } of migrations) {

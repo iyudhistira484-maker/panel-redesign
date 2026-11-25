@@ -250,14 +250,19 @@ export async function createApp({
       );
       if (!match) return null;
       const record = (
-        await rows<{ id: string }>(
+        await rows<{ id: string; keyId: string }>(
           pool,
-          "SELECT user_id AS id FROM api_keys WHERE digest=? AND expires_at>UTC_TIMESTAMP(3)",
+          "SELECT user_id AS id,id AS keyId FROM api_keys WHERE digest=? AND expires_at>UTC_TIMESTAMP(3)",
           [crypt.digest("api-key", match[1])],
         )
       )[0];
       return record
-        ? { id: record.id, admin: false, channel: "api-key" }
+        ? {
+            id: record.id,
+            admin: false,
+            channel: "api-key",
+            keyId: record.keyId,
+          }
         : null;
     }
     const u = await session(raw);
@@ -271,9 +276,13 @@ export async function createApp({
     origin,
     async (authorization) => {
       const principal = await actor(undefined, authorization);
-      return principal?.channel === "api-key" ? principal.id : null;
+      return principal?.channel === "api-key" ? principal : null;
     },
     provisioner?.compatResources,
+    provisioner
+      ? (id, action, principal) =>
+          provisioner.power(id, action, principal, "compat")
+      : undefined,
   );
   const generic = { error: "invalid_credentials" };
   app.get("/health/live", async () => ({ status: "ok" }));
@@ -739,15 +748,19 @@ export async function createApp({
       [u.id],
     );
   });
-  app.post<{ Body: { label: string; key: string } }>(
+  app.post<{ Body: { label: string; key: string; clientPower?: boolean } }>(
     "/api/v1/account/keys",
     {
       config: authLimit,
       schema: {
-        body: object({
-          label: text(1, 80),
-          key: text(47, 47, "^rly_[A-Za-z0-9_-]{43}$"),
-        }),
+        body: object(
+          {
+            label: text(1, 80),
+            key: text(47, 47, "^rly_[A-Za-z0-9_-]{43}$"),
+            clientPower: { type: "boolean" },
+          },
+          ["label", "key"],
+        ),
       },
     },
     async (req, reply) => {
@@ -765,8 +778,8 @@ export async function createApp({
         const digest = crypt.digest("api-key", `${req.body.key}.${suffix}`);
         try {
           await db.execute(
-            "INSERT INTO api_keys (id,user_id,digest,label,expires_at) VALUES (?,?,?,?,TIMESTAMPADD(DAY,90,UTC_TIMESTAMP(3)))",
-            [id, u.id, digest, req.body.label],
+            "INSERT INTO api_keys (id,user_id,digest,label,expires_at,client_power) VALUES (?,?,?,?,TIMESTAMPADD(DAY,90,UTC_TIMESTAMP(3)),?)",
+            [id, u.id, digest, req.body.label, req.body.clientPower === true],
           );
         } catch (e) {
           if ((e as { code?: string }).code === "ER_DUP_ENTRY") return false;

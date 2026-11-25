@@ -45,6 +45,7 @@ export type Actor = {
   id: string;
   admin: boolean;
   channel: "session" | "api-key";
+  keyId?: string;
 };
 export function canAccount(actor: Actor | null, owner: string, write = false) {
   return actor?.id === owner && (!write || actor.channel === "session");

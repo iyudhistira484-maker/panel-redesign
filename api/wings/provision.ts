@@ -470,7 +470,7 @@ export function createProvisioner(
       id: string,
       action: "start" | "stop",
       actor: Actor,
-      scope: "admin" | "user" = "admin",
+      scope: "admin" | "user" | "compat" = "admin",
     ) {
       return exclusive(id, async () => {
         await transaction(pool, async (db) => {
@@ -479,7 +479,7 @@ export function createProvisioner(
               ? await authorized(db, id, actor, true)
               : await load(db, id, true);
           if (!server) throw new ProvisionError(404, "server_not_found");
-          if (scope === "user") {
+          if (scope !== "admin") {
             const [role] = await rows<{ is_admin: number }>(
               db,
               "SELECT is_admin FROM users WHERE id=? FOR UPDATE",
@@ -491,7 +491,20 @@ export function createProvisioner(
               [`control.${action}`, id, actor.id],
             );
             const permission = `control.${action}`;
-            if (
+            if (scope === "compat") {
+              const [key] = await rows(
+                db,
+                "SELECT id FROM api_keys WHERE id=? AND user_id=? AND client_power=TRUE AND expires_at>UTC_TIMESTAMP(3) FOR UPDATE",
+                [actor.keyId ?? "", actor.id],
+              );
+              if (actor.channel !== "api-key" || !key)
+                throw new ProvisionError(403, "power_scope_required");
+              if (
+                !role ||
+                (server.ownerId !== actor.id && grant?.allowed !== 1)
+              )
+                throw new ProvisionError(404, "server_not_found");
+            } else if (
               !role ||
               !canServer(
                 { ...actor, admin: !!role.is_admin },

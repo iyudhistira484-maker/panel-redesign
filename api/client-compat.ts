@@ -1,3 +1,4 @@
+import type { Actor } from "./policy";
 import type { FastifyInstance } from "fastify";
 import { rows, transaction, type Executor } from "./db";
 import type { Pool } from "mysql2/promise";
@@ -50,8 +51,13 @@ export function registerClientCompatibility(
   app: FastifyInstance,
   pool: Pool,
   origin: string,
-  authenticate: (authorization: string) => Promise<string | null>,
+  authenticate: (authorization: string) => Promise<Actor | null>,
   resources?: (id: string) => Promise<unknown>,
+  power?: (
+    id: string,
+    action: "start" | "stop",
+    actor: Actor,
+  ) => Promise<unknown>,
 ) {
   for (const path of ["/api/client", "/api/client/"])
     app.get<{ Querystring: Record<string, unknown> }>(
@@ -59,7 +65,7 @@ export function registerClientCompatibility(
       { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
       async (req, reply) => {
         reply.header("cache-control", "no-store");
-        const user = await authenticate(req.headers.authorization ?? "");
+        const user = (await authenticate(req.headers.authorization ?? ""))?.id;
         if (!user)
           return reply
             .code(401)
@@ -164,7 +170,7 @@ export function registerClientCompatibility(
     { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
     async (req, reply) => {
       reply.header("cache-control", "no-store");
-      const user = await authenticate(req.headers.authorization ?? "");
+      const user = (await authenticate(req.headers.authorization ?? ""))?.id;
       if (!user)
         return reply
           .code(401)
@@ -193,12 +199,82 @@ export function registerClientCompatibility(
       }
     },
   );
+  app.post<{
+    Params: { identifier: string };
+    Body: { signal: "start" | "stop" };
+  }>(
+    "/api/client/servers/:identifier/power",
+    {
+      bodyLimit: 2048,
+      config: { rateLimit: { max: 15, timeWindow: "1 minute" } },
+    },
+    async (req, reply) => {
+      reply.header("cache-control", "no-store");
+      const principal = await authenticate(req.headers.authorization ?? "");
+      if (!principal)
+        return reply
+          .code(401)
+          .send(errors("AuthenticationException", "Unauthenticated."));
+      const { signal } = req.body ?? {};
+      if (
+        (signal !== "start" && signal !== "stop") ||
+        Object.keys(req.body ?? {}).length !== 1
+      )
+        return reply
+          .code(400)
+          .send(
+            errors(
+              "BadRequestHttpException",
+              "Only start and stop signals are supported.",
+            ),
+          );
+      const server = await resolve(req.params.identifier, principal.id);
+      if (!server)
+        return reply
+          .code(404)
+          .send(errors("NotFoundHttpException", "Server not found."));
+      if (!power)
+        return reply.code(503).send({
+          errors: [
+            {
+              code: "ServiceUnavailableHttpException",
+              status: "503",
+              detail: "Server power unavailable.",
+            },
+          ],
+        });
+      try {
+        await power(server.id, signal, principal);
+        return reply.code(204).send();
+      } catch (error) {
+        if (error instanceof ProvisionError)
+          return reply.code(error.status).send({
+            errors: [
+              {
+                code:
+                  error.status === 404
+                    ? "NotFoundHttpException"
+                    : error.status === 403
+                      ? "AuthorizationException"
+                      : "PowerRequestException",
+                status: String(error.status),
+                detail:
+                  error.status === 502
+                    ? "Power outcome unknown."
+                    : "Power request not permitted or unavailable.",
+              },
+            ],
+          });
+        throw error;
+      }
+    },
+  );
   app.get<{ Params: { identifier: string } }>(
     "/api/client/servers/:identifier",
     { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
     async (req, reply) => {
       reply.header("cache-control", "no-store");
-      const user = await authenticate(req.headers.authorization ?? "");
+      const user = (await authenticate(req.headers.authorization ?? ""))?.id;
       if (!user)
         return reply
           .code(401)
