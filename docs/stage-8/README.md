@@ -75,3 +75,5 @@ Nama yang sudah ada, termasuk symlink, ditolak dengan 409. Cek nama dan penulisa
 Pemeriksaan dan dispatch diserialisasi dalam satu proses Relay, bukan compare-and-delete atomik di Wings. Penulis eksternal dan beberapa replika di luar cakupan. File bawaan, file tanpa catatan upload Relay, direktori, symlink, dan penghapusan massal tidak diizinkan.
 
 [CI 45584557152](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45584557152) lulus 14 job. Tes HTTP membuktikan penghapusan pada Panel v1.15.2 dan Relay; setelah Relay menghapus, Wings tidak lagi menampilkan target dan Client API tidak lagi menerbitkan tautan unduhan. Kunci upload/edit/unduh dan target yang byte-nya berubah ditolak. File bawaan, tetangga, symlink dan file bernama sama di Wings kedua tetap utuh.
+
+Inventaris server baca-saja Application API dicatat terpisah di [Tahap 9](../stage-9/README.md).

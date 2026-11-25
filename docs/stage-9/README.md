@@ -1,0 +1,9 @@
+# Tahap 9 — Application API: inventaris server baca-saja
+
+`GET /api/application/servers` mengembalikan `list`, data `server`, dan metadata pagination (`page`, `per_page`, default 50, maksimum 100). Urutan tetap berdasarkan ID Application; tautan mempertahankan ukuran halaman. `GET /api/application/servers/:id` memakai ID numerik dari hasil daftar, bukan UUID atau prefix. Migrasi 019 mengalokasikan ID stabil dalam database Relay; ID numerik Pterodactyl lama tidak dibawa, jadi gunakan UUID untuk mencocokkan inventaris sebelum berpindah dan nomor Relay untuk detail.
+
+Proyeksi terbatas pada `id`, `uuid`, `identifier`, `name`, dan `status` (`null` untuk terpasang, `draft` jika belum diprovisi, selain itu fase Relay). Record `deleted` tidak ditampilkan. API tidak mengembalikan environment, konfigurasi container, kredensial node, atau relationships. Filter selain pagination, external ID, dan operasi tulis server tidak tersedia.
+
+Admin yang sudah masuk dapat membuat kunci lewat `POST /api/v1/account/application-keys` dengan `label` dan `readServers: true`; token hanya dikembalikan saat dibuat. Kunci berlaku 30 hari, disimpan sebagai digest terpisah dari kunci Client, dan hanya berlaku selama penerbit masih admin. Penerbit dapat mencabutnya lewat `DELETE /api/v1/account/application-keys/:id`. Cookie sesi saja tidak mengautentikasi inventaris.
+
+[CI 45597010598](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45597010598) lulus semua 14 job. Tes HTTP terhadap Panel v1.15.2 dan Relay mengambil dua halaman, mengecek metadata dan atribut yang didukung, dan memakai ID dari daftar masing-masing untuk detail. Tes juga memverifikasi penolakan kunci Client, kunci tanpa izin, sesi tanpa Bearer, kunci yang dicabut, dan kunci milik akun yang tidak lagi admin. Tidak ada perubahan di VPS atau produksi.
