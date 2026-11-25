@@ -1,3 +1,4 @@
+import WebSocket from "ws";
 import { createRequire } from "node:module";
 import { legacyPreflight } from "../import/legacy-preflight";
 import { stagingMail } from "../staging-mail";
@@ -711,6 +712,7 @@ async function main() {
         session: typeof ownerSession,
         clientPower = false,
         clientConsole = false,
+        clientStream = false,
       ) {
         const key = `rly_${randomBytes(32).toString("base64url")}`;
         const result = await relay.inject({
@@ -722,6 +724,7 @@ async function main() {
             key,
             ...(clientPower ? { clientPower: true } : {}),
             ...(clientConsole ? { clientConsole: true } : {}),
+            ...(clientStream ? { clientStream: true } : {}),
           },
         });
         assert.equal(result.statusCode, 201);
@@ -1105,7 +1108,8 @@ async function main() {
             | "control.start"
             | "control.stop"
             | "control.restart"
-            | "control.console",
+            | "control.console"
+            | "websocket.connect",
         ) =>
           relay.inject({
             method: "POST",
@@ -1329,8 +1333,11 @@ async function main() {
             headers: auth(key),
             payload: { command },
           });
-        const sendMarker = async (base: string, key: string) => {
-          const nonce = marker();
+        const sendMarker = async (
+          base: string,
+          key: string,
+          nonce = marker(),
+        ) => {
           try {
             assert.equal(
               await new NodeactylClient(base, key).sendServerCommand(
@@ -1344,32 +1351,147 @@ async function main() {
               `Nodeactyl command failed at loopback port ${new URL(base).port}${typeof error === "number" ? ` (${error})` : ""}`,
             );
           }
-          await until("fixture console command acknowledgment", async () => {
-            const { stdout, stderr } = await docker(
-              "docker",
-              ["logs", "--tail", "50", uuid],
-              { timeout: 5000 },
-            );
-            return `${stdout}\n${stderr}`
-              .split(/\r?\n/)
-              .includes(`RELAY_COMMAND_ACK ${nonce}`);
-          });
         };
         const offline = await commandRequest(
           ownerConsoleKey,
           `relay-marker ${marker()}`,
         );
         assert.equal(offline.statusCode, 502);
+        const [ownerStreamKey, sharedStreamKey] = await Promise.all([
+          issueKey(ownerSession, false, false, true),
+          issueKey(collaborator, false, false, true),
+        ]);
+        const streamPath = `/api/client/servers/${identifier}/websocket`;
+        const getStream = (base: string, key: string) =>
+          fetch(`${base}${streamPath}`, { headers: auth(key) });
+        async function ticket(base: string, key: string) {
+          const response = await getStream(base, key);
+          assert.equal(response.status, 200);
+          const body = (await response.json()) as {
+            data: { token: string; socket: string };
+          };
+          assert.deepEqual(Object.keys(body.data).sort(), ["socket", "token"]);
+          assert.equal(typeof body.data.token, "string");
+          const url = new URL(body.data.socket);
+          if (base === relayBase) {
+            assert.equal(url.protocol, "wss:");
+            assert.equal(url.host, new URL(origin).host);
+            assert.equal(url.pathname, `/api/client/streams/${uuid}`);
+            url.protocol = "ws:";
+            url.host = new URL(relayBase).host;
+          } else assert.equal(url.pathname, `/api/servers/${uuid}/ws`);
+          return { url, token: body.data.token };
+        }
+        function connect(ticket: { url: URL; token: string }) {
+          const peer = new WebSocket(ticket.url, {
+            origin,
+            handshakeTimeout: 3000,
+            maxPayload: 32768,
+          });
+          const frames: { event: string; args?: string[] }[] = [];
+          let stopped = false;
+          peer.on("error", () => {
+            stopped = true;
+          });
+          const closed = new Promise<number>((resolve) =>
+            peer.once("close", (code) => {
+              stopped = true;
+              resolve(code);
+            }),
+          );
+          const send = (event: string, args: string[] = []) =>
+            peer.send(JSON.stringify({ event, args }));
+          peer.once("open", () => send("auth", [ticket.token]));
+          peer.on("message", (data) =>
+            frames.push(JSON.parse(data.toString())),
+          );
+          const expectFrame = async (event: string, arg?: string) => {
+            for (let i = 0; i < 60; i++) {
+              if (
+                frames.some(
+                  (frame) =>
+                    frame.event === event &&
+                    (arg === undefined || frame.args?.[0] === arg),
+                )
+              )
+                return;
+              if (stopped) break;
+              await new Promise((resolve) => setTimeout(resolve, 50));
+            }
+            throw new Error(`Missing WebSocket event: ${event}`);
+          };
+          const expectClosed = async (timeout = 3000) => {
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            try {
+              assert.equal(
+                await Promise.race([
+                  closed,
+                  new Promise((resolve) => {
+                    timer = setTimeout(() => resolve(0), timeout);
+                  }),
+                ]),
+                1008,
+              );
+            } finally {
+              clearTimeout(timer);
+            }
+          };
+          return { peer, send, expectFrame, expectClosed, frames };
+        }
+        async function streamMarker(base: string, key: string) {
+          const relaySide = base === relayBase;
+          const issued = await ticket(base, relaySide ? ownerStreamKey : key);
+          const stream = connect(issued);
+          try {
+            await stream.expectFrame("auth success");
+            const nonce = marker();
+            await sendMarker(base, relaySide ? ownerConsoleKey : key, nonce);
+            await stream.expectFrame(
+              "console output",
+              `RELAY_COMMAND_ACK ${nonce}`,
+            );
+            if (relaySide) {
+              assert.deepEqual(
+                stream.frames
+                  .filter((frame) => frame.event === "console output")
+                  .map((frame) => frame.args),
+                [[`RELAY_COMMAND_ACK ${nonce}`]],
+              );
+              const rejected = connect(issued);
+              try {
+                await rejected.expectClosed();
+              } finally {
+                rejected.peer.terminate();
+              }
+              const wrong = await ticket(base, ownerStreamKey);
+              wrong.url.pathname = `/api/client/streams/${second}`;
+              const other = connect(wrong);
+              try {
+                await other.expectClosed();
+              } finally {
+                other.peer.terminate();
+              }
+              stream.send("send command", [`relay-marker ${marker()}`]);
+              await stream.expectClosed();
+              const expiring = connect(await ticket(base, ownerStreamKey));
+              try {
+                await expiring.expectFrame("auth success");
+                await expiring.expectClosed(17_000);
+              } finally {
+                expiring.peer.terminate();
+              }
+            }
+          } finally {
+            stream.peer.terminate();
+          }
+        }
         for (const [base, key] of [
           [legacyBase, legacyKey],
           [relayBase, ownerPowerKey],
         ] as const) {
           assert.equal(await sdkPower(base, key, "start"), true);
           await observed("running");
-          await sendMarker(
-            base,
-            base === relayBase ? ownerConsoleKey : legacyKey,
-          );
+          await streamMarker(base, key);
           if (base === relayBase) {
             assert.equal(
               (await commandRequest(ownerPowerKey, `relay-marker ${marker()}`))
@@ -1394,6 +1516,17 @@ async function main() {
               (await requestPower(ownerConsoleKey, "stop")).statusCode,
               403,
             );
+            for (const denied of [relayKey, ownerPowerKey, ownerConsoleKey])
+              assert.equal((await getStream(relayBase, denied)).status, 403);
+            assert.equal(
+              (await commandRequest(ownerStreamKey, `relay-marker ${marker()}`))
+                .statusCode,
+              403,
+            );
+            assert.equal(
+              (await requestPower(ownerStreamKey, "stop")).statusCode,
+              403,
+            );
             try {
               assert.equal((await mutate(uuid, "grant")).statusCode, 204);
               assert.equal(
@@ -1413,7 +1546,45 @@ async function main() {
                 (await mutate(uuid, "grant", "control.console")).statusCode,
                 204,
               );
-              await sendMarker(relayBase, sharedConsoleKey);
+              assert.equal(
+                (await getStream(relayBase, sharedStreamKey)).status,
+                403,
+              );
+              assert.equal(
+                (await mutate(uuid, "grant", "websocket.connect")).statusCode,
+                204,
+              );
+              const sharedStream = connect(
+                await ticket(relayBase, sharedStreamKey),
+              );
+              try {
+                await sharedStream.expectFrame("auth success");
+                const nonce = marker();
+                await sendMarker(relayBase, sharedConsoleKey, nonce);
+                await sharedStream.expectFrame(
+                  "console output",
+                  `RELAY_COMMAND_ACK ${nonce}`,
+                );
+                const stale = await ticket(relayBase, sharedStreamKey);
+                assert.equal(
+                  (await mutate(uuid, "revoke", "websocket.connect"))
+                    .statusCode,
+                  204,
+                );
+                await sharedStream.expectClosed();
+                assert.equal(
+                  (await getStream(relayBase, sharedStreamKey)).status,
+                  403,
+                );
+                const staleStream = connect(stale);
+                try {
+                  await staleStream.expectClosed();
+                } finally {
+                  staleStream.peer.terminate();
+                }
+              } finally {
+                sharedStream.peer.terminate();
+              }
               assert.equal(
                 (await mutate(uuid, "revoke", "control.console")).statusCode,
                 204,

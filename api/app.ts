@@ -9,6 +9,7 @@ import { registerRemote } from "./wings/remote";
 import { UUID_V4, type WingsNode } from "./wings/client";
 import { randomBytes, randomUUID } from "node:crypto";
 import Fastify from "fastify";
+import websocket from "@fastify/websocket";
 import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
@@ -148,6 +149,9 @@ export async function createApp({
         useDefaults: false,
       },
     },
+  });
+  await app.register(websocket, {
+    options: { maxPayload: 1024, perMessageDeflate: false },
   });
   await app.register(helmet);
   await app.register(cookie);
@@ -295,6 +299,7 @@ export async function createApp({
           provisioner.power(id, action, principal, "compat")
       : undefined,
     provisioner?.compatCommand,
+    provisioner?.compatStream,
   );
   const generic = { error: "invalid_credentials" };
   app.get("/health/live", async () => ({ status: "ok" }));
@@ -766,6 +771,7 @@ export async function createApp({
       key: string;
       clientPower?: boolean;
       clientConsole?: boolean;
+      clientStream?: boolean;
     };
   }>(
     "/api/v1/account/keys",
@@ -778,6 +784,7 @@ export async function createApp({
             key: text(47, 47, "^rly_[A-Za-z0-9_-]{43}$"),
             clientPower: { type: "boolean" },
             clientConsole: { type: "boolean" },
+            clientStream: { type: "boolean" },
           },
           ["label", "key"],
         ),
@@ -798,7 +805,7 @@ export async function createApp({
         const digest = crypt.digest("api-key", `${req.body.key}.${suffix}`);
         try {
           await db.execute(
-            "INSERT INTO api_keys (id,user_id,digest,label,expires_at,client_power,client_console) VALUES (?,?,?,?,TIMESTAMPADD(DAY,90,UTC_TIMESTAMP(3)),?,?)",
+            "INSERT INTO api_keys (id,user_id,digest,label,expires_at,client_power,client_console,client_stream) VALUES (?,?,?,?,TIMESTAMPADD(DAY,90,UTC_TIMESTAMP(3)),?,?,?)",
             [
               id,
               u.id,
@@ -806,6 +813,7 @@ export async function createApp({
               req.body.label,
               req.body.clientPower === true,
               req.body.clientConsole === true,
+              req.body.clientStream === true,
             ],
           );
         } catch (e) {
@@ -946,7 +954,8 @@ export async function createApp({
         | "control.start"
         | "control.stop"
         | "control.restart"
-        | "control.console";
+        | "control.console"
+        | "websocket.connect";
     };
   }>(
     "/api/v1/servers/:id/activity-access",
@@ -963,6 +972,7 @@ export async function createApp({
                 "control.stop",
                 "control.restart",
                 "control.console",
+                "websocket.connect",
               ],
             },
             action: { type: "string", enum: ["grant", "revoke"] },

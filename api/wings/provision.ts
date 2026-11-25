@@ -381,6 +381,30 @@ export function createProvisioner(
         }
       });
     },
+    compatStream: {
+      async allowed(id: string, actor: Actor) {
+        const server = await load(pool, id);
+        if (
+          !server ||
+          !fromNode(server) ||
+          !server.document.equals(Buffer.from(disposableEgg)) ||
+          server.phase !== "installed" ||
+          actor.channel !== "api-key" ||
+          !actor.keyId
+        )
+          return false;
+        return (
+          (
+            await rows(
+              pool,
+              `SELECT k.id FROM api_keys k JOIN servers s ON s.id=? WHERE k.id=? AND k.user_id=? AND k.client_stream=TRUE AND k.expires_at>UTC_TIMESTAMP(3) AND (s.owner_id=k.user_id OR EXISTS (SELECT 1 FROM server_grants g WHERE g.server_id=s.id AND g.user_id=k.user_id AND JSON_CONTAINS(g.permissions, JSON_QUOTE('websocket.connect'))))`,
+              [id, actor.keyId, actor.id],
+            )
+          ).length === 1
+        );
+      },
+      connect: (id: string, actor: Actor) => socket.connectRead(id, actor.id),
+    },
     async compatCommand(id: string, command: string, actor: Actor) {
       if (!/^relay-marker [a-f0-9]{24}(?![\s\S])/.test(command))
         throw new ProvisionError(400, "invalid_fixture_command");

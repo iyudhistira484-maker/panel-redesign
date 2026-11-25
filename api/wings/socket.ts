@@ -90,6 +90,24 @@ export class WingsSocket {
       throw new Error("Invalid socket origin");
     this.#origin = origin;
   }
+  connectRead(server: string, user: string) {
+    const token = signReadCapability(this.#node, this.#origin, server, user);
+    const url = new URL(`/api/servers/${server}/ws`, this.#node.origin);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    const socket = new WebSocket(url, {
+      origin: this.#origin,
+      handshakeTimeout: 3500,
+      maxPayload: 32768,
+      followRedirects: false,
+      perMessageDeflate: false,
+    });
+    socket.on("open", () =>
+      socket.send(JSON.stringify({ event: "auth", args: [token] }), (error) => {
+        if (error) socket.terminate();
+      }),
+    );
+    return socket;
+  }
   stats(server: string, user: string): Promise<SocketStats> {
     return this.#request(server, user, {
       event: "send stats",

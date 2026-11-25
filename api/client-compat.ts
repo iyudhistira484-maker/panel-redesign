@@ -1,3 +1,4 @@
+import { registerClientStream, type StreamBinding } from "./client-stream";
 import type { Actor } from "./policy";
 import type { FastifyInstance } from "fastify";
 import { rows, transaction, type Executor } from "./db";
@@ -59,6 +60,7 @@ export function registerClientCompatibility(
     actor: Actor,
   ) => Promise<unknown>,
   command?: (id: string, command: string, actor: Actor) => Promise<void>,
+  stream?: StreamBinding,
 ) {
   for (const path of ["/api/client", "/api/client/"])
     app.get<{ Querystring: Record<string, unknown> }>(
@@ -166,6 +168,37 @@ export function registerClientCompatibility(
     );
     return records.length === 1 ? records[0] : null;
   }
+  const issueStream = stream
+    ? registerClientStream(app, origin, stream)
+    : undefined;
+  app.get<{ Params: { identifier: string } }>(
+    "/api/client/servers/:identifier/websocket",
+    { config: { rateLimit: { max: 15, timeWindow: "1 minute" } } },
+    async (req, reply) => {
+      const actor = await authenticate(req.headers.authorization ?? "");
+      if (!actor)
+        return reply
+          .code(401)
+          .send(errors("AuthenticationException", "Unauthenticated."));
+      const server = await resolve(req.params.identifier, actor.id);
+      if (!server)
+        return reply
+          .code(404)
+          .send(errors("NotFoundHttpException", "Server not found."));
+      const result = await issueStream?.(server.id, actor);
+      if (!result)
+        return reply.code(403).send({
+          errors: [
+            {
+              code: "AuthorizationException",
+              status: "403",
+              detail: "WebSocket access unavailable.",
+            },
+          ],
+        });
+      return result;
+    },
+  );
   app.get<{ Params: { identifier: string } }>(
     "/api/client/servers/:identifier/resources",
     { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
