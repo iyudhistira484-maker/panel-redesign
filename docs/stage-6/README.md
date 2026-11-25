@@ -9,3 +9,9 @@ Irisan awal: **Detail server → Kelola akses aktivitas**. Pemilik dapat memberi
 **Muat daftar subuser** menampilkan email akun dan izin aktif (maksimal 100, dengan indikator jika terpotong). Endpoint hanya tersedia bagi pemilik. Tombol pencabutan dari daftar memerlukan konfirmasi dan hanya muncul untuk grant persis `activity.read`; grant gabungan ditampilkan tanpa tombol pengubahan. Daftar diperbarui setelah mutasi tanpa reload halaman.
 
 [CI 45540568501](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45540568501) lulus 14 job. Chromium/HTTPS membuktikan daftar khusus pemilik, penolakan HTTP 404 untuk subuser, izin tetap aktif sebelum konfirmasi, pembaruan daftar setelah konfirmasi, grant gabungan tetap ada, dan penolakan akses setelah pencabutan meski sesi subuser masih aktif.
+
+## Izin Start dan Stop terpisah
+
+Pemilik dapat memberi/cabut `control.start` dan `control.stop` secara independen dari baris subuser aktif, dengan konfirmasi. Mutasi memerlukan kepemilikan dan sesi browser; transaksi mengubah satu izin dan mempertahankan izin lain. Audit mencatat pemberian/pencabutan. Akun belum terdaftar sebagai subuser harus diberi akses awal terlebih dahulu.
+
+[CI 45541752889](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45541752889) lulus 14 job. Pemilik memberi Start dari UI; subuser memakai sesi HTTPS untuk menyalakan workload Wings sungguhan dan ditolak untuk Stop. Setelah Start dicabut dari UI, sesi yang sama langsung ditolak untuk Start tetapi masih dapat membaca aktivitas. Audit grant/revoke terlihat. Tes ini tidak mengklaim skenario Stop-only end-to-end.
