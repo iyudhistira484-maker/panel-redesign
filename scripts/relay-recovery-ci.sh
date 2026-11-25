@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "${RELAY_ENV:-}" == staging && "${RELAY_DISPOSABLE_WINGS_CI:-}" == 1 && "${RUNNER_ENVIRONMENT:-}" == github-hosted && "${GITHUB_EVENT_NAME:-}" == push && "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]
+[[ "${RELAY_ENV:-}" == staging && "${RELAY_DISPOSABLE_WINGS_CI:-}" == 1 && "${RUNNER_ENVIRONMENT:-}" == github-hosted && ( "${GITHUB_EVENT_NAME:-}" == push || ( "${GITHUB_EVENT_NAME:-}" == workflow_dispatch && "${GITHUB_WORKFLOW:-}" == "Relay Wings off-host staging" ) ) && "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]
 service=${RELAY_RECOVERY_MYSQL_SERVICE:?}
 [[ "$service" =~ ^[a-f0-9]{64}$ && "${RELAY_STAGING_DATABASE_URL:-}" == */relay_test ]]
 backup=${2:?}

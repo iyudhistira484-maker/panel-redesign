@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "${RELAY_ENV:-}" == staging && "${RELAY_DISPOSABLE_WINGS_CI:-}" == 1 && "${RUNNER_ENVIRONMENT:-}" == github-hosted && "${GITHUB_EVENT_NAME:-}" == push && "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]
+[[ "${RELAY_ENV:-}" == staging && "${RELAY_DISPOSABLE_WINGS_CI:-}" == 1 && "${RUNNER_ENVIRONMENT:-}" == github-hosted && ( "${GITHUB_EVENT_NAME:-}" == push || ( "${GITHUB_EVENT_NAME:-}" == workflow_dispatch && "${GITHUB_WORKFLOW:-}" == "Relay Wings off-host staging" ) ) && "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]
 root=${RELAY_WINGS_CONTRACT_DATA:?}
 uuid=${2:?}
 [[ "$root" =~ ^/tmp/tmp\.[A-Za-z0-9]+/data/volumes$ && "$uuid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]

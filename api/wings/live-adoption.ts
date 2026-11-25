@@ -34,7 +34,11 @@ async function main() {
   if (
     process.env.RELAY_DISPOSABLE_WINGS_CI !== "1" ||
     process.env.RUNNER_ENVIRONMENT !== "github-hosted" ||
-    process.env.GITHUB_EVENT_NAME !== "push" ||
+    (process.env.GITHUB_EVENT_NAME !== "push" &&
+      !(
+        process.env.GITHUB_EVENT_NAME === "workflow_dispatch" &&
+        process.env.GITHUB_WORKFLOW === "Relay Wings off-host staging"
+      )) ||
     !process.env.RELAY_STAGING_DATABASE_URL?.endsWith("/relay_test") ||
     !config ||
     !/^\/tmp\/tmp\.[A-Za-z0-9]+\/config\/config\.yml$/.test(config)
@@ -1250,7 +1254,7 @@ async function main() {
           [uuid, collaboratorId.id],
         );
         const placement = (db: typeof pool) =>
-          rows(
+          rows<{ id: string }>(
             db,
             `SELECT s.id,s.application_id,s.external_id,s.name,s.owner_id,s.node_id,a.id AS allocation,a.ip,a.port,p.phase FROM servers s JOIN allocations a ON a.id=s.allocation_id JOIN wings_provisions p ON p.server_id=s.id WHERE s.id IN (?,?,?) ORDER BY s.id`,
             [uuid, second, standalone.uuid],
@@ -1300,6 +1304,43 @@ async function main() {
         );
         const currentVolume = "\uFEFFPost-backup Wings volume bytes\r\n";
         await client.writeFixtureText(uuid, currentVolume);
+        if (process.env.RELAY_OFFHOST_EXPORT) {
+          assert.equal(
+            process.env.GITHUB_WORKFLOW,
+            "Relay Wings off-host staging",
+          );
+          assert.equal((await activity(uuid, collaborator)).statusCode, 404);
+          const directory = process.env.RELAY_OFFHOST_EXPORT;
+          await copyFile(backup, `${directory}/database.sql`);
+          await copyFile(
+            `${sourceRoot.replace(/\/data\/volumes$/, "")}/fixture-volume.tar`,
+            `${directory}/volume.tar`,
+          );
+          await writeFile(
+            `${directory}/runtime.json`,
+            JSON.stringify({
+              uuid,
+              node,
+              origin,
+              key: key.toString("base64"),
+              pepper: pepper.toString("base64"),
+              identityKey: identityKey.toString("base64"),
+              relayKey,
+              collaborator,
+              outsider,
+              placement: expectedPlacement.find((row) => row.id === uuid),
+              checkpointHash: createHash("sha256")
+                .update(checkpointFile)
+                .digest("hex"),
+              newerHash: createHash("sha256")
+                .update(currentVolume)
+                .digest("hex"),
+            }),
+            { mode: 0o600, flag: "wx" },
+          );
+          return;
+        }
+
         for (const id of workloadIds) {
           if ((await clientFor(id).state(id)) !== "running")
             await clientFor(id).power(id, "start");

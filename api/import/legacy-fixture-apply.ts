@@ -27,7 +27,11 @@ export async function applyLegacyFixture(
   if (
     process.env.RELAY_DISPOSABLE_WINGS_CI !== "1" ||
     process.env.RUNNER_ENVIRONMENT !== "github-hosted" ||
-    process.env.GITHUB_EVENT_NAME !== "push" ||
+    (process.env.GITHUB_EVENT_NAME !== "push" &&
+      !(
+        process.env.GITHUB_EVENT_NAME === "workflow_dispatch" &&
+        process.env.GITHUB_WORKFLOW === "Relay Wings off-host staging"
+      )) ||
     !process.env.RELAY_STAGING_DATABASE_URL?.endsWith("/relay_test")
   )
     throw new Error("Disposable staging fixture only");

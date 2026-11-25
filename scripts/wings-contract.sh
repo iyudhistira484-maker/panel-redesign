@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # This runs a daemon with access to Docker. Do not use a shared or production host.
-[[ "${RELAY_DISPOSABLE_WINGS_CI:-}" == 1 && "${RUNNER_ENVIRONMENT:-}" == github-hosted && "${GITHUB_EVENT_NAME:-}" == push ]]
+[[ "${RELAY_DISPOSABLE_WINGS_CI:-}" == 1 && "${RUNNER_ENVIRONMENT:-}" == github-hosted && ( "${GITHUB_EVENT_NAME:-}" == push || ( "${GITHUB_EVENT_NAME:-}" == workflow_dispatch && "${GITHUB_WORKFLOW:-}" == "Relay Wings off-host staging" ) ) ]]
 work=$(mktemp -d)
 name=relay-wings-contract
 network=relay-wings-contract-net
@@ -12,6 +12,9 @@ harness=api/wings/live-contract.ts
 if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == adoption || "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then
   remote_port=13202
   harness=api/wings/live-adoption.ts
+fi
+if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == offhost-restore ]]; then
+  harness=api/wings/offhost-restore.ts
 fi
 cleanup() {
   if [[ -n "$proxy_pid" ]]; then kill "$proxy_pid" 2>/dev/null || true; fi
@@ -28,6 +31,10 @@ chmod 0755 "$work/wings"
 export RELAY_WINGS_TEST_TOKEN_ID=relaytestnode
 RELAY_WINGS_TEST_TOKEN=$(openssl rand -hex 32)
 export RELAY_WINGS_TEST_TOKEN
+if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == offhost-restore ]]; then
+  [[ "$GITHUB_WORKFLOW" == 'Relay Wings off-host staging' && "$GITHUB_EVENT_NAME" == workflow_dispatch ]]
+  RELAY_WINGS_TEST_TOKEN=$(jq -er '.node.token | select(test("^[a-f0-9]{64}$"))' "$RELAY_OFFHOST_RUNTIME")
+fi
 printf '::add-mask::%s\n' "$RELAY_WINGS_TEST_TOKEN"
 mkdir "$work/config" "$work/data"
 chmod 0700 "$work/config"
@@ -63,6 +70,10 @@ allowed_origins:
   - https://127.0.0.1:4443
 allowed_mounts: []
 YAML
+if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == offhost-restore ]]; then
+  mkdir "$work/data/volumes"
+  sudo tar --numeric-owner -xf "$RELAY_OFFHOST_VOLUME" -C "$work/data/volumes"
+fi
 chmod 0600 "$work/config/config.yml"
 docker pull debian:12-slim
 # Docker allocates a subnet distinct from the MySQL service network.

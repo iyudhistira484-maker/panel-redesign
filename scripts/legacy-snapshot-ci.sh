@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "${RELAY_ENV:-}" == staging && "${RELAY_DISPOSABLE_WINGS_CI:-}" == 1 && "${RUNNER_ENVIRONMENT:-}" == github-hosted && "${GITHUB_EVENT_NAME:-}" == push ]]
+[[ "${RELAY_ENV:-}" == staging && "${RELAY_DISPOSABLE_WINGS_CI:-}" == 1 && "${RUNNER_ENVIRONMENT:-}" == github-hosted && ( "${GITHUB_EVENT_NAME:-}" == push || ( "${GITHUB_EVENT_NAME:-}" == workflow_dispatch && "${GITHUB_WORKFLOW:-}" == "Relay Wings off-host staging" ) ) ]]
 password=${RELAY_LEGACY_SNAPSHOT_CI_PASSWORD:?}
 reader_password=${RELAY_LEGACY_SNAPSHOT_READER_PASSWORD:?}
 [[ "$password" =~ ^[a-f0-9]{48}$ && "$reader_password" =~ ^[a-f0-9]{48}$ && "$reader_password" != "$password" ]]
