@@ -1428,8 +1428,22 @@ async function main() {
   }
 }
 void main().catch((error) => {
+  const location =
+    error instanceof Error
+      ? error.stack?.match(/live-adoption\.ts:\d+:\d+/)?.[0]
+      : undefined;
+  const message =
+    error instanceof Error
+      ? error.message.split("\n")[0]
+      : "Adoption contract failed";
+  const comparison = error as { actual?: unknown; expected?: unknown };
+  const statuses =
+    typeof comparison.actual === "number" &&
+    typeof comparison.expected === "number"
+      ? ` (${comparison.actual}, expected ${comparison.expected})`
+      : "";
   console.error(
-    `::error::${error instanceof Error ? error.message : "Adoption contract failed"}`,
+    `::error::${location ?? "live adoption"}: ${message}${statuses}`,
   );
   process.exitCode = 1;
 });
