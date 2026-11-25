@@ -23,4 +23,4 @@ api_pid=$!
 node scripts/auth-browser-proxy.mjs "$work/cert.pem" "$work/key.pem" &
 proxy_pid=$!
 curl --silent --show-error --fail --retry 12 --retry-all-errors --retry-delay 1 http://127.0.0.1:3200/health/ready >/dev/null
-npx playwright test tests/browser-auth-live.spec.ts
+npx playwright test tests/browser-auth-live.spec.ts --reporter=line,github
