@@ -128,6 +128,14 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   await page.getByRole("button", { name: "Buka daftar file" }).click();
   const files = page.getByRole("list", { name: "Isi folder" });
   await expect(files).toContainText("relay-start.sh");
+  await expect(files).not.toContainText("fixture-link");
+  expect(
+    (
+      await page
+        .context()
+        .request.get(fileApi, { params: { directory: "/fixture-link" } })
+    ).status(),
+  ).toBe(404);
   await files.getByRole("button", { name: "fixture-docs" }).click();
   await expect(files).toContainText("example.txt");
   await page.getByRole("button", { name: "Folder induk" }).click();

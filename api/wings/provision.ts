@@ -282,9 +282,7 @@ export function createProvisioner(
       if (
         !path.startsWith("/") ||
         segments.length > 4 ||
-        !segments.every((part) =>
-          /^[A-Za-z0-9_][A-Za-z0-9_. -]{0,79}$/.test(part),
-        )
+        !segments.every(fixturePathSegment)
       )
         throw new ProvisionError(400, "invalid_directory");
       try {
