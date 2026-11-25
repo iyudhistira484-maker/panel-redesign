@@ -846,6 +846,17 @@ async function main() {
             (await dispatchGrantedPower(uuid, "start")).statusCode,
             404,
           );
+          await docker(
+            "docker",
+            [
+              "exec",
+              second,
+              "sh",
+              "-c",
+              "printf '\\357\\273\\277second fixture\\r\\n' > /home/container/fixture-docs/example.txt",
+            ],
+            { timeout: 5000 },
+          );
           assert.equal(
             (await dispatchGrantedPower(second, "stop")).statusCode,
             202,
@@ -855,6 +866,31 @@ async function main() {
             async () => (await clientFor(second).state(second)) === "offline",
           );
           assert.equal(await clientFor(uuid).state(uuid), "running");
+
+          const download = (app: typeof relay, id: string) =>
+            app.inject({
+              url: `/api/v1/servers/${id}/files?directory=%2Ffixture-docs&preview=example.txt&download=1`,
+              headers: ownerSession,
+            });
+          const first = await download(relay, uuid);
+          const other = await download(secondRelay, second);
+          for (const result of [first, other]) {
+            assert.equal(result.statusCode, 200);
+            assert.equal(
+              result.headers["content-disposition"],
+              'attachment; filename="example.txt"',
+            );
+          }
+          assert.deepEqual(
+            first.rawPayload,
+            Buffer.from("<strong>fixture preview</strong>\n"),
+          );
+          assert.deepEqual(
+            other.rawPayload,
+            Buffer.from("\uFEFFsecond fixture\r\n"),
+          );
+          assert.equal((await download(relay, second)).statusCode, 422);
+
           assert.equal(
             (await dispatchGrantedPower(uuid, "stop", ownerSession)).statusCode,
             202,

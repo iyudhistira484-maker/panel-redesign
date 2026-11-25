@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -110,7 +111,11 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   expect(
     (
       await page.context().request.get(fileApi, {
-        params: { directory: "/fixture-docs", preview: "example.txt" },
+        params: {
+          directory: "/fixture-docs",
+          preview: "example.txt",
+          download: "1",
+        },
       })
     ).status(),
   ).toBe(404);
@@ -151,6 +156,25 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     "<strong>fixture preview</strong>",
   );
   await expect(preview.locator("strong")).toHaveCount(0);
+  const downloaded = page.waitForEvent("download");
+  const attachment = page.waitForResponse(
+    (r) =>
+      r.url().startsWith(fileApi) &&
+      new URL(r.url()).searchParams.get("download") === "1",
+  );
+  await preview.getByRole("button", { name: "Unduh file teks" }).click();
+  const response = await attachment;
+  expect(response.headers()["content-disposition"]).toBe(
+    'attachment; filename="example.txt"',
+  );
+  const file = await downloaded;
+  expect(file.suggestedFilename()).toBe("example.txt");
+  const local = await file.path();
+  assert.ok(local);
+  expect(await readFile(local)).toEqual(
+    Buffer.from("<strong>fixture preview</strong>\n"),
+  );
+
   await files.getByRole("button", { name: "binary.txt", exact: true }).click();
   await expect(page.getByText("Pratinjau teks tidak tersedia.")).toBeVisible();
   await expect(preview).toHaveCount(0);
@@ -162,7 +186,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     expect(
       (
         await page.context().request.get(fileApi, {
-          params: { directory: "/fixture-docs", preview: name },
+          params: { directory: "/fixture-docs", preview: name, download: "1" },
         })
       ).status(),
     ).toBe(status);
