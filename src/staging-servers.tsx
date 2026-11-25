@@ -94,21 +94,32 @@ export function StagingServers({ locale }: { locale: Locale }) {
           aria-label={en ? "Accessible servers" : "Server yang dapat diakses"}
         >
           {items.map((item) => (
-            <li key={item.id} data-server-id={item.id}>
+            <li
+              key={item.id}
+              data-server-id={item.id}
+              className="staging-server-row"
+            >
               {item.name}{" "}
               <Button
                 aria-expanded={opened === item.id}
+                aria-controls={
+                  opened === item.id ? `staging-detail-${item.id}` : undefined
+                }
                 onClick={() => setOpened(opened === item.id ? null : item.id)}
               >
                 {en ? "Server detail" : "Detail server"}
               </Button>
               {opened === item.id && (
-                <>
+                <section
+                  id={`staging-detail-${item.id}`}
+                  aria-label={item.name}
+                  className="staging-server-detail"
+                >
                   <ServerPower id={item.id} locale={locale} />
                   <ServerMetrics id={item.id} locale={locale} />
                   <ServerConsole id={item.id} locale={locale} />
                   <ServerActivity id={item.id} locale={locale} />
-                </>
+                </section>
               )}
             </li>
           ))}
