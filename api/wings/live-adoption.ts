@@ -1257,6 +1257,36 @@ async function main() {
           );
         const expectedPlacement = await placement(pool);
         assert.equal(expectedPlacement.length, 3);
+        const sourceRoot = process.env.RELAY_WINGS_CONTRACT_DATA ?? "";
+        assert.match(sourceRoot, /^\/tmp\/tmp\.[A-Za-z0-9]+\/data\/volumes$/);
+        const freshRoot = sourceRoot.replace(/\/volumes$/, "/recovery-volumes");
+        const volumeScript = (action: string, digest?: string) =>
+          docker(
+            "bash",
+            [
+              "scripts/relay-volume-recovery-ci.sh",
+              action,
+              uuid,
+              ...(digest ? [digest] : []),
+            ],
+            { timeout: 30000 },
+          );
+        if ((await client.state(uuid)) !== "offline")
+          await client.power(uuid, "stop");
+        await until(
+          "volume checkpoint quiescent",
+          async () => (await client.state(uuid)) === "offline",
+        );
+        const checkpointFile = await client.fixtureDownload(
+          uuid,
+          ["fixture-docs"],
+          "example.txt",
+        );
+        const checkpointStartup = await checksum();
+        const volumeStarted = performance.now();
+        const volumeDigest = (await volumeScript("backup")).stdout.trim();
+        assert.match(volumeDigest, /^[a-f0-9]{64}$/);
+        const volumeBackupMs = Math.round(performance.now() - volumeStarted);
         const startBackup = performance.now();
         await script("backup");
         const checkpoint = performance.now();
@@ -1408,6 +1438,131 @@ async function main() {
           );
           console.log(
             `::notice::Relay recovery backup_ms=${Math.round(checkpoint - startBackup)} recovery_ms=${roundtripMs} rollback_ms=${Math.round(performance.now() - rollbackStarted)} checkpoint_to_shutdown_ms=${Math.round(outageStart - checkpoint)}`,
+          );
+          // Rehearse loss of the source volume without deleting or mounting it into
+          // the recovered workload. The original volume remains available for rollback.
+          await assert.rejects(
+            volumeScript("corrupt", volumeDigest),
+            (error: unknown) => (error as { code?: number }).code === 42,
+          );
+          const absentRoot = async () =>
+            docker(
+              "docker",
+              [
+                "exec",
+                "relay-wings-contract",
+                "sh",
+                "-ec",
+                'test ! -e "$1" && test ! -L "$1"',
+                "volume-check",
+                freshRoot,
+              ],
+              { timeout: 5000 },
+            );
+          await absentRoot();
+          assert.deepEqual(
+            await client.fixtureDownload(uuid, ["fixture-docs"], "example.txt"),
+            saved,
+          );
+          const restoreVolumeStarted = performance.now();
+          await volumeScript("restore", volumeDigest);
+          const restartPrimary = async () =>
+            docker(
+              "docker",
+              ["restart", "--time", "10", "relay-wings-contract"],
+              { timeout: 20_000 },
+            );
+          const stopped = async () => {
+            if ((await client.state(uuid)) !== "offline")
+              await client.power(uuid, "stop");
+            await until(
+              "volume fixture stopped",
+              async () => (await client.state(uuid)) === "offline",
+            );
+          };
+          const removeRuntime = async () =>
+            docker("docker", ["rm", "--", uuid], { timeout: 5000 });
+          await stopped();
+          await removeRuntime();
+          const legacyConfig = await readFile(`${config}.backup`, "utf8");
+          const originalData = `  data: ${sourceRoot}\n`;
+          assert.ok(legacyConfig.includes(originalData));
+          try {
+            await writeFile(
+              config,
+              legacyConfig
+                .replace(originalData, `  data: ${freshRoot}\n`)
+                .replace(
+                  "remote: http://127.0.0.1:13202",
+                  "remote: http://127.0.0.1:13200",
+                ),
+            );
+            await restartPrimary();
+            await until(
+              "restored isolated volume rediscovered",
+              async () => (await client.state(uuid)) === "offline",
+            );
+            assert.deepEqual(
+              await client.fixtureDownload(
+                uuid,
+                ["fixture-docs"],
+                "example.txt",
+              ),
+              checkpointFile,
+            );
+            assert.notDeepEqual(checkpointFile, saved);
+            assert.equal(await checksum(), checkpointStartup);
+            assert.deepEqual(await placement(db), expectedPlacement);
+            assert.equal((await detail(sharedKey, uuid))?.statusCode, 200);
+            assert.equal((await detail(outsiderKey, uuid))?.statusCode, 404);
+            await client.power(uuid, "start");
+            await until(
+              "workload runs on recovered mount",
+              async () => (await client.state(uuid)) === "running",
+            );
+            const mount = await docker(
+              "docker",
+              [
+                "inspect",
+                "--format",
+                '{{range .Mounts}}{{if eq .Destination "/home/container"}}{{.Source}}{{end}}{{end}}',
+                "--",
+                uuid,
+              ],
+              { timeout: 5000 },
+            );
+            assert.equal(mount.stdout.trim(), `${freshRoot}/${uuid}`);
+            const fromWorkload = await docker(
+              "docker",
+              [
+                "exec",
+                uuid,
+                "sha256sum",
+                "/home/container/fixture-docs/example.txt",
+              ],
+              { timeout: 5000 },
+            );
+            assert.equal(
+              fromWorkload.stdout.split(/\s/)[0],
+              createHash("sha256").update(checkpointFile).digest("hex"),
+            );
+            assert.equal(await checksum(second), hashes[1]);
+            console.log(
+              `::notice::Relay volume recovery backup_ms=${volumeBackupMs} restore_to_workload_read_ms=${Math.round(performance.now() - restoreVolumeStarted)} corrupt_rejected=true`,
+            );
+            await stopped();
+            await removeRuntime();
+          } finally {
+            await writeFile(config, legacyConfig);
+            await restartPrimary();
+          }
+          await until(
+            "source volume rediscovered after isolated rehearsal",
+            async () => (await client.state(uuid)) === "offline",
+          );
+          assert.deepEqual(
+            await client.fixtureDownload(uuid, ["fixture-docs"], "example.txt"),
+            saved,
           );
         } finally {
           await copyFile(`${config}.backup`, config);
