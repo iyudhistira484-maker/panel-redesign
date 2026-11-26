@@ -112,3 +112,40 @@ export function joinFixtureMumble(port: number, username: string) {
     },
   );
 }
+
+// No client is replaced after a failed probe. Check both sessions before,
+// during and after the control-plane operation, including an in-flight probe.
+export async function observeMumbleSessions(
+  sessions: readonly { probe: () => Promise<void> }[],
+  operation: () => Promise<void>,
+) {
+  assert.equal(sessions.length, 2);
+  const check = async () => {
+    await Promise.all(sessions.map((session) => session.probe()));
+  };
+  await check();
+  let stopped = false;
+  let samples = 0;
+  const monitoring = (async () => {
+    try {
+      do {
+        await check();
+        samples++;
+        if (!stopped) await new Promise((resolve) => setTimeout(resolve, 250));
+      } while (!stopped);
+      return { ok: true } as const;
+    } catch (error) {
+      return { ok: false, error } as const;
+    }
+  })();
+  try {
+    await operation();
+  } finally {
+    stopped = true;
+    await monitoring;
+  }
+  const result = await monitoring;
+  if (!result.ok) throw result.error;
+  await check();
+  return { samples };
+}

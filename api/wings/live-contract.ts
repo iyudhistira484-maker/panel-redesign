@@ -5,7 +5,10 @@ import { execFile } from "node:child_process";
 import { createSocket } from "node:dgram";
 import { connect as connectTls } from "node:tls";
 import { promisify } from "node:util";
-import { joinFixtureMumble } from "./mumble-fixture-client";
+import {
+  joinFixtureMumble,
+  observeMumbleSessions,
+} from "./mumble-fixture-client";
 import { WingsSocket } from "./socket";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -745,9 +748,7 @@ async function main() {
         try {
           const second = await joinFixtureMumble(voicePort, "relay-ci-beta");
           try {
-            await Promise.all([first.probe(), second.probe()]);
-            await assertVoiceEndpoint();
-            await Promise.all([first.probe(), second.probe()]);
+            await observeMumbleSessions([first, second], assertVoiceEndpoint);
           } finally {
             second.close();
           }
