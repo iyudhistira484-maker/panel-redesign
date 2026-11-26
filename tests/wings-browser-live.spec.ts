@@ -245,6 +245,45 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       })
     ).status(),
   ).toBe(409);
+  const rejectedUploads = [
+    {
+      name: "../upload-traversal.txt",
+      content: uploadedBytes.toString("base64"),
+    },
+    {
+      name: "upload-invalid-utf8.txt",
+      content: Buffer.from([0xc3, 0x28]).toString("base64"),
+    },
+    {
+      name: "upload-too-large.txt",
+      content: Buffer.alloc(16385, 65).toString("base64"),
+    },
+    { name: "upload-noncanonical.txt", content: "YR==" },
+  ];
+  for (const data of rejectedUploads) {
+    const rejected = await page
+      .context()
+      .request.post(uploadApi, { headers: editHeaders, data });
+    expect(rejected.status(), data.name).toBe(400);
+  }
+  const absentUpload = async (path: string) => {
+    await docker(
+      "docker",
+      [
+        "exec",
+        fixtureDaemon,
+        "sh",
+        "-ec",
+        'test ! -e "$1" && test ! -L "$1"',
+        "upload-absence",
+        `${uploadVolume}/${id}/${path}`,
+      ],
+      { timeout: 5000 },
+    );
+  };
+  await absentUpload("upload-traversal.txt");
+  for (const data of rejectedUploads.slice(1))
+    await absentUpload(`fixture-docs/${data.name}`);
   expect(await readUploaded()).toEqual(uploadedBytes);
   console.log(
     "::notice::Chromium fixture upload verified exact Wings bytes, denied collaborator and rejected overwrite",
@@ -355,6 +394,22 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
 
   await send("Start", 202);
   await verify("running");
+  const onlineUpload = await page
+    .context()
+    .request.post(uploadApi, {
+      headers: editHeaders,
+      data: {
+        name: "upload-while-running.txt",
+        content: uploadedBytes.toString("base64"),
+      },
+    });
+  expect(onlineUpload.status()).toBe(409);
+  expect((await onlineUpload.json()).error).toBe("server_not_offline");
+  await absentUpload("fixture-docs/upload-while-running.txt");
+  console.log(
+    "::notice::Chromium upload guard rejects traversal, malformed content, oversize and running server with no created files",
+  );
+
   const schedule = page.getByRole("region", {
     name: "Jadwal backup",
     exact: true,
