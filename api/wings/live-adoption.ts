@@ -2230,6 +2230,76 @@ async function main() {
                   .statusCode,
                 404,
               );
+              // Exercise a real restore while the Relay completion endpoint is unreachable
+              // from this daemon (the disposable legacy panel does not know this backup).
+              const lostId = createdIds[2];
+              const relayRemote = await readFile(config, "utf8");
+              try {
+                await writeFile(config, legacyRemote);
+                await restart(false);
+                await client.writeFixtureText(uuid, "before callback outage\n");
+                assert.equal(
+                  (await api(reopened, "POST", `/${lostId}/restore`))
+                    .statusCode,
+                  202,
+                );
+                await until(
+                  "restore bytes despite missing Relay callback",
+                  async () =>
+                    (
+                      await client.fixtureDownload(
+                        uuid,
+                        ["fixture-docs"],
+                        "example.txt",
+                      )
+                    ).equals(checkpointBytes),
+                );
+              } finally {
+                await writeFile(config, relayRemote);
+                await restart(false);
+              }
+              const unresolved = await relayFor(node);
+              try {
+                const list = await api(unresolved, "GET");
+                assert.equal(list.statusCode, 200);
+                assert.equal(
+                  list
+                    .json()
+                    .items.find((row: { id: string }) => row.id === lostId)
+                    .state,
+                  "restoring",
+                );
+                await client.writeFixtureText(
+                  uuid,
+                  "newer bytes after callback outage\n",
+                );
+                assert.equal(
+                  (await api(unresolved, "POST", `/${lostId}/restore`))
+                    .statusCode,
+                  409,
+                );
+                assert.equal(
+                  (await api(unresolved, "DELETE", `/${lostId}`)).statusCode,
+                  409,
+                );
+                assert.deepEqual(
+                  await client.fixtureDownload(
+                    uuid,
+                    ["fixture-docs"],
+                    "example.txt",
+                  ),
+                  Buffer.from("newer bytes after callback outage\n"),
+                );
+                await client.writeFixtureText(
+                  uuid,
+                  checkpointBytes.toString("utf8"),
+                );
+                console.log(
+                  "::notice::Local backup restore callback outage: actual_bytes_restored=true receipt_survived_restart=true repeat_blocked=true newer_bytes_preserved=true",
+                );
+              } finally {
+                await unresolved.close();
+              }
               const retryId = createdIds[1];
               // Crash window: Wings removed the archive but Relay did not clear the receipt.
               await pool.execute(
