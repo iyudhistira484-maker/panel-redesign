@@ -1955,7 +1955,18 @@ async function main() {
         if ((await client.state(uuid)) !== "offline")
           throw new Error("Local backup fixture must be offline");
         backupSignal = { id: backupId, phase: "create" };
+        const legacyRemote = await readFile(config, "utf8");
+        assert.ok(legacyRemote.includes("remote: http://127.0.0.1:13202"));
         try {
+          await writeFile(
+            config,
+            legacyRemote.replace(
+              "remote: http://127.0.0.1:13202",
+              "remote: http://127.0.0.1:13200",
+            ),
+          );
+          await restart(false);
+          assert.equal(await client.state(uuid), "offline");
           const unknown = await relay.inject({
             method: "POST",
             url: `/api/remote/backups/${randomUUID()}`,
@@ -2041,7 +2052,13 @@ async function main() {
           );
         } finally {
           backupSignal = undefined;
-          await client.fixtureBackup(uuid, backupId, "delete").catch(() => {});
+          try {
+            await client.fixtureBackup(uuid, backupId, "delete");
+          } catch {
+            /* Runner teardown is the fallback for an incomplete fixture. */
+          }
+          await writeFile(config, legacyRemote);
+          await restart(false);
         }
         const pilotPayload = process.env.RELAY_OFFHOST_EXPORT
           ? await docker(
