@@ -331,6 +331,7 @@ async function main() {
     };
     const retained = "stored before reinstall\n";
     if (runtimeProfile) {
+      testClientAddress = "127.0.0.6";
       const additional = await add("allocations", {
         nodeId,
         ip: "127.0.0.1",
@@ -425,6 +426,7 @@ async function main() {
     assert.equal((await remote(`servers/${uuid}`)).statusCode, 404);
     const after = await remote("servers?page=0&per_page=50");
     assert.deepEqual(after.json().data, []);
+    testClientAddress = "127.0.0.1";
     for (const [index, document] of reviewedHttpEggs.entries()) {
       const eggId = await add("eggs", { nestId, document });
       const attachment = await admin("GET", `eggs/${eggId}/document`);
