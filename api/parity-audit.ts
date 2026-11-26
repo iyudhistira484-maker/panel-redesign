@@ -3,6 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import Fastify from "fastify";
 import { createPool } from "mysql2/promise";
 import { registerApplicationInventory } from "./application-compat";
+import { registerClientSshKeys } from "./client-ssh-keys";
 import { registerClientCompatibility } from "./client-compat";
 import { createProvisioner } from "./wings/provision";
 
@@ -36,6 +37,7 @@ async function registered(withWings: boolean) {
           origin,
         )
       : undefined;
+    registerClientSshKeys(app, pool, async () => null);
     registerClientCompatibility(
       app,
       pool,

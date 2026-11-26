@@ -26,7 +26,6 @@ import {
   startup,
 } from "./offhost-http-fixture";
 import { offhostKey } from "./offhost-keys";
-import { sftpKeyFingerprint } from "./sftp-auth";
 import { registerRemote } from "./remote";
 
 async function until(label: string, action: () => Promise<boolean>) {
@@ -1174,13 +1173,64 @@ async function main() {
           ["-q", "-t", "ed25519", "-N", "", "-f", keyPath],
           { timeout: 5000 },
         );
-        const fingerprint = sftpKeyFingerprint(
-          await readFile(`${keyPath}.pub`, "utf8"),
+        const publicKey = (await readFile(`${keyPath}.pub`, "utf8")).trim();
+        const sshKeys = "/api/client/account/ssh-keys";
+        const registerKey = (requestHeaders: Record<string, string>) =>
+          relay.inject({
+            method: "POST",
+            url: sshKeys,
+            headers: requestHeaders,
+            payload: { name: "Fixture laptop", public_key: publicKey },
+          });
+        const removeKey = (
+          requestHeaders: Record<string, string>,
+          fingerprint: string,
+        ) =>
+          relay.inject({
+            method: "POST",
+            url: `${sshKeys}/remove`,
+            headers: requestHeaders,
+            payload: { fingerprint },
+          });
+        const delegateHeaders = { ...headers, ...collaborator };
+        assert.equal(
+          (
+            await registerKey({
+              ...headers,
+              authorization: `Bearer ${sharedKey}`,
+            })
+          ).statusCode,
+          401,
         );
-        assert.ok(fingerprint);
-        await pool.execute(
-          "INSERT INTO compat_sftp_keys (fingerprint,user_id) VALUES (?,?)",
-          [fingerprint, delegate.uuid],
+        assert.equal(
+          (
+            await registerKey({
+              ...delegateHeaders,
+              origin: "https://foreign.example.test",
+            })
+          ).statusCode,
+          403,
+        );
+        const saved = await registerKey(delegateHeaders);
+        assert.equal(saved.statusCode, 200);
+        const { fingerprint } = saved.json().attributes;
+        assert.match(fingerprint, /^SHA256:[A-Za-z0-9+/]{43}$/);
+        assert.equal((await registerKey(delegateHeaders)).statusCode, 409);
+        assert.deepEqual(
+          (
+            await relay.inject({ url: sshKeys, headers: delegateHeaders })
+          ).json().data,
+          [saved.json()],
+        );
+        assert.deepEqual(
+          (await relay.inject({ url: sshKeys, headers: ownerSession })).json()
+            .data,
+          [],
+        );
+        assert.equal(
+          (await removeKey({ ...headers, ...ownerSession }, fingerprint))
+            .statusCode,
+          204,
         );
         const keySftp = () =>
           docker(
@@ -1241,9 +1291,16 @@ async function main() {
           keySftp(),
           "A revoked grant must deny new SFTP sessions",
         );
-        await pool.execute("DELETE FROM compat_sftp_keys WHERE fingerprint=?", [
-          fingerprint,
-        ]);
+        assert.equal(
+          (await removeKey(delegateHeaders, fingerprint)).statusCode,
+          204,
+        );
+        assert.deepEqual(
+          (
+            await relay.inject({ url: sshKeys, headers: delegateHeaders })
+          ).json().data,
+          [],
+        );
       } finally {
         await rm(sftpWork, { recursive: true, force: true });
       }

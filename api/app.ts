@@ -1,4 +1,5 @@
 import { registerApplicationInventory } from "./application-compat";
+import { registerClientSshKeys } from "./client-ssh-keys";
 import { registerClientCompatibility } from "./client-compat";
 import {
   createFixtureReceiver,
@@ -337,6 +338,11 @@ export async function createApp({
       ? { id: u.id, admin: !!u.is_admin, channel: "session" }
       : null;
   }
+  registerClientSshKeys(app, pool, async (req) => {
+    if (req.headers.authorization !== undefined) return null;
+    const principal = await actor(req.cookies[sessionCookie], undefined);
+    return principal?.channel === "session" ? principal.id : null;
+  });
   registerClientCompatibility(
     app,
     pool,

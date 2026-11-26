@@ -4,7 +4,7 @@ Baseline: Panel Pterodactyl v1.15.2 inventories. Generated from Relay route regi
 
 ## client
 
-69 upstream entries: **14 registered**, **0 disposable Wings only**, **55 not registered**.
+69 upstream entries: **17 registered**, **0 disposable Wings only**, **52 not registered**.
 
 | Method | Upstream path | Relay registration |
 | --- | --- | --- |
@@ -20,9 +20,9 @@ Baseline: Panel Pterodactyl v1.15.2 inventories. Generated from Relay route regi
 | GET | `/account/api-keys` | Not registered |
 | POST | `/account/api-keys` | Not registered |
 | DELETE | `/account/api-keys/{identifier}` | Not registered |
-| GET | `/account/ssh-keys` | Not registered |
-| POST | `/account/ssh-keys` | Not registered |
-| POST | `/account/ssh-keys/remove` | Not registered |
+| GET | `/account/ssh-keys` | Registered |
+| POST | `/account/ssh-keys` | Registered |
+| POST | `/account/ssh-keys/remove` | Registered |
 | GET | `/servers/{server}` | Registered |
 | GET | `/servers/{server}/websocket` | Registered |
 | GET | `/servers/{server}/resources` | Registered |
