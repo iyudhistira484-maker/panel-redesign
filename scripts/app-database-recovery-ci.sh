@@ -14,7 +14,7 @@ trap 'rm -rf -- "$work"' EXIT
 
 root() {
   local container=$1; shift
-  docker exec -i "$container" sh -ec 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot "$@"' sh "$@"
+  docker exec -i "$container" sh -ec 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot --default-character-set=utf8mb4 "$@"' sh "$@"
 }
 app() {
   local container=$1; shift
@@ -47,6 +47,7 @@ CREATE USER 'fixture_app_runtime'@'%' IDENTIFIED BY 'disposable-app-runtime';
 GRANT ALL PRIVILEGES ON relay_app_recovery.* TO 'fixture_app_restore'@'localhost';
 SQL
 snapshot='SELECT id,balance,HEX(label) FROM accounts ORDER BY id; SELECT id,account_id,amount,HEX(payload),JSON_UNQUOTE(JSON_EXTRACT(metadata,"$.reason")) FROM ledger ORDER BY id;'
+[[ "$(reader -NBr relay_app_source -e 'SELECT HEX(label) FROM accounts WHERE id=1')" == 4B6F706920E280A2205375726162617961 ]]
 reader -NBr relay_app_source -e "$snapshot" >"$work/checkpoint.rows"
 if reader relay_app_source -e 'UPDATE accounts SET balance=0' >"$work/unexpected" 2>&1; then echo '::error::Backup reader unexpectedly has write access'; exit 1; fi
 if app "$service" disposable-app-restore -ufixture_app_restore relay_app_source -e 'SELECT id FROM accounts' >"$work/unexpected" 2>&1; then echo '::error::Restore identity can read the source'; exit 1; fi
