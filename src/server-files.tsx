@@ -29,6 +29,81 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
   const [copyStatus, setCopyStatus] = useState<
     "done" | "moved" | "renamed" | "rejected" | "unknown" | null
   >(null);
+  const [archive, setArchive] = useState<File | null>(null);
+  const [archiveStatus, setArchiveStatus] = useState<
+    | { kind: "invalid" | "unknown" | "rejected" }
+    | { kind: "done"; directory: string }
+    | null
+  >(null);
+  const archiveInput = useRef<HTMLInputElement>(null);
+  async function extractArchive() {
+    if (!archive || busy) return;
+    setArchiveStatus(null);
+    if (
+      !archive.name.endsWith(".gz") ||
+      archive.size > 16512 ||
+      archive.size === 0
+    ) {
+      setArchiveStatus({ kind: "invalid" });
+      return;
+    }
+    setBusy(true);
+    try {
+      const bytes = new Uint8Array(await archive.arrayBuffer());
+      const reply = await fetch(
+        `/api/v1/servers/${encodeURIComponent(id)}/files/gunzip-fixture`,
+        {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "content-type": "application/json",
+            "x-relay-request": "1",
+          },
+          body: JSON.stringify({
+            content: btoa(String.fromCharCode(...bytes)),
+          }),
+          signal: AbortSignal.timeout(30000),
+        },
+      );
+      if (reply.status === 400) {
+        setArchiveStatus({ kind: "invalid" });
+        return;
+      }
+      if (reply.status === 409) {
+        setArchiveStatus({ kind: "rejected" });
+        return;
+      }
+      if (reply.status !== 201) throw new Error("Extraction unverified");
+      const result = (await reply.json()) as {
+        directory: string;
+        name: string;
+        size: number;
+      };
+      if (
+        !/^\/fixture-docs\/extract-[0-9a-f]{32}$/.test(result.directory) ||
+        result.name !== "extracted.txt" ||
+        !Number.isSafeInteger(result.size) ||
+        result.size < 0 ||
+        result.size > 16384
+      )
+        throw new Error("Extraction unverified");
+      const name = result.directory.slice("/fixture-docs/".length);
+      setItems(
+        (current) =>
+          current &&
+          [...current, { name, directory: true, size: 0 }].sort((a, b) =>
+            a.name.localeCompare(b.name),
+          ),
+      );
+      setArchiveStatus({ kind: "done", directory: result.directory });
+      setArchive(null);
+      if (archiveInput.current) archiveInput.current.value = "";
+    } catch {
+      setArchiveStatus({ kind: "unknown" });
+    } finally {
+      setBusy(false);
+    }
+  }
   async function copyFile(rename = false, moved = false) {
     if (
       busy ||
@@ -243,7 +318,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
   const [downloadError, setDownloadError] = useState(false);
   const pendingDownload = useRef<AbortController | null>(null);
   useEffect(() => () => pendingDownload.current?.abort(), []);
-  async function downloadFile(name: string) {
+  async function downloadFile(name: string, gzip = false) {
     const controller = new AbortController();
     pendingDownload.current = controller;
     setBusy(true);
@@ -255,7 +330,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
         download: "1",
       });
       const response = await fetch(
-        `/api/v1/servers/${encodeURIComponent(id)}/files?${query}`,
+        `/api/v1/servers/${encodeURIComponent(id)}/files${gzip ? `/gzip-fixture?${new URLSearchParams({ name })}` : `?${query}`}`,
         {
           cache: "no-store",
           credentials: "same-origin",
@@ -272,11 +347,12 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
         throw new Error("Download unavailable");
       const blob = await response.blob();
       if (controller.signal.aborted) return;
-      if (blob.size > 16384) throw new Error("Invalid attachment");
+      if (blob.size > (gzip ? 16512 : 16384))
+        throw new Error("Invalid attachment");
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = name;
+      link.download = gzip ? `${name}.gz` : name;
       link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch {
@@ -472,6 +548,59 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
                       : en
                         ? "Operation not confirmed. Check the file list before retrying."
                         : "Operasi belum terkonfirmasi. Periksa daftar file sebelum mencoba lagi."}
+            </output>
+          )}
+        </div>
+      )}
+      {path.join("/") === "fixture-docs" && items && (
+        <div>
+          <p>
+            {en
+              ? "Gzip supports one UTF-8 text file up to 16 KiB. Extraction requires an offline server and creates a new folder."
+              : "Gzip mendukung satu file teks UTF-8 hingga 16 KiB. Ekstraksi membutuhkan server offline dan membuat folder baru."}
+          </p>
+          <Button
+            disabled={busy || !copySource}
+            onClick={() => void downloadFile(copySource, true)}
+          >
+            {en ? "Download as gzip" : "Unduh sebagai gzip"}
+          </Button>{" "}
+          <label>
+            {en ? "Gzip file to extract" : "File gzip untuk diekstrak"}{" "}
+            <input
+              ref={archiveInput}
+              type="file"
+              accept=".gz,application/gzip"
+              disabled={busy}
+              onChange={(event) => {
+                setArchive(event.currentTarget.files?.[0] ?? null);
+                setArchiveStatus(null);
+              }}
+            />
+          </label>{" "}
+          <Button
+            disabled={busy || !archive}
+            onClick={() => void extractArchive()}
+          >
+            {en ? "Extract gzip to new folder" : "Ekstrak gzip ke folder baru"}
+          </Button>
+          {archiveStatus && (
+            <output>
+              {archiveStatus.kind === "done"
+                ? en
+                  ? `Extracted and verified: ${archiveStatus.directory}/extracted.txt`
+                  : `Ekstraksi terverifikasi: ${archiveStatus.directory}/extracted.txt`
+                : archiveStatus.kind === "invalid"
+                  ? en
+                    ? "Invalid gzip text file."
+                    : "File gzip teks tidak valid."
+                  : archiveStatus.kind === "rejected"
+                    ? en
+                      ? "Extraction requires an offline server."
+                      : "Ekstraksi membutuhkan server offline."
+                    : en
+                      ? "Extraction not confirmed. Check the file list before retrying."
+                      : "Ekstraksi belum terkonfirmasi. Periksa daftar file sebelum mencoba lagi."}
             </output>
           )}
         </div>

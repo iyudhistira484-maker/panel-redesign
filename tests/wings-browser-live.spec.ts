@@ -404,25 +404,49 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   console.log(
     "::notice::Chromium fixture move verified destination bytes, source absence and relocated receipt",
   );
-  const gzip = await page
-    .context()
-    .request.get(`${fileApi}/gzip-fixture`, { params: { name: uploadName } });
-  expect(gzip.status()).toBe(200);
-  expect(gzip.headers()["content-type"]).toBe("application/gzip");
+  await page.getByLabel("File teks sumber").selectOption(uploadName);
+  const gzipDownload = page.waitForEvent("download");
+  const gzipResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname.endsWith("/gzip-fixture"),
+  );
+  await page.getByRole("button", { name: "Unduh sebagai gzip" }).click();
+  expect((await gzipResponse).headers()["content-type"]).toBe(
+    "application/gzip",
+  );
+  const compressed = await gzipDownload;
+  expect(compressed.suggestedFilename()).toBe(`${uploadName}.gz`);
+  const compressedPath = await compressed.path();
+  assert.ok(compressedPath);
   const unpack = (content: string) =>
-    page.context().request.post(`${fileApi}/gunzip-fixture`, {
-      headers: editHeaders,
-      data: { content },
+    page
+      .context()
+      .request.post(`${fileApi}/gunzip-fixture`, {
+        headers: editHeaders,
+        data: { content },
+      });
+  await page
+    .getByLabel("File gzip untuk diekstrak")
+    .setInputFiles({
+      name: `${uploadName}.gz`,
+      mimeType: "application/gzip",
+      buffer: await readFile(compressedPath),
     });
-  const gzipResult = await unpack((await gzip.body()).toString("base64"));
+  const extractResponse = page.waitForResponse(
+    (response) => response.url() === `${fileApi}/gunzip-fixture`,
+  );
+  await page
+    .getByRole("button", { name: "Ekstrak gzip ke folder baru" })
+    .click();
+  const gzipResult = await extractResponse;
   expect(gzipResult.status()).toBe(201);
-  const result = (await gzipResult.json()) as {
-    directory: string;
-    name: string;
-    size: number;
-  };
-  expect(result.directory).toMatch(/^\/fixture-docs\/extract-[0-9a-f]{32}$/);
-  expect(result.name).toBe("extracted.txt");
+  await expect(
+    page.getByText("Ekstraksi terverifikasi:", { exact: false }),
+  ).toBeVisible();
+  const outcome = await page
+    .getByText("Ekstraksi terverifikasi:", { exact: false })
+    .textContent();
+  const directory = outcome?.match(/\/fixture-docs\/extract-[0-9a-f]{32}/)?.[0];
+  assert.ok(directory);
   const actualExtract = (
     await docker(
       "docker",
@@ -430,13 +454,12 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
         "exec",
         fixtureDaemon,
         "cat",
-        `${uploadVolume}/${id}${result.directory}/${result.name}`,
+        `${uploadVolume}/${id}${directory}/extracted.txt`,
       ],
       { encoding: "buffer", timeout: 5000 },
     )
   ).stdout;
   expect(actualExtract).toEqual(uploadedBytes);
-  expect(result.size).toBe(uploadedBytes.length);
   const entries = async () =>
     (
       await docker(
