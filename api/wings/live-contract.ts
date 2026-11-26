@@ -728,7 +728,8 @@ async function main() {
               try {
                 assert.equal(response.length, 24);
                 assert.deepEqual(response.subarray(4, 12), ping.subarray(4));
-                assert.equal(response.readUInt32BE(16), 37);
+                assert.equal(response.readUInt32BE(12), 2);
+              assert.equal(response.readUInt32BE(16), 37);
               } catch (error) {
                 complete(error as Error);
                 return;
