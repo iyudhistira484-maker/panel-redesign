@@ -2,6 +2,7 @@ import { upstreamProfiles, mumbleEgg } from "../eggs/upstream-workload";
 import { reviewedHttpEggs } from "../eggs/reviewed-workload";
 import { readFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
+import { connect as connectTls } from "node:tls";
 import { promisify } from "node:util";
 import { WingsSocket } from "./socket";
 import assert from "node:assert/strict";
@@ -639,6 +640,140 @@ async function main() {
       "upstream Mumble offline",
       async () => (await client.state(voice)) === "offline",
     );
+    if (runtimeProfile) {
+      testClientAddress = "127.0.0.7";
+      const voicePower = (action: "start" | "stop") =>
+        admin("POST", `servers/${voice}/power`, { action, confirm: true });
+      const assertVoiceEndpoint = async () => {
+        const { stdout } = await docker(
+          "docker",
+          [
+            "inspect",
+            "--format",
+            "{{json .Config.Image}} {{json .HostConfig.PortBindings}}",
+            voice,
+          ],
+          { timeout: 5000 },
+        );
+        const boundary = stdout.indexOf(" ");
+        assert.equal(
+          JSON.parse(stdout.slice(0, boundary)),
+          "ghcr.io/parkervcp/yolks:voice_mumble",
+        );
+        const bindings = JSON.parse(stdout.slice(boundary + 1));
+        const binding = bindings[`${voicePort}/tcp`] as {
+          HostIp: string;
+          HostPort: string;
+        }[];
+        assert.equal(binding.length, 1);
+        assert.match(
+          binding[0].HostIp,
+          /^(?:127\.|172\.(?:1[6-9]|2[0-9]|3[01])\.)/,
+        );
+        assert.equal(binding[0].HostPort, String(voicePort));
+        // The disposable Mumble server generates a self-signed TLS certificate.
+        // A Version frame (type 0) distinguishes it from a generic TCP listener.
+        await new Promise<void>((resolve, reject) => {
+          const socket = connectTls({
+            host: binding[0].HostIp,
+            port: voicePort,
+            rejectUnauthorized: false,
+          });
+          let header = Buffer.alloc(0);
+          socket.setTimeout(4000, () =>
+            socket.destroy(new Error("Mumble Version frame timed out")),
+          );
+          socket.on("error", reject);
+          socket.on("close", () =>
+            reject(new Error("Mumble closed before Version frame")),
+          );
+          socket.on("data", (chunk) => {
+            header = Buffer.concat([
+              header,
+              chunk.subarray(0, 6 - header.length),
+            ]);
+            if (header.length < 6) return;
+            const size = header.readUInt32BE(2);
+            if (header.readUInt16BE(0) !== 0 || size === 0 || size > 65536) {
+              socket.destroy(new Error("Invalid Mumble Version frame"));
+              return;
+            }
+            resolve();
+            socket.destroy();
+          });
+        });
+      };
+      // Establish protocol readiness on a normal restart before comparing the
+      // exact offline application database bytes across the reinstall callback.
+      assert.equal((await voicePower("start")).statusCode, 202);
+      await until(
+        "Mumble running before reinstall",
+        async () => (await client.state(voice)) === "running",
+      );
+      await assertVoiceEndpoint();
+      assert.equal((await voicePower("stop")).statusCode, 202);
+      await until(
+        "Mumble offline before reinstall",
+        async () => (await client.state(voice)) === "offline",
+      );
+      const data = process.env.RELAY_WINGS_CONTRACT_DATA ?? "";
+      assert.match(data, /^\/tmp\/tmp\.[A-Za-z0-9]+\/data\/volumes$/);
+      const dbDigest = async () => {
+        const { stdout } = await docker(
+          "sudo",
+          ["-n", "sha256sum", `${data}/${voice}/murmur.sqlite`],
+          { timeout: 5000 },
+        );
+        const digest = stdout.split(" ")[0];
+        assert.match(digest, /^[a-f0-9]{64}$/);
+        return digest;
+      };
+      const beforeReinstall = await dbDigest();
+      const reinstalled = await admin("POST", `servers/${voice}/reinstall`, {
+        confirm: true,
+      });
+      assert.equal(reinstalled.statusCode, 202, reinstalled.body);
+      await until(
+        "Mumble reinstall callback",
+        async () => {
+          const [record] = await rows<{ phase: string; completed: number }>(
+            pool,
+            `SELECT p.phase,(SELECT COUNT(*) FROM audit_log WHERE subject_id=p.server_id AND event='wings.installed') AS completed FROM wings_provisions p WHERE p.server_id=?`,
+            [voice],
+          );
+          assert.notEqual(record?.phase, "install_failed");
+          return (
+            record?.phase === "installed" && Number(record.completed) === 2
+          );
+        },
+        160,
+      );
+      assert.equal(await dbDigest(), beforeReinstall);
+      assert.equal((await voicePower("start")).statusCode, 202);
+      await until(
+        "Mumble running after reinstall",
+        async () => (await client.state(voice)) === "running",
+      );
+      await assertVoiceEndpoint();
+      assert.match(
+        (
+          await docker(
+            "docker",
+            ["exec", voice, "cat", "/home/container/murmur.ini"],
+            { timeout: 4000 },
+          )
+        ).stdout,
+        /^users\s*=\s*37$/m,
+      );
+      assert.equal((await voicePower("stop")).statusCode, 202);
+      await until(
+        "Mumble offline after reinstall",
+        async () => (await client.state(voice)) === "offline",
+      );
+      console.log(
+        "::notice::Mumble lifecycle approved_image=true tls_version_frame_before_after=true reinstall_callback=true sqlite_bytes_preserved=true max_users_preserved=true",
+      );
+    }
     assert.equal(
       (await admin("POST", `servers/${voice}/delete`, { confirm: true }))
         .statusCode,
