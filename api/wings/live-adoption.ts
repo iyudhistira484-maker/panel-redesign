@@ -5,7 +5,7 @@ import { stagingMail } from "../staging-mail";
 import { applyLegacyFixture } from "../import/legacy-fixture-apply";
 import { readLegacySnapshot } from "../import/legacy-snapshot";
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
@@ -1275,26 +1275,74 @@ async function main() {
             delegate.uuid,
           ],
         );
+        const active = spawn(
+          "sftp",
+          [
+            "-q",
+            "-b",
+            "-",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "UserKnownHostsFile=known_hosts",
+            "-i",
+            keyPath,
+            "-P",
+            "12022",
+            `${delegate.username}.${uuid.slice(0, 8)}@127.0.0.1`,
+          ],
+          { cwd: sftpWork, stdio: ["pipe", "ignore", "ignore"] },
+        );
+        const finished = new Promise<void>((resolve, reject) => {
+          active.once("close", () => resolve());
+          active.once("error", reject);
+        });
+        // Avoid leaking session details if OpenSSH closes early.
+        active.stdin.on("error", () => {});
         try {
-          await keySftp();
-          assert.deepEqual(
-            await readFile(`${sftpWork}/delegated.txt`),
-            await client.fixtureDownload(uuid, ["fixture-docs"], "example.txt"),
+          const expected = await client.fixtureDownload(
+            uuid,
+            ["fixture-docs"],
+            "example.txt",
+          );
+          const observeDownload = async (file: string) => {
+            active.stdin.write(`get fixture-docs/example.txt ${file}\n`);
+            await until(`active SFTP read ${file}`, async () =>
+              (await readFile(`${sftpWork}/${file}`)).equals(expected),
+            );
+          };
+          await observeDownload("before-revoke.txt");
+          await pool.execute(
+            "UPDATE server_grants SET permissions=? WHERE server_id=? AND user_id=?",
+            [JSON.stringify(original), uuid, delegate.uuid],
+          );
+          await assert.rejects(
+            keySftp(),
+            "A revoked grant must deny new SFTP sessions",
+          );
+          // Upstream Wings caches permissions on the authorized SSH connection.
+          // This records the blocker; it does not treat revocation as implemented.
+          await observeDownload("after-revoke.txt");
+          console.log(
+            "::notice::SFTP revocation new_session_denied=true active_session_retained=true production_blocked=true",
+          );
+          assert.equal(
+            (await removeKey(delegateHeaders, fingerprint)).statusCode,
+            204,
           );
         } finally {
+          active.stdin.end("bye\n");
+          active.kill();
+          await finished;
           await pool.execute(
             "UPDATE server_grants SET permissions=? WHERE server_id=? AND user_id=?",
             [JSON.stringify(original), uuid, delegate.uuid],
           );
         }
-        await assert.rejects(
-          keySftp(),
-          "A revoked grant must deny new SFTP sessions",
-        );
-        assert.equal(
-          (await removeKey(delegateHeaders, fingerprint)).statusCode,
-          204,
-        );
         assert.deepEqual(
           (
             await relay.inject({ url: sshKeys, headers: delegateHeaders })
