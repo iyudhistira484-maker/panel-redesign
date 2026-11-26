@@ -127,7 +127,21 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   const initialVersion = createHash("sha256")
     .update("<strong>fixture preview</strong>\n")
     .digest("hex");
+  const uploadApi = `${fileApi}/upload-fixture`;
+  const uploadedBytes = Buffer.from("Browser upload: å\r\n");
+  const uploadName = "browser-upload.txt";
   await open("collaborator@example.test");
+  expect(await page.getByLabel("File teks untuk diunggah").count()).toBe(0);
+  expect(
+    (
+      await page
+        .context()
+        .request.post(uploadApi, {
+          headers: editHeaders,
+          data: { name: uploadName, content: uploadedBytes.toString("base64") },
+        })
+    ).status(),
+  ).toBe(403);
   expect((await page.context().request.get(fileApi)).status()).toBe(404);
   expect(
     (
@@ -192,6 +206,36 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   ).toBe(404);
   await files.getByRole("button", { name: "fixture-docs" }).click();
   await expect(files).toContainText("example.txt");
+  const input = page.getByLabel("File teks untuk diunggah");
+  await input.setInputFiles({
+    name: uploadName,
+    mimeType: "text/plain",
+    buffer: uploadedBytes,
+  });
+  const uploadReply = page.waitForResponse((r) => r.url() === uploadApi);
+  await page.getByRole("button", { name: "Unggah file baru" }).click();
+  expect((await uploadReply).status()).toBe(201);
+  await expect(page.getByText("Unggahan terverifikasi.")).toBeVisible();
+  await files.getByRole("button", { name: uploadName, exact: true }).click();
+  const uploadDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Unduh file teks" }).click();
+  const uploadedPath = await (await uploadDownload).path();
+  assert.ok(uploadedPath);
+  expect(await readFile(uploadedPath)).toEqual(uploadedBytes);
+  expect(
+    (
+      await page
+        .context()
+        .request.post(uploadApi, {
+          headers: editHeaders,
+          data: {
+            name: uploadName,
+            content: Buffer.from("overwrite").toString("base64"),
+          },
+        })
+    ).status(),
+  ).toBe(409);
+
   await files.getByRole("button", { name: "example.txt", exact: true }).click();
   const preview = page.getByRole("region", { name: "Pratinjau teks" });
   await expect(preview.locator("pre")).toHaveText(

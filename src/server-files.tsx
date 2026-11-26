@@ -19,6 +19,60 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
   const [saveStatus, setSaveStatus] = useState<
     "saved" | "conflict" | "error" | null
   >(null);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadStatus, setUploadStatus] = useState<
+    "uploaded" | "conflict" | "invalid" | "unknown" | null
+  >(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  async function upload() {
+    if (!uploadFile || busy) return;
+    setUploadStatus(null);
+    if (
+      !/^[A-Za-z0-9_][A-Za-z0-9_. -]{0,79}$/.test(uploadFile.name) ||
+      !uploadFile.name.endsWith(".txt") ||
+      uploadFile.size > 16384
+    ) {
+      setUploadStatus("invalid");
+      return;
+    }
+    setBusy(true);
+    try {
+      const bytes = new Uint8Array(await uploadFile.arrayBuffer());
+      const response = await fetch(
+        `/api/v1/servers/${encodeURIComponent(id)}/files/upload-fixture`,
+        {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "content-type": "application/json",
+            "x-relay-request": "1",
+          },
+          signal: AbortSignal.timeout(30000),
+          body: JSON.stringify({
+            name: uploadFile.name,
+            content: btoa(String.fromCharCode(...bytes)),
+          }),
+        },
+      );
+      if (response.status === 409) {
+        setUploadStatus("conflict");
+        return;
+      }
+      if (response.status === 400) {
+        setUploadStatus("invalid");
+        return;
+      }
+      if (response.status !== 201) throw new Error("Upload unverified");
+      setUploadFile(null);
+      if (fileInput.current) fileInput.current.value = "";
+      await load(["fixture-docs"]);
+      setUploadStatus("uploaded");
+    } catch {
+      setUploadStatus("unknown");
+    } finally {
+      setBusy(false);
+    }
+  }
   async function save() {
     if (
       !preview ||
@@ -190,7 +244,48 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
   }
   return (
     <section aria-busy={busy}>
-      <h3>{en ? "Server files (read-only)" : "File server (baca-saja)"}</h3>
+      <h3>{en ? "Staging server files" : "File server staging"}</h3>
+      {path.length === 1 && path[0] === "fixture-docs" && (
+        <div>
+          <label>
+            {en ? "Text file to upload" : "File teks untuk diunggah"}{" "}
+            <input
+              ref={fileInput}
+              type="file"
+              accept=".txt"
+              disabled={busy}
+              onChange={(event) => {
+                setUploadFile(event.currentTarget.files?.[0] ?? null);
+                setUploadStatus(null);
+              }}
+            />
+          </label>
+          <p>
+            {en
+              ? "Offline server only. New UTF-8 .txt files up to 16 KiB; no overwrite."
+              : "Server harus offline. File .txt UTF-8 baru hingga 16 KiB; tidak menimpa file lama."}
+          </p>
+          <Button disabled={!uploadFile || busy} onClick={() => void upload()}>
+            {en ? "Upload new file" : "Unggah file baru"}
+          </Button>
+          {uploadStatus && (
+            <output>
+              {
+                {
+                  uploaded: en ? "Upload verified." : "Unggahan terverifikasi.",
+                  conflict: en
+                    ? "File already exists or server is not offline."
+                    : "File sudah ada atau server tidak offline.",
+                  invalid: en ? "Invalid text file." : "File teks tidak valid.",
+                  unknown: en
+                    ? "Upload not confirmed. Check the file list before retrying."
+                    : "Unggahan belum terkonfirmasi. Periksa daftar file sebelum mencoba lagi.",
+                }[uploadStatus]
+              }
+            </output>
+          )}
+        </div>
+      )}
       <Button onClick={() => void load([])} disabled={busy}>
         {en ? "Open file list" : "Buka daftar file"}
       </Button>

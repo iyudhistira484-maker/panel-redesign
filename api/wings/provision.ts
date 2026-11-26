@@ -711,6 +711,16 @@ export function createProvisioner(
         bytes: Buffer,
         expires: number,
       ) {
+        const allowed = async () => {
+          if (actor.channel !== "session") return uploadAllowed(id, actor);
+          const server = await load(pool, id);
+          return (
+            !!server &&
+            server.ownerId === actor.id &&
+            eligible(server) &&
+            server.phase === "installed"
+          );
+        };
         return exclusive(id, async () => {
           if (
             !fixturePathSegment(name) ||
@@ -727,7 +737,7 @@ export function createProvisioner(
           } catch {
             throw new ProvisionError(400, "invalid_upload");
           }
-          if (!(await uploadAllowed(id, actor)))
+          if (!(await allowed()))
             throw new ProvisionError(403, "upload_scope_required");
           if ((await client.state(id)) !== "offline")
             throw new ProvisionError(409, "server_not_offline");
@@ -735,7 +745,7 @@ export function createProvisioner(
             throw new ProvisionError(409, "file_exists");
           if (
             expires <= Date.now() ||
-            !(await uploadAllowed(id, actor)) ||
+            !(await allowed()) ||
             expires <= Date.now()
           )
             throw new ProvisionError(403, "upload_ticket_expired_or_revoked");
