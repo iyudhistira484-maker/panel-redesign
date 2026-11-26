@@ -23,7 +23,7 @@ export type FixtureBackupSignal = {
   checksum?: string;
   checksum_type?: string;
   size?: number;
-  parts?: { etag: string; part_number: number }[];
+  parts?: { etag: string; part_number: number }[] | null;
 };
 export type FixtureBackupCallback = (
   id: string,
@@ -153,6 +153,7 @@ export async function registerRemote(
                 checksum_type: { type: "string", maxLength: 16 },
                 size: { type: "integer", minimum: 0 },
                 parts: {
+                  nullable: true,
                   type: "array",
                   maxItems: 1,
                   items: {
