@@ -287,7 +287,10 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   await send("Stop", 202);
   await verify("offline");
 
-  const backups = page.getByRole("region", { name: "Backup lokal" });
+  const s3 = Boolean(process.env.RELAY_S3_FIXTURE_USER);
+  const backups = page.getByRole("region", {
+    name: s3 ? "Backup server" : "Backup lokal",
+  });
   await backups
     .getByRole("button", { name: "Muat backup", exact: true })
     .click();
@@ -309,11 +312,35 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       ).toBeVisible({ timeout: 300 });
     }).toPass({ timeout: 7000, intervals: [700, 1200, 2000] });
   }
-  await backups.getByRole("button", { name: "Buat backup" }).click();
+  await backups
+    .getByRole("button", {
+      name: s3 ? "Buat backup S3" : "Buat backup",
+      exact: true,
+    })
+    .click();
   await expect(backups.getByRole("status")).toContainText(
     "Permintaan diterima",
   );
   await readyBackup();
+  if (s3) {
+    await expect(backupRow).toContainText("S3");
+    const second = process.env.RELAY_BROWSER_SECOND_FIXTURE_ID ?? "";
+    assert.match(second, /^[0-9a-f-]{36}$/);
+    const downloadPath = await backupRow
+      .getByRole("link", { name: "Unduh backup" })
+      .getAttribute("href");
+    assert.ok(downloadPath);
+    expect(
+      (
+        await page
+          .context()
+          .request.get(
+            origin +
+              downloadPath.replace(`/servers/${id}/`, `/servers/${second}/`),
+          )
+      ).status(),
+    ).toBe(404);
+  }
   const archiveDownload = page.waitForEvent("download");
   await backupRow.getByRole("link", { name: "Unduh backup" }).click();
   const archive = await archiveDownload;
@@ -390,7 +417,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   await backupRow.getByRole("button", { name: "Konfirmasi" }).click();
   await expect(backups.getByText("Belum ada backup.")).toBeVisible();
   console.log(
-    "::notice::Chromium verified backup create download lock unlock restore delete and checkpoint bytes",
+    `::notice::Chromium verified ${s3 ? "S3" : "local"} backup create download lock unlock restore delete and checkpoint bytes`,
   );
 
   // Pause only the first disposable CI daemon after observing a valid state.

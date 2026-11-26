@@ -14,6 +14,7 @@ type ServerSummary = {
   name: string;
   isOwner?: boolean;
   localBackups?: boolean;
+  s3Backups?: boolean;
 };
 export function StagingServers({ locale }: { locale: Locale }) {
   const en = locale === "en";
@@ -132,7 +133,11 @@ export function StagingServers({ locale }: { locale: Locale }) {
                       <ServerAccess id={item.id} locale={locale} />
                       <ServerFiles id={item.id} locale={locale} />
                       {item.localBackups === true && (
-                        <ServerBackups id={item.id} locale={locale} />
+                        <ServerBackups
+                          id={item.id}
+                          locale={locale}
+                          s3={item.s3Backups === true}
+                        />
                       )}
                     </>
                   )}

@@ -30,6 +30,30 @@ import {
 import { offhostKey } from "./offhost-keys";
 import { registerRemote, type FixtureBackupSignal } from "./remote";
 
+function enableFixtureS3Restore(relayConfig: string) {
+  // Wings rewrites YAML on boot. Update the existing key rather than
+  // appending a second backups mapping that the decoder may shadow.
+  const allowed = /^([ ]+)restore_host_allowlist: (?:\[\]|null)$/m;
+  const backups = /^([ ]+)backups:$/m;
+  const enabled = allowed.test(relayConfig)
+    ? relayConfig.replace(allowed, "$1restore_host_allowlist: [127.0.0.1]")
+    : backups.test(relayConfig)
+      ? relayConfig.replace(
+          backups,
+          "$&\n$1  restore_host_allowlist: [127.0.0.1]",
+        )
+      : relayConfig.replace(
+          /^system:$/m,
+          "system:\n  backups:\n    restore_host_allowlist: [127.0.0.1]",
+        );
+  assert.notEqual(enabled, relayConfig);
+  assert.equal((enabled.match(/^[ ]+backups:$/gm) ?? []).length, 1);
+  assert.equal(
+    (enabled.match(/^[ ]+restore_host_allowlist:/gm) ?? []).length,
+    1,
+  );
+  return enabled;
+}
 async function until(label: string, action: () => Promise<boolean>) {
   for (let i = 0; i < 40; i++) {
     try {
@@ -1996,31 +2020,7 @@ async function main() {
             const remoteS3 = s3Fixture(pool, uuid, nodeId, s3Id);
             const relayConfig = await readFile(config, "utf8");
             try {
-              // Wings rewrites YAML on boot. Update the existing key rather than
-              // appending a second backups mapping that the decoder may shadow.
-              const allowed = /^([ ]+)restore_host_allowlist: (?:\[\]|null)$/m;
-              const backups = /^([ ]+)backups:$/m;
-              const enabled = allowed.test(relayConfig)
-                ? relayConfig.replace(
-                    allowed,
-                    "$1restore_host_allowlist: [127.0.0.1]",
-                  )
-                : backups.test(relayConfig)
-                  ? relayConfig.replace(
-                      backups,
-                      "$&\n$1  restore_host_allowlist: [127.0.0.1]",
-                    )
-                  : relayConfig.replace(
-                      /^system:$/m,
-                      "system:\n  backups:\n    restore_host_allowlist: [127.0.0.1]",
-                    );
-              assert.notEqual(enabled, relayConfig);
-              assert.equal((enabled.match(/^[ ]+backups:$/gm) ?? []).length, 1);
-              assert.equal(
-                (enabled.match(/^[ ]+restore_host_allowlist:/gm) ?? []).length,
-                1,
-              );
-              await writeFile(config, enabled);
+              await writeFile(config, enableFixtureS3Restore(relayConfig));
               await restart(false);
               assert.equal(await client.state(uuid), "offline");
               await remoteS3.initialize();
@@ -2502,6 +2502,15 @@ async function main() {
             await createReceipt();
             await createReceipt();
             assert.equal((await api(relay, "POST")).statusCode, 409);
+            if (process.env.RELAY_S3_FIXTURE_USER) {
+              const over = await relay.inject({
+                method: "POST",
+                url: apiPath,
+                headers: { ...headers, ...ownerSession },
+                payload: { adapter: "s3" },
+              });
+              assert.equal(over.statusCode, 409);
+            }
             assert.equal(
               (await api(relay, "POST", `/${durableId}/lock`, outsider))
                 .statusCode,
@@ -5427,12 +5436,15 @@ async function main() {
             browserLegacyRemote.includes("remote: http://127.0.0.1:13202"),
           );
           try {
+            const relayConfig = browserLegacyRemote.replace(
+              "remote: http://127.0.0.1:13202",
+              "remote: http://127.0.0.1:13200",
+            );
             await writeFile(
               config,
-              browserLegacyRemote.replace(
-                "remote: http://127.0.0.1:13202",
-                "remote: http://127.0.0.1:13200",
-              ),
+              process.env.RELAY_S3_FIXTURE_USER
+                ? enableFixtureS3Restore(relayConfig)
+                : relayConfig,
             );
             await restart(false);
             const run = await docker(
@@ -5446,6 +5458,7 @@ async function main() {
                 env: {
                   ...process.env,
                   RELAY_BROWSER_FIXTURE_ID: uuid,
+                  RELAY_BROWSER_SECOND_FIXTURE_ID: second,
                   RELAY_BROWSER_FIXTURE_PASSWORD: password,
                 },
                 timeout: 110_000,

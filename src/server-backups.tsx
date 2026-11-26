@@ -4,13 +4,22 @@ import { Button } from "./ui";
 
 type Receipt = {
   id: string;
+  adapter?: "wings" | "s3";
   state: string;
   locked: number;
   needsReview: number;
   sizeBytes: number | null;
 };
 type Action = "restore" | "delete";
-export function ServerBackups({ id, locale }: { id: string; locale: Locale }) {
+export function ServerBackups({
+  id,
+  locale,
+  s3 = false,
+}: {
+  id: string;
+  locale: Locale;
+  s3?: boolean;
+}) {
   const en = locale === "en";
   const base = `/api/v1/servers/${encodeURIComponent(id)}/backups`;
   const [items, setItems] = useState<Receipt[] | null>(null);
@@ -19,7 +28,7 @@ export function ServerBackups({ id, locale }: { id: string; locale: Locale }) {
   const [confirm, setConfirm] = useState<{ id: string; action: Action } | null>(
     null,
   );
-  async function run(method = "GET", suffix = "") {
+  async function run(method = "GET", suffix = "", adapter?: "s3") {
     setBusy(true);
     setMessage("");
     setConfirm(null);
@@ -27,7 +36,19 @@ export function ServerBackups({ id, locale }: { id: string; locale: Locale }) {
       const request = (method: string, path: string) =>
         fetch(base + path, {
           method,
-          headers: method === "GET" ? undefined : { "x-relay-request": "1" },
+          headers:
+            method === "GET"
+              ? undefined
+              : {
+                  "x-relay-request": "1",
+                  ...(adapter && method === "POST"
+                    ? { "content-type": "application/json" }
+                    : {}),
+                },
+          body:
+            adapter && method === "POST"
+              ? JSON.stringify({ adapter })
+              : undefined,
           cache: "no-store",
           credentials: "same-origin",
           signal: AbortSignal.timeout(15000),
@@ -81,8 +102,26 @@ export function ServerBackups({ id, locale }: { id: string; locale: Locale }) {
         deleting: "Penghapusan tertunda",
       };
   return (
-    <section aria-label={en ? "Local backups" : "Backup lokal"}>
-      <h3>{en ? "Local backups" : "Backup lokal"}</h3>
+    <section
+      aria-label={
+        s3
+          ? en
+            ? "Server backups"
+            : "Backup server"
+          : en
+            ? "Local backups"
+            : "Backup lokal"
+      }
+    >
+      <h3>
+        {s3
+          ? en
+            ? "Server backups"
+            : "Backup server"
+          : en
+            ? "Local backups"
+            : "Backup lokal"}
+      </h3>
       <Button disabled={busy} onClick={() => void run()}>
         {items
           ? en
@@ -106,6 +145,14 @@ export function ServerBackups({ id, locale }: { id: string; locale: Locale }) {
           >
             {en ? "Create backup" : "Buat backup"}
           </Button>
+          {s3 && (
+            <Button
+              disabled={busy || items.length >= 3}
+              onClick={() => void run("POST", "", "s3")}
+            >
+              {en ? "Create S3 backup" : "Buat backup S3"}
+            </Button>
+          )}
           {items.length === 0 && (
             <p>{en ? "No backups yet." : "Belum ada backup."}</p>
           )}
@@ -113,7 +160,9 @@ export function ServerBackups({ id, locale }: { id: string; locale: Locale }) {
             {items.map((item) => (
               <li key={item.id}>
                 <p>
-                  <code>{item.id}</code> · {states[item.state] ?? item.state}
+                  <code>{item.id}</code> ·{" "}
+                  {item.adapter === "s3" ? "S3" : en ? "Local" : "Lokal"} ·{" "}
+                  {states[item.state] ?? item.state}
                   {item.locked ? ` · ${en ? "Locked" : "Terkunci"}` : ""}
                 </p>
                 {item.needsReview === 1 && (

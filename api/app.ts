@@ -193,7 +193,14 @@ export async function createApp({
       : undefined;
   const localBackups =
     enableDisposableBackups && sftpAuth && wingsTestNode && catalogNodeKey
-      ? localBackupService(pool, wingsTestNode, catalogNodeKey, pepper, origin)
+      ? localBackupService(
+          pool,
+          wingsTestNode,
+          catalogNodeKey,
+          pepper,
+          origin,
+          Boolean(fixtureS3Urls),
+        )
       : undefined;
   if (enableDisposableBackups && !localBackups)
     throw new Error("Local backup API requires the disposable staging fixture");
@@ -1123,7 +1130,9 @@ export async function createApp({
         items: items.map((item) => ({
           ...item,
           isOwner: !!item.isOwner,
-          ...(localBackups && item.isOwner ? { localBackups: true } : {}),
+          ...(localBackups && item.isOwner
+            ? { localBackups: true, s3Backups: localBackups.s3Enabled }
+            : {}),
         })),
         next: result.length > 50 ? items[49].id : null,
       };
@@ -1674,7 +1683,10 @@ export async function createApp({
           receiver?.onTransfer,
           sftpAuth,
           backupCallback,
-          fixtureS3Urls,
+          fixtureS3Urls &&
+            (async (id, size) =>
+              (await localBackups?.urls(id, size)) ??
+              (await fixtureS3Urls(id, size))),
         ),
       { prefix: "/api/remote" },
     );

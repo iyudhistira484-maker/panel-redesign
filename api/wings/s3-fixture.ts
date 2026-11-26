@@ -6,6 +6,7 @@ import {
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
   GetObjectCommand,
+  HeadBucketCommand,
   ListMultipartUploadsCommand,
   S3Client,
   UploadPartCommand,
@@ -81,7 +82,27 @@ export function s3Fixture(
   const store = {
     id,
     async initialize() {
-      await client.send(new CreateBucketCommand({ Bucket: bucket }), options());
+      try {
+        await client.send(new HeadBucketCommand({ Bucket: bucket }), options());
+      } catch (error) {
+        if (
+          !(error instanceof Error) ||
+          !["NotFound", "NoSuchBucket"].includes(error.name)
+        )
+          throw error;
+        try {
+          await client.send(
+            new CreateBucketCommand({ Bucket: bucket }),
+            options(),
+          );
+        } catch (error) {
+          if (
+            !(error instanceof Error) ||
+            error.name !== "BucketAlreadyOwnedByYou"
+          )
+            throw error;
+        }
+      }
     },
     async reserve() {
       const [result] = await pool.execute<ResultSetHeader>(

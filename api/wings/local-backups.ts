@@ -9,12 +9,14 @@ import type { Pool, ResultSetHeader } from "mysql2/promise";
 import { rows, transaction, type Executor } from "../db";
 import { cryptoContext } from "../security";
 import { UUID_V4, WingsClient, type WingsNode } from "./client";
+import { s3Fixture } from "./s3-fixture";
 import type { FixtureBackupCallback } from "./remote";
 
 const MAX_BYTES = 4 * 1024 * 1024;
 const MAX_RECEIPTS = 3;
 type Backup = {
   id: string;
+  adapter: "wings" | "s3";
   state: string;
   locked: number;
   needsReview: number;
@@ -23,7 +25,7 @@ type Backup = {
   createdAt: string;
 };
 const columns =
-  "b.id,b.state,b.locked,b.size_bytes AS sizeBytes,b.checksum,b.created_at AS createdAt, CASE WHEN b.state IN ('creating','restoring') AND b.operation_started_at <= CURRENT_TIMESTAMP(3) - INTERVAL 2 MINUTE THEN 1 ELSE 0 END AS needsReview";
+  "b.id,b.adapter,b.state,b.locked,b.size_bytes AS sizeBytes,b.checksum,b.created_at AS createdAt, CASE WHEN b.state IN ('creating','restoring') AND b.operation_started_at <= CURRENT_TIMESTAMP(3) - INTERVAL 2 MINUTE THEN 1 ELSE 0 END AS needsReview";
 type Target = { id: string; owner: string; nodeId: string; cipher: Buffer };
 
 export function localBackupService(
@@ -32,6 +34,7 @@ export function localBackupService(
   key: Buffer,
   pepper: Buffer,
   origin: string,
+  s3Enabled = false,
 ) {
   const client = new WingsClient(node);
   const crypt = cryptoContext(key, pepper, "node-token");
@@ -67,15 +70,48 @@ export function localBackupService(
         [backup, record.id, record.nodeId],
       )
     )[0];
-  const callback: FixtureBackupCallback = async (id, phase, event) => {
-    const [record] = await rows<Target>(
+  const bound = async (id: string) => {
+    const [record] = await rows<
+      Target & { adapter: Backup["adapter"]; state: string }
+    >(
       pool,
-      `SELECT b.server_id AS id,s.owner_id AS owner,n.id AS nodeId,n.token_cipher AS cipher
+      `SELECT b.server_id AS id,s.owner_id AS owner,n.id AS nodeId,n.token_cipher AS cipher,b.adapter,b.state
       FROM local_server_backups b JOIN servers s ON s.id=b.server_id AND s.node_id=b.node_id JOIN nodes n ON n.id=b.node_id
       WHERE b.id=? AND n.origin=? AND n.token_id=?`,
       [id, node.origin, node.tokenId],
     );
-    if (!record || !nodeMatches(record)) return false;
+    return record && nodeMatches(record) ? record : null;
+  };
+  const withS3 = async <T>(
+    record: { id: string; nodeId: string },
+    id: string,
+    fn: (store: ReturnType<typeof s3Fixture>) => Promise<T>,
+  ) => {
+    if (!s3Enabled) throw new Error("S3 disabled");
+    const store = s3Fixture(pool, record.id, record.nodeId, id);
+    try {
+      return await fn(store);
+    } finally {
+      store.dispose();
+    }
+  };
+  const urls = async (id: string, size: number) => {
+    if (!s3Enabled) return null;
+    const record = await bound(id);
+    if (record?.adapter !== "s3" || record.state !== "creating") return null;
+    return withS3(record, id, (store) => store.urls(size));
+  };
+  const callback: FixtureBackupCallback = async (id, phase, event) => {
+    const record = await bound(id);
+    if (!record) return false;
+    if (
+      record.adapter === "s3" &&
+      (!s3Enabled ||
+        (phase === "create" &&
+          event.successful &&
+          !(await withS3(record, id, (store) => store.complete(event)))))
+    )
+      return false;
     const creating = phase === "create";
     const valid =
       event.successful &&
@@ -104,15 +140,20 @@ export function localBackupService(
   const download = async (record: Target, backup: Backup) => {
     if (!backup.sizeBytes || backup.sizeBytes > MAX_BYTES || !backup.checksum)
       throw new Error("Invalid backup metadata");
-    const now = Math.floor(Date.now() / 1000);
-    const encode = (value: object) =>
-      Buffer.from(JSON.stringify(value)).toString("base64url");
-    const signed = `${encode({ alg: "HS256", typ: "JWT" })}.${encode({ iss: origin, aud: [node.origin], iat: now, nbf: now - 1, exp: now + 15, jti: randomUUID(), unique_id: randomUUID(), server_uuid: record.id, user_uuid: record.owner, backup_uuid: backup.id, scope: "backup-download" })}`;
-    const url = new URL("/download/backup", node.origin);
-    url.searchParams.set(
-      "token",
-      `${signed}.${createHmac("sha256", node.token).update(signed).digest("base64url")}`,
-    );
+    let url: URL | string;
+    if (backup.adapter === "s3")
+      url = await withS3(record, backup.id, (store) => store.url());
+    else {
+      const now = Math.floor(Date.now() / 1000);
+      const encode = (value: object) =>
+        Buffer.from(JSON.stringify(value)).toString("base64url");
+      const signed = `${encode({ alg: "HS256", typ: "JWT" })}.${encode({ iss: origin, aud: [node.origin], iat: now, nbf: now - 1, exp: now + 15, jti: randomUUID(), unique_id: randomUUID(), server_uuid: record.id, user_uuid: record.owner, backup_uuid: backup.id, scope: "backup-download" })}`;
+      url = new URL("/download/backup", node.origin);
+      url.searchParams.set(
+        "token",
+        `${signed}.${createHmac("sha256", node.token).update(signed).digest("base64url")}`,
+      );
+    }
     const response = await fetch(url, {
       redirect: "error",
       signal: AbortSignal.timeout(12_000),
@@ -244,7 +285,11 @@ export function localBackupService(
               "UPDATE local_server_backups SET state='deleting' WHERE id=?",
               [id],
             );
-            return { status: 202, nodeId: record.nodeId } as const;
+            return {
+              status: 202,
+              nodeId: record.nodeId,
+              adapter: backup.adapter,
+            } as const;
           });
           if (result.status === 204) return reply.code(204).send();
           if (result.status !== 202)
@@ -252,7 +297,16 @@ export function localBackupService(
               error: result.status === 404 ? "not_found" : "backup_conflict",
             });
           try {
-            await client.fixtureBackup(server, id, "delete");
+            if (result.adapter === "s3") {
+              if (
+                !(await withS3(
+                  { id: server, nodeId: result.nodeId },
+                  id,
+                  (store) => store.remove(),
+                ))
+              )
+                return reply.code(202).send({ id });
+            } else await client.fixtureBackup(server, id, "delete");
           } catch {
             return reply.code(502).send({ error: "backup_delete_uncertain" });
           }
@@ -271,14 +325,21 @@ export function localBackupService(
         async (req, reply) => {
           const owner = await sessionUser(req);
           if (!owner) return reply.code(401).send({ error: "unauthenticated" });
+          const body = req.body;
           if (
-            req.body !== undefined &&
-            (req.body === null ||
-              typeof req.body !== "object" ||
-              Array.isArray(req.body) ||
-              Object.keys(req.body).length)
+            body !== undefined &&
+            (body === null ||
+              typeof body !== "object" ||
+              Array.isArray(body) ||
+              Object.keys(body).some(
+                (key) => action !== "create" || key !== "adapter",
+              ))
           )
             return reply.code(400).send({ error: "invalid_request" });
+          const requested =
+            (body as { adapter?: unknown } | undefined)?.adapter ?? "wings";
+          if (requested !== "wings" && (requested !== "s3" || !s3Enabled))
+            return reply.code(400).send({ error: "invalid_adapter" });
           const server = req.params.id;
           const id =
             action === "create" ? randomUUID() : (req.params.backup ?? "");
@@ -294,7 +355,7 @@ export function localBackupService(
           } catch {
             return reply.code(502).send({ error: "wings_unavailable" });
           }
-          const status = await transaction(pool, async (db) => {
+          const dispatch = await transaction(pool, async (db) => {
             const record = await target(db, server, owner, true);
             if (!record) return 404;
             const existing = await rows<Backup>(
@@ -310,12 +371,18 @@ export function localBackupService(
               )
             )
               return 409;
+            const adapter = selected?.adapter ?? requested;
             if (action === "create") {
               if (existing.length >= MAX_RECEIPTS) return 409;
               await db.execute(
-                "INSERT INTO local_server_backups(id,server_id,node_id,state,operation_started_at) VALUES (?,?,?,'creating',CURRENT_TIMESTAMP(3))",
-                [id, server, record.nodeId],
+                "INSERT INTO local_server_backups(id,server_id,node_id,adapter,state,operation_started_at) VALUES (?,?,?,?,'creating',CURRENT_TIMESTAMP(3))",
+                [id, server, record.nodeId, adapter],
               );
+              if (adapter === "s3")
+                await db.execute(
+                  "INSERT INTO s3_fixture_receipts(id,server_id,node_id) VALUES (?,?,?)",
+                  [id, server, record.nodeId],
+                );
             } else {
               if (selected?.state !== "ready") return 409;
               await db.execute(
@@ -323,14 +390,27 @@ export function localBackupService(
                 [id],
               );
             }
-            return 202;
+            return { adapter, nodeId: record.nodeId };
           });
-          if (status !== 202)
-            return reply.code(status).send({
-              error: status === 404 ? "not_found" : "backup_conflict",
+          if (typeof dispatch === "number")
+            return reply.code(dispatch).send({
+              error: dispatch === 404 ? "not_found" : "backup_conflict",
             });
           try {
-            await client.fixtureBackup(server, id, action);
+            if (dispatch.adapter === "s3")
+              await withS3(
+                { id: server, nodeId: dispatch.nodeId },
+                id,
+                async (store) => {
+                  if (action === "create") await store.initialize();
+                  await client.fixtureS3Backup(
+                    server,
+                    id,
+                    action === "restore" ? await store.url() : undefined,
+                  );
+                },
+              );
+            else await client.fixtureBackup(server, id, action);
           } catch {
             return reply
               .code(502)
@@ -341,5 +421,5 @@ export function localBackupService(
       );
     }
   }
-  return { register, callback };
+  return { register, callback, urls, s3Enabled };
 }
