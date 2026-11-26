@@ -2139,16 +2139,18 @@ async function main() {
                 assert.ok(upload);
                 assert.equal(await recovered.urls(4), null);
                 assert.equal((await recovered.status())?.state, "uploading");
-                await recovered.remove();
-                assert.equal(await recovered.status(), null);
-                const stale = await fetch(upload.parts[0], {
+                const part = await fetch(upload.parts[0], {
                   method: "PUT",
                   body: "test",
                   redirect: "error",
                   signal: AbortSignal.timeout(5000),
                 });
-                assert.equal(stale.status, 404);
-                await stale.body?.cancel();
+                assert.equal(part.status, 200);
+                await part.body?.cancel();
+                assert.equal(await recovered.pendingUploads(), 1);
+                await recovered.remove();
+                assert.equal(await recovered.status(), null);
+                assert.equal(await recovered.pendingUploads(), 0);
               } finally {
                 try {
                   await recovered.remove();

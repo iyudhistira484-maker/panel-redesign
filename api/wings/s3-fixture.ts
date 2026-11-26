@@ -6,6 +6,7 @@ import {
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
   GetObjectCommand,
+  ListMultipartUploadsCommand,
   S3Client,
   UploadPartCommand,
 } from "@aws-sdk/client-s3";
@@ -205,6 +206,18 @@ export function s3Fixture(
       }
       if (received !== size || hash.digest("hex") !== event.checksum)
         throw new Error("S3 object integrity mismatch");
+    },
+    async pendingUploads() {
+      const result = await client.send(
+        new ListMultipartUploadsCommand({ Bucket: bucket, Prefix: object.Key }),
+        options(),
+      );
+      if (result.IsTruncated)
+        throw new Error("Unexpected multipart list pagination");
+      return (
+        result.Uploads?.filter((upload) => upload.Key === object.Key).length ??
+        0
+      );
     },
     async remove() {
       const row = await receipt();
