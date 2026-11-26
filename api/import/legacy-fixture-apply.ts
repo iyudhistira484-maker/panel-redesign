@@ -284,7 +284,16 @@ export async function applyLegacyFixture(
       );
       await db.execute(
         "INSERT INTO servers (id,name,node_id,owner_id,egg_id,allocation_id,external_id,mumble_max_users) VALUES (?,?,?,?,?,?,?,?)",
-        [uuid, name, nodeId, ownerId, eggId, allocationId, externalId],
+        [
+          uuid,
+          name,
+          nodeId,
+          ownerId,
+          eggId,
+          allocationId,
+          externalId,
+          maxUsers,
+        ],
       );
       await db.execute(
         "INSERT INTO wings_provisions (server_id,phase) VALUES (?,'installed')",
