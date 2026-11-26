@@ -650,7 +650,7 @@ async function main() {
           [
             "inspect",
             "--format",
-            "{{json .Config.Image}} {{json .HostConfig.PortBindings}}",
+            '{{json .Config.Image}} {{json .HostConfig.PortBindings}} {{(index .NetworkSettings.Networks "relay-wings-contract-net").IPAddress}}',
             voice,
           ],
           { timeout: 5000 },
@@ -660,7 +660,10 @@ async function main() {
           JSON.parse(stdout.slice(0, boundary)),
           "ghcr.io/parkervcp/yolks:voice_mumble",
         );
-        const bindings = JSON.parse(stdout.slice(boundary + 1));
+        const end = stdout.trimEnd().lastIndexOf(" ");
+        const bindings = JSON.parse(stdout.slice(boundary + 1, end));
+        const address = stdout.slice(end + 1).trim();
+        assert.match(address, /^172\.(?:1[6-9]|2[0-9]|3[01])\.\d+\.\d+$/);
         const binding = bindings[`${voicePort}/tcp`] as {
           HostIp: string;
           HostPort: string;
@@ -675,7 +678,7 @@ async function main() {
         // A Version frame (type 0) distinguishes it from a generic TCP listener.
         await new Promise<void>((resolve, reject) => {
           const socket = connectTls({
-            host: binding[0].HostIp,
+            host: address,
             port: voicePort,
             rejectUnauthorized: false,
           });
