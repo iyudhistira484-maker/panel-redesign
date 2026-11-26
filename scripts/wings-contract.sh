@@ -7,6 +7,7 @@ name=relay-wings-contract
 network=relay-wings-contract-net
 harness_pid=''
 proxy_pid=''
+s3_pid=''
 remote_port=13200
 harness=api/wings/live-contract.ts
 if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == adoption || "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then
@@ -17,8 +18,9 @@ if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == offhost-restore ]]; then
   harness=api/wings/offhost-restore.ts
 fi
 cleanup() {
+  if [[ -n "$s3_pid" ]]; then kill "$s3_pid" 2>/dev/null || true; wait "$s3_pid" 2>/dev/null || true; fi
   if [[ -n "$proxy_pid" ]]; then kill "$proxy_pid" 2>/dev/null || true; fi
-  if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then docker rm -f relay-adoption-panel relay-adoption-db relay-wings-adoption-second relay-adoption-mailpit relay-adoption-s3 >/dev/null 2>&1 || true; fi
+  if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then docker rm -f relay-adoption-panel relay-adoption-db relay-wings-adoption-second relay-adoption-mailpit >/dev/null 2>&1 || true; fi
   docker rm -f "$name" >/dev/null 2>&1 || true
   docker network rm "$network" >/dev/null 2>&1 || true
   if [[ -n "$harness_pid" ]]; then kill "$harness_pid" 2>/dev/null || true; fi
@@ -167,14 +169,22 @@ if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then
     RELAY_S3_FIXTURE_PASSWORD=$(openssl rand -hex 24)
     export RELAY_S3_FIXTURE_PASSWORD
     printf '::add-mask::%s\n' "$RELAY_S3_FIXTURE_PASSWORD"
-    if ! docker run --detach --name relay-adoption-s3 -p 127.0.0.1:19300:9000 \
-      -e MINIO_ROOT_USER="$RELAY_S3_FIXTURE_USER" -e MINIO_ROOT_PASSWORD="$RELAY_S3_FIXTURE_PASSWORD" \
-      minio/minio:RELEASE.2025-04-22T22-12-26Z server /data >"$work/s3-start.log" 2>&1; then
-      message=$(tail -1 "$work/s3-start.log")
-      printf '::error::S3 fixture failed to start: %s\n' "$message"
+    if ! curl -fsSL --retry 2 https://github.com/seaweedfs/seaweedfs/releases/download/4.06/linux_amd64.tar.gz -o "$work/weed.tgz"; then
+      echo '::error::Could not download pinned SeaweedFS fixture binary'
       exit 1
     fi
-    curl -fsS --retry 15 --retry-connrefused --retry-delay 1 http://127.0.0.1:19300/minio/health/ready
+    printf '%s  %s\n' '4c45be11cba5c61b4b11d9aaad861d824d62ace480ac3c87c69abc8f6888fa32' "$work/weed.tgz" | sha256sum -c -
+    tar -xzf "$work/weed.tgz" -C "$work" weed
+    mkdir "$work/object-store"
+    AWS_ACCESS_KEY_ID="$RELAY_S3_FIXTURE_USER" AWS_SECRET_ACCESS_KEY="$RELAY_S3_FIXTURE_PASSWORD" \
+      "$work/weed" mini -dir="$work/object-store" -ip=127.0.0.1 -ip.bind=127.0.0.1 -s3.port=19300 >"$work/s3-start.log" 2>&1 &
+    s3_pid=$!
+    for _ in {1..30}; do
+      if curl -s -o /dev/null --max-time 1 http://127.0.0.1:19300/; then break; fi
+      if ! kill -0 "$s3_pid" 2>/dev/null; then echo '::error::SeaweedFS fixture exited'; exit 1; fi
+      sleep 1
+    done
+    curl -s -o /dev/null --max-time 2 http://127.0.0.1:19300/
   fi
   export RELAY_WINGS_BROWSER=1
   openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=127.0.0.1 -addext 'subjectAltName=IP:127.0.0.1' -keyout "$work/key.pem" -out "$work/cert.pem" 2>/dev/null
