@@ -32,6 +32,10 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.9'
+          cache: false
       - run: npm ci && npm run build
       - name: Create real Relay and Wings checkpoint
         id: checkpoint

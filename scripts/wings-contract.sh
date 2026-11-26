@@ -25,8 +25,17 @@ cleanup() {
   sudo rm -rf -- "$work"
 }
 trap cleanup EXIT
+if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then
+  git clone --quiet --depth 1 --branch v1.13.5 https://github.com/pterodactyl/wings.git "$work/wings-source"
+  [[ "$(git -C "$work/wings-source" rev-parse HEAD)" == 3236480d078c09b823b8a8f21dab76c4029608a5 ]]
+  patch="$PWD/patches/wings/v1.13.5-sftp-lease.patch"
+  git -C "$work/wings-source" apply --unidiff-zero --check "$patch"
+  git -C "$work/wings-source" apply --unidiff-zero "$patch"
+  (cd "$work/wings-source" && gofmt -w remote/types.go remote/servers.go sftp/server.go && CGO_ENABLED=0 go build -trimpath -ldflags="-X github.com/pterodactyl/wings/system.Version=1.13.5" -o "$work/wings" ./wings.go)
+else
 curl -fsSL --retry 2 'https://github.com/pterodactyl/wings/releases/download/v1.13.5/wings_linux_amd64' -o "$work/wings"
 printf '%s  %s\n' '231134aa6d5aa02aac4f6384b50c76860637858cbc056268b9f96ac42f7f5393' "$work/wings" | sha256sum -c -
+fi
 chmod 0755 "$work/wings"
 export RELAY_WINGS_TEST_TOKEN_ID=relaytestnode
 RELAY_WINGS_TEST_TOKEN=$(openssl rand -hex 32)

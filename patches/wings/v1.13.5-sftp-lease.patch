@@ -1,0 +1,53 @@
+diff --git a/remote/servers.go b/remote/servers.go
+index 922d2c7..e38d8fc 100644
+--- a/remote/servers.go
++++ b/remote/servers.go
+@@ -133 +133,5 @@ func (c *client) ValidateSftpCredentials(ctx context.Context, request SftpAuthRe
+-	res, err := c.Post(ctx, "/sftp/auth", request)
++	endpoint := "/sftp/auth"
++	if request.Type == "lease" {
++		endpoint = "/sftp/session"
++	}
++	res, err := c.Post(ctx, endpoint, request)
+diff --git a/remote/types.go b/remote/types.go
+index f0d0a28..c22b7cc 100644
+--- a/remote/types.go
++++ b/remote/types.go
+@@ -88,0 +89 @@ type SftpAuthResponse struct {
++	Lease string `json:"lease,omitempty"`
+diff --git a/sftp/server.go b/sftp/server.go
+index b6e866e..a15126b 100644
+--- a/sftp/server.go
++++ b/sftp/server.go
+@@ -291,0 +292,7 @@ func (c *SFTPServer) serve(listener net.Listener, conf *ssh.ServerConfig) error
++			// Only Relay issues a lease; stock Panel responses retain upstream behavior.
++			if sconn.Permissions != nil && sconn.Permissions.Extensions["relay_lease"] != "" {
++				lease := sconn.Permissions.Extensions["relay_lease"]
++				ctx, cancel := context.WithCancel(context.Background())
++				defer cancel()
++				go c.watchRelayLease(ctx, sconn, lease)
++			}
+@@ -298,0 +306,21 @@ func (c *SFTPServer) serve(listener net.Listener, conf *ssh.ServerConfig) error
++// watchRelayLease disconnects every channel on permission loss or callback failure.
++// The bearer is an opaque authorization receipt, not the user's password or key.
++func (c *SFTPServer) watchRelayLease(ctx context.Context, conn *ssh.ServerConn, lease string) {
++	ticker := time.NewTicker(2 * time.Second)
++	defer ticker.Stop()
++	for {
++		select {
++		case <-ctx.Done():
++			return
++		case <-ticker.C:
++			check, cancel := context.WithTimeout(ctx, 2*time.Second)
++			auth, err := c.manager.Client().ValidateSftpCredentials(check, remote.SftpAuthRequest{Type: "lease", Pass: lease})
++			cancel()
++			if err != nil || auth.User != conn.Permissions.Extensions["user"] || auth.Server != conn.Permissions.Extensions["uuid"] {
++				_ = conn.Close()
++				return
++			}
++		}
++	}
++}
++
+@@ -471,0 +500 @@ func (c *SFTPServer) makeCredentialsRequest(conn ssh.ConnMetadata, t remote.Sftp
++			"relay_lease": resp.Lease,

@@ -200,7 +200,9 @@ export async function createApp({
       !(
         sftpAuth &&
         req.method === "POST" &&
-        req.routeOptions.url === "/api/remote/sftp/auth" &&
+        ["/api/remote/sftp/auth", "/api/remote/sftp/session"].includes(
+          req.routeOptions.url ?? "",
+        ) &&
         req.headers.origin === undefined &&
         req.headers.cookie === undefined
       ) &&

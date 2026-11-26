@@ -1320,15 +1320,38 @@ async function main() {
             "UPDATE server_grants SET permissions=? WHERE server_id=? AND user_id=?",
             [JSON.stringify(original), uuid, delegate.uuid],
           );
+          const revokedAt = performance.now();
           await assert.rejects(
             keySftp(),
             "A revoked grant must deny new SFTP sessions",
           );
-          // Upstream Wings caches permissions on the authorized SSH connection.
-          // This records the blocker; it does not treat revocation as implemented.
-          await observeDownload("after-revoke.txt");
+          // Batch-mode OpenSSH can wait on stdin after the transport has closed.
+          // Probe again after the two-second tick plus callback deadline.
+          await new Promise((resolve) =>
+            setTimeout(
+              resolve,
+              Math.max(0, 4250 - (performance.now() - revokedAt)),
+            ),
+          );
+          if (active.exitCode === null && active.signalCode === null)
+            active.stdin.write(
+              "get fixture-docs/example.txt after-revoke.txt\n",
+            );
+          await until(
+            "Wings closes the already-open SFTP connection",
+            async () => active.exitCode !== null || active.signalCode !== null,
+          );
+          const closeMs = Math.round(performance.now() - revokedAt);
+          assert.ok(
+            closeMs <= 6000,
+            "Revoked SFTP session stayed open after its revalidation window",
+          );
+          assert.notEqual(active.exitCode, 0);
+          await assert.rejects(readFile(`${sftpWork}/after-revoke.txt`), {
+            code: "ENOENT",
+          });
           console.log(
-            "::notice::SFTP revocation new_session_denied=true active_session_retained=true production_blocked=true",
+            `::notice::SFTP revocation new_session_denied=true active_session_closed=true close_ms=${closeMs}`,
           );
           assert.equal(
             (await removeKey(delegateHeaders, fingerprint)).statusCode,

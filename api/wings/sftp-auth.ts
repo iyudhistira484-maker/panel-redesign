@@ -28,26 +28,58 @@ export function stagingSftpAuth(
   pepper: Buffer,
 ) {
   const crypt = cryptoContext(key, pepper, "node-token");
+  const leaseBinding = `sftp-lease:${node.origin}:${node.tokenId}`;
+  type Lease = {
+    name: string;
+    server: string;
+    user: string;
+    expires: number;
+    fingerprint: string | null;
+    version: number;
+  };
   return async (input: {
     type: string;
     username: string;
     password: string;
   }) => {
-    if (input.type !== "password" && input.type !== "public_key") return null;
-    const fingerprint =
-      input.type === "public_key" ? sftpKeyFingerprint(input.password) : null;
-    if (input.type === "public_key" && !fingerprint) return null;
-    const match = /^([a-z0-9_.-]{1,191})\.([a-f0-9]{8}|[a-f0-9-]{36})$/i.exec(
-      input.username,
-    );
-    if (!match) return null;
-    const [, name, identifier] = match;
+    const refresh = input.type === "lease";
+    let lease: Lease | undefined;
+    let name: string;
+    let identifier: string;
+    let fingerprint: Buffer | null;
+    if (refresh) {
+      try {
+        lease = JSON.parse(
+          crypt
+            .open(Buffer.from(input.password, "base64url"), leaseBinding)
+            .toString(),
+        ) as Lease;
+      } catch {
+        return null;
+      }
+      if (!lease || Date.now() >= lease.expires) return null;
+      ({ name, server: identifier } = lease);
+      fingerprint = lease.fingerprint
+        ? Buffer.from(lease.fingerprint, "hex")
+        : null;
+    } else {
+      if (input.type !== "password" && input.type !== "public_key") return null;
+      const match = /^([a-z0-9_.-]{1,191})\.([a-f0-9]{8})$/i.exec(
+        input.username,
+      );
+      if (!match) return null;
+      [, name, identifier] = match;
+      fingerprint =
+        input.type === "public_key" ? sftpKeyFingerprint(input.password) : null;
+      if (input.type === "public_key" && !fingerprint) return null;
+    }
     const candidates = await rows<{
       user: string;
       server: string;
       hash: string;
       owner: string;
       hasTotp: number;
+      version: number;
       fileGrant: number | null;
       hasKey: number;
       nodeId: string;
@@ -55,7 +87,7 @@ export function stagingSftpAuth(
     }>(
       pool,
       `SELECT u.id AS user,s.id AS server,u.password_hash AS hash,s.owner_id AS owner,
-       u.totp_secret IS NOT NULL AS hasTotp,n.id AS nodeId,n.token_cipher AS cipher,
+       u.totp_secret IS NOT NULL AS hasTotp,u.auth_version AS version,n.id AS nodeId,n.token_cipher AS cipher,
        JSON_CONTAINS(g.permissions,JSON_ARRAY('file.sftp','file.read','file.read-content')) AS fileGrant,
        EXISTS(SELECT 1 FROM compat_sftp_keys k WHERE k.user_id=u.id AND k.fingerprint=?) AS hasKey
        FROM users u JOIN compat_account_profiles p ON p.user_id=u.id
@@ -75,6 +107,7 @@ export function stagingSftpAuth(
       cipher,
       owner,
       hasTotp,
+      version,
       hasKey,
       fileGrant,
     } = candidates[0];
@@ -85,15 +118,38 @@ export function stagingSftpAuth(
       !timingSafeEqual(saved, configured)
     )
       return null;
-    if (input.type === "password") {
-      if (
-        user !== owner ||
-        hasTotp ||
-        !(await checkPassword(input.password, hash)).valid
-      )
-        return null;
-    } else if (hasTotp || !hasKey || (user !== owner && !fileGrant))
+    if (
+      hasTotp ||
+      (lease &&
+        (lease.user !== user ||
+          lease.server !== server ||
+          lease.version !== version))
+    )
       return null;
-    return { user, server, permissions: ["file.read", "file.read-content"] };
+    if (fingerprint) {
+      if (!hasKey || (user !== owner && !fileGrant)) return null;
+    } else if (
+      user !== owner ||
+      (!refresh && !(await checkPassword(input.password, hash)).valid)
+    )
+      return null;
+    const permissions = ["file.read", "file.read-content"];
+    if (refresh) return { user, server, permissions };
+    const data: Lease = {
+      name,
+      user,
+      server,
+      version,
+      fingerprint: fingerprint?.toString("hex") ?? null,
+      expires: Date.now() + 60 * 60 * 1000,
+    };
+    return {
+      user,
+      server,
+      permissions,
+      lease: crypt
+        .seal(Buffer.from(JSON.stringify(data)), leaseBinding)
+        .toString("base64url"),
+    };
   };
 }

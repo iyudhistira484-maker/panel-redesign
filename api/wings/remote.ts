@@ -77,6 +77,33 @@ export async function registerRemote(
         return approved ?? reply.code(403).send({ error: "sftp_denied" });
       },
     );
+  if (authenticateSftp)
+    app.post<{ Body: { type: "lease"; username?: string; password: string } }>(
+      "/sftp/session",
+      {
+        bodyLimit: 4096,
+        config: { rateLimit: { max: 300, timeWindow: "1 minute" } },
+        schema: {
+          body: {
+            type: "object",
+            required: ["type", "password"],
+            properties: {
+              type: { const: "lease" },
+              password: { type: "string", pattern: "^[A-Za-z0-9_-]{40,3000}$" },
+            },
+          },
+        },
+      },
+      async (req, reply) => {
+        reply.header("cache-control", "no-store");
+        const authorized = await authenticateSftp({
+          type: "lease",
+          username: "",
+          password: req.body.password,
+        });
+        return authorized ?? reply.code(403).send({ error: "sftp_denied" });
+      },
+    );
   app.get<{ Querystring: { page?: string; per_page?: string } }>(
     "/servers",
     {
