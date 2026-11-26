@@ -30,8 +30,8 @@
   },
   "homepage": "https://github.com/iyudhistira484-maker/panel-redesign#readme",
   "dependencies": {
-    "@aws-sdk/client-s3": "3.922.0",
-    "@aws-sdk/s3-request-presigner": "3.922.0",
+    "@aws-sdk/client-s3": "3.1178.0",
+    "@aws-sdk/s3-request-presigner": "3.1178.0",
     "@fastify/cookie": "11.0.2",
     "@fastify/helmet": "13.2.0",
     "@fastify/rate-limit": "10.3.0",
