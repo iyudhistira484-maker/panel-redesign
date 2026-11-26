@@ -1283,7 +1283,16 @@ async function main() {
           invalidate: () => Promise<unknown>,
           reset: () => Promise<unknown>,
         ) => {
-          await setGrant(withSftp);
+          await setGrant(
+            reason === "grant"
+              ? JSON.stringify([
+                  ...JSON.parse(withSftp),
+                  "file.create",
+                  "file.update",
+                  "file.delete",
+                ])
+              : withSftp,
+          );
           const active = spawn(
             "sftp",
             [
@@ -1320,6 +1329,40 @@ async function main() {
                 expected,
               ),
             );
+            if (reason === "grant") {
+              const destination = "fixture-docs/sftp-write.txt";
+              const contents = [
+                "staging SFTP created\n",
+                "staging SFTP updated\n",
+              ];
+              for (const [index, text] of contents.entries()) {
+                const filename = `sftp-upload-${index}.txt`;
+                await writeFile(`${sftpWork}/${filename}`, text, {
+                  mode: 0o600,
+                });
+                active.stdin.write(`put ${filename} ${destination}\n`);
+                await until(`SFTP upload ${index} persisted`, async () =>
+                  (
+                    await client.fixtureDownload(
+                      uuid,
+                      ["fixture-docs"],
+                      "sftp-write.txt",
+                    )
+                  ).equals(Buffer.from(text)),
+                );
+              }
+              active.stdin.write(`rm ${destination}\n`);
+              await until(
+                "SFTP delete persisted",
+                async () =>
+                  !(await client.fixtureDirectory(uuid, ["fixture-docs"])).some(
+                    (row) => row.name === "sftp-write.txt",
+                  ),
+              );
+              console.log(
+                "::notice::SFTP write create=true overwrite=true delete=true read_only_rejected=true",
+              );
+            }
             await invalidate();
             const at = performance.now();
             if (reason === "grant" || reason === "key-removal")
