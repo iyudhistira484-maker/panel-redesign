@@ -341,30 +341,32 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   const newer = "After the browser backup\n";
   expect(
     (
-      await page
-        .context()
-        .request.post(editApi, {
-          headers: editHeaders,
-          data: {
-            version: createHash("sha256").update(checkpoint).digest("hex"),
-            text: newer,
-          },
-        })
+      await page.context().request.post(editApi, {
+        headers: editHeaders,
+        data: {
+          version: createHash("sha256").update(checkpoint).digest("hex"),
+          text: newer,
+        },
+      })
     ).status(),
   ).toBe(200);
-  const fileBytes = async () => {
-    const response = await page
-      .context()
-      .request.get(fileApi, {
-        params: {
-          directory: "/fixture-docs",
-          preview: "example.txt",
-          download: "1",
-        },
-      });
-    expect(response.status()).toBe(200);
-    return response.body();
-  };
+  // Read bytes independently of the browser's file API quota.
+  const volumeRoot = process.env.RELAY_WINGS_CONTRACT_DATA ?? "";
+  assert.match(volumeRoot, /^\/tmp\/tmp\.[A-Za-z0-9]+\/data\/volumes$/);
+  assert.match(id, /^[0-9a-f-]{36}$/);
+  const fileBytes = async () =>
+    (
+      await docker(
+        "docker",
+        [
+          "exec",
+          fixtureDaemon,
+          "cat",
+          `${volumeRoot}/${id}/fixture-docs/example.txt`,
+        ],
+        { encoding: "buffer", timeout: 5000 },
+      )
+    ).stdout;
   expect(await fileBytes()).toEqual(Buffer.from(newer));
   await backupRow.getByRole("button", { name: "Pulihkan backup" }).click();
   await expect(
