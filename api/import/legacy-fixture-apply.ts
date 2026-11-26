@@ -4,6 +4,7 @@ import type { Pool } from "mysql2/promise";
 import { rows, transaction } from "../db";
 import { cryptoContext } from "../security";
 import { UUID_V4, validateNode, type WingsNode } from "../wings/client";
+import { mumbleEgg } from "../eggs/upstream-workload";
 import { disposableEgg } from "../wings/provision";
 import { legacyPreflight } from "./legacy-preflight";
 
@@ -14,11 +15,19 @@ type Credentials = {
   allocations: ReadonlyMap<string, string>;
   secondaryAllocations?: ReadonlyMap<number, string>;
   accounts: ReadonlyMap<string, string>;
+  reviewedMumbleEggs?: ReadonlySet<string>;
 };
 const name = "Existing staging workload";
-const document = Buffer.from(disposableEgg);
+export function reviewedAdoptionEgg(
+  eggId: string,
+  reviewedMumbleEggs?: ReadonlySet<string>,
+) {
+  return reviewedMumbleEggs?.has(eggId)
+    ? { document: Buffer.from(mumbleEgg), maxUsers: "37" }
+    : { document: Buffer.from(disposableEgg), maxUsers: null };
+}
 
-/** Bounded staging catalog adoption for the reviewed shell workload. Uses disabled fixture identities, never legacy credentials. */
+/** Bounded staging catalog adoption for reviewed shell and Mumble workloads. Uses disabled fixture identities, never legacy credentials. */
 export async function applyLegacyFixture(
   pool: Pool,
   manifest: unknown,
@@ -70,11 +79,15 @@ export async function applyLegacyFixture(
         allocationId,
         node,
         token: Buffer.from(node.token),
+        ...reviewedAdoptionEgg(eggId, credentials.reviewedMumbleEggs),
       };
     })
     .sort((a, b) => a.port - b.port);
   const nodes = new Map(batch.map((row) => [row.nodeId, row]));
   const eggs = new Map(batch.map((row) => [row.eggId, row]));
+  for (const egg of credentials.reviewedMumbleEggs ?? [])
+    if (!eggs.has(egg))
+      throw new Error("Reviewed Mumble egg not found in manifest");
   const nests = new Set(batch.map((row) => row.nestId));
   if (
     !batch.length ||
@@ -147,6 +160,8 @@ export async function applyLegacyFixture(
         allocationId,
         node,
         token,
+        document,
+        maxUsers,
       } of batch) {
         const [matched] = await rows<{ cipher: Buffer }>(
           db,
@@ -156,7 +171,7 @@ export async function applyLegacyFixture(
         JOIN wings_provisions p ON p.server_id=s.id
         WHERE s.id=? AND s.external_id <=> ? AND s.name=? AND s.owner_id=? AND u.password_hash='disabled' AND u.is_admin=0
         AND s.node_id=? AND n.origin=? AND n.token_id=? AND s.egg_id=? AND e.nest_id=? AND e.version='PTDL_v2' AND e.document=?
-        AND s.allocation_id=? AND a.ip='127.0.0.1' AND a.port=? AND p.phase='installed' FOR UPDATE`,
+        AND s.mumble_max_users <=> ? AND s.allocation_id=? AND a.ip='127.0.0.1' AND a.port=? AND p.phase='installed' FOR UPDATE`,
           [
             uuid,
             externalId,
@@ -168,6 +183,7 @@ export async function applyLegacyFixture(
             eggId,
             nestId,
             document,
+            maxUsers,
             allocationId,
             port,
           ],
@@ -247,7 +263,7 @@ export async function applyLegacyFixture(
         "INSERT INTO nodes (id,name,origin,token_id,token_cipher) VALUES (?,'Existing node',?,?,?)",
         [nodeId, node.origin, node.tokenId, crypto.seal(token, nodeId)],
       );
-    for (const { eggId, nestId } of eggs.values())
+    for (const { eggId, nestId, document } of eggs.values())
       await db.execute(
         "INSERT INTO eggs (id,nest_id,name,version,document) VALUES (?,?,?,'PTDL_v2',?)",
         [eggId, nestId, `Adoption ${eggId}`, document],
@@ -260,13 +276,14 @@ export async function applyLegacyFixture(
       port,
       allocationId,
       nodeId,
+      maxUsers,
     } of batch) {
       await db.execute(
         "INSERT INTO allocations (id,node_id,ip,port) VALUES (?,?,'127.0.0.1',?)",
         [allocationId, nodeId, port],
       );
       await db.execute(
-        "INSERT INTO servers (id,name,node_id,owner_id,egg_id,allocation_id,external_id) VALUES (?,?,?,?,?,?,?)",
+        "INSERT INTO servers (id,name,node_id,owner_id,egg_id,allocation_id,external_id,mumble_max_users) VALUES (?,?,?,?,?,?,?,?)",
         [uuid, name, nodeId, ownerId, eggId, allocationId, externalId],
       );
       await db.execute(
