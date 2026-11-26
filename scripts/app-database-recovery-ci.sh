@@ -45,8 +45,6 @@ CREATE DATABASE relay_app_recovery CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai
 CREATE USER 'fixture_app_restore'@'localhost' IDENTIFIED BY 'disposable-app-restore';
 CREATE USER 'fixture_app_runtime'@'%' IDENTIFIED BY 'disposable-app-runtime';
 GRANT ALL PRIVILEGES ON relay_app_recovery.* TO 'fixture_app_restore'@'localhost';
-GRANT SELECT, UPDATE ON relay_app_recovery.accounts TO 'fixture_app_runtime'@'%';
-GRANT SELECT, INSERT ON relay_app_recovery.ledger TO 'fixture_app_runtime'@'%';
 SQL
 snapshot='SELECT id,balance,HEX(label) FROM accounts ORDER BY id; SELECT id,account_id,amount,HEX(payload),JSON_UNQUOTE(JSON_EXTRACT(metadata,"$.reason")) FROM ledger ORDER BY id;'
 reader -NBr relay_app_source -e "$snapshot" >"$work/checkpoint.rows"
@@ -97,6 +95,10 @@ cmp "$work/checkpoint.rows" "$work/restored.rows"
 if restore relay_app_recovery -e "INSERT INTO ledger VALUES (9,99,1,UNHEX('AB'),JSON_OBJECT('reason','invalid'))" >"$work/unexpected" 2>&1; then echo '::error::Recovered schema did not enforce foreign key'; exit 1; fi
 restore relay_app_recovery -e "START TRANSACTION; INSERT INTO ledger VALUES (9,1,1,UNHEX('AB'),JSON_OBJECT('reason','smoke')); ROLLBACK;"
 [[ "$(restore -NBr relay_app_recovery -e 'SELECT COUNT(*) FROM ledger WHERE id=9')" == 0 ]]
+root "$recovery" <<'SQL'
+GRANT SELECT, UPDATE ON relay_app_recovery.accounts TO 'fixture_app_runtime'@'%';
+GRANT SELECT, INSERT ON relay_app_recovery.ledger TO 'fixture_app_runtime'@'%';
+SQL
 RELAY_EXPECTED_RECOVERY_UUID="$recovery_uuid" ./node_modules/.bin/tsx api/wings/app-database-smoke.ts
 reader -NBr relay_app_source -e "$snapshot" >"$work/source-after-restore.rows"
 cmp "$work/current.rows" "$work/source-after-restore.rows"
