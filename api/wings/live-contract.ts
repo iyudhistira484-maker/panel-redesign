@@ -316,11 +316,16 @@ async function main() {
           `Fixture port ${port} bound to configured private interface`,
         );
       await until(
-        "diagnostic startup console marker",
-        async () =>
-          (await consoleSnapshot()).lines.includes(
-            "RELAY_CONTRACT_PROFILE_DIAGNOSTIC",
-          ),
+        "diagnostic startup marker in disposable workload logs",
+        async () => {
+          const logs = await docker("docker", ["logs", "--tail", "16", uuid], {
+            timeout: 5000,
+            maxBuffer: 8192,
+          });
+          return logs.stdout
+            .split(/\r?\n/)
+            .includes("RELAY_CONTRACT_PROFILE_DIAGNOSTIC");
+        },
         6,
       );
     };
