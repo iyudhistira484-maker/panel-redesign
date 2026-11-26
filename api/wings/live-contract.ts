@@ -671,73 +671,72 @@ async function main() {
             HostPort: string;
           }[];
           assert.equal(binding.length, 1);
-          assert.match(
-            binding[0].HostIp,
-            /^(?:127\.|172\.(?:1[6-9]|2[0-9]|3[01])\.)/,
-          );
+          assert.equal(binding[0].HostIp, "127.0.0.1");
           assert.equal(binding[0].HostPort, String(voicePort));
         }
-        // The disposable Mumble server generates a self-signed TLS certificate.
-        // A Version frame (type 0) distinguishes it from a generic TCP listener.
-        await new Promise<void>((resolve, reject) => {
-          const socket = connectTls({
-            host: address,
-            port: voicePort,
-            rejectUnauthorized: false,
+        for (const target of [address, "127.0.0.1"]) {
+          // The disposable Mumble server generates a self-signed TLS certificate.
+          // A Version frame (type 0) distinguishes it from a generic TCP listener.
+          await new Promise<void>((resolve, reject) => {
+            const socket = connectTls({
+              host: target,
+              port: voicePort,
+              rejectUnauthorized: false,
+            });
+            let header = Buffer.alloc(0);
+            socket.setTimeout(4000, () =>
+              socket.destroy(new Error("Mumble Version frame timed out")),
+            );
+            socket.on("error", reject);
+            socket.on("close", () =>
+              reject(new Error("Mumble closed before Version frame")),
+            );
+            socket.on("data", (chunk) => {
+              header = Buffer.concat([
+                header,
+                chunk.subarray(0, 6 - header.length),
+              ]);
+              if (header.length < 6) return;
+              const size = header.readUInt32BE(2);
+              if (header.readUInt16BE(0) !== 0 || size === 0 || size > 65536) {
+                socket.destroy(new Error("Invalid Mumble Version frame"));
+                return;
+              }
+              resolve();
+              socket.destroy();
+            });
           });
-          let header = Buffer.alloc(0);
-          socket.setTimeout(4000, () =>
-            socket.destroy(new Error("Mumble Version frame timed out")),
-          );
-          socket.on("error", reject);
-          socket.on("close", () =>
-            reject(new Error("Mumble closed before Version frame")),
-          );
-          socket.on("data", (chunk) => {
-            header = Buffer.concat([
-              header,
-              chunk.subarray(0, 6 - header.length),
-            ]);
-            if (header.length < 6) return;
-            const size = header.readUInt32BE(2);
-            if (header.readUInt16BE(0) !== 0 || size === 0 || size > 65536) {
-              socket.destroy(new Error("Invalid Mumble Version frame"));
-              return;
-            }
-            resolve();
-            socket.destroy();
+          // Legacy Mumble UDP status ping: four zero bytes followed by an
+          // opaque eight-byte nonce that the real server must echo.
+          await new Promise<void>((resolve, reject) => {
+            const socket = createSocket("udp4");
+            const ping = Buffer.concat([Buffer.alloc(4), randomBytes(8)]);
+            const complete = (error?: Error) => {
+              clearTimeout(deadline);
+              socket.close();
+              if (error) reject(error);
+              else resolve();
+            };
+            const deadline = setTimeout(
+              () => complete(new Error("Mumble UDP status timed out")),
+              4000,
+            );
+            socket.once("error", complete);
+            socket.on("message", (response, peer) => {
+              if (peer.address !== target || peer.port !== voicePort) return;
+              try {
+                assert.equal(response.length, 24);
+                assert.deepEqual(response.subarray(4, 12), ping.subarray(4));
+                assert.equal(response.readUInt32BE(16), 37);
+              } catch (error) {
+                complete(error as Error);
+                return;
+              }
+              complete();
+            });
+            socket.send(ping, voicePort, target);
           });
-        });
-        // Legacy Mumble UDP status ping: four zero bytes followed by an
-        // opaque eight-byte nonce that the real server must echo.
-        await new Promise<void>((resolve, reject) => {
-          const socket = createSocket("udp4");
-          const ping = Buffer.concat([Buffer.alloc(4), randomBytes(8)]);
-          const complete = (error?: Error) => {
-            clearTimeout(deadline);
-            socket.close();
-            if (error) reject(error);
-            else resolve();
-          };
-          const deadline = setTimeout(
-            () => complete(new Error("Mumble UDP status timed out")),
-            4000,
-          );
-          socket.once("error", complete);
-          socket.on("message", (response, peer) => {
-            if (peer.address !== address || peer.port !== voicePort) return;
-            try {
-              assert.equal(response.length, 24);
-              assert.deepEqual(response.subarray(4, 12), ping.subarray(4));
-              assert.equal(response.readUInt32BE(16), 37);
-            } catch (error) {
-              complete(error as Error);
-              return;
-            }
-            complete();
-          });
-          socket.send(ping, voicePort, address);
-        });
+        }
       };
       // Establish protocol readiness on a normal restart before comparing the
       // exact offline application database bytes across the reinstall callback.
@@ -807,7 +806,7 @@ async function main() {
         async () => (await client.state(voice)) === "offline",
       );
       console.log(
-        "::notice::Mumble lifecycle approved_image=true tls_version_frame_before_after=true udp_status_nonce_and_capacity_before_after=true reinstall_callback=true sqlite_bytes_preserved=true max_users_preserved=true",
+        "::notice::Mumble lifecycle approved_image=true tls_version_frame_before_after=true udp_status_nonce_and_capacity_before_after=true host_loopback_forwarding=true reinstall_callback=true sqlite_bytes_preserved=true max_users_preserved=true",
       );
     }
     assert.equal(

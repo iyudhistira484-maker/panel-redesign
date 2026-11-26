@@ -90,11 +90,16 @@ fi
 chmod 0600 "$work/config/config.yml"
 docker pull debian:12-slim
 # Docker allocates a subnet distinct from the MySQL service network.
-if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == gitea-qualification ]]; then
-  # This upstream installer downloads a release over HTTPS; allocations remain loopback-only.
+if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == lifecycle || "${RELAY_BOOTSTRAP_SCENARIO:-}" == gitea-qualification ]]; then
+  # Lifecycle exercises host port publishing; Gitea downloads a release over HTTPS.
   docker network create "$network" >/dev/null
 else
   docker network create --internal "$network" >/dev/null
+fi
+if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == lifecycle ]]; then
+  # Wings preserves its configured interface for a pre-existing bridge.
+  # Publish fixture ports on runner loopback only, never on a public address.
+  sed -i '/^    network_mode:/a\    interface: 127.0.0.1' "$work/config/config.yml"
 fi
 http_fixture=0
 if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == offhost-restore || "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then http_fixture=1; fi
