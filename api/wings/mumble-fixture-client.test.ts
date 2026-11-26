@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { observeMumbleSessions } from "./mumble-fixture-client";
+import {
+  decodeFixtureChannel,
+  observeMumbleSessions,
+} from "./mumble-fixture-client";
 
 test("samples both original sessions around the operation", async () => {
   const calls = [0, 0];
@@ -27,5 +30,16 @@ test("fails when a session drops even if the operation succeeds", async () => {
   await assert.rejects(
     observeMumbleSessions([connected, dropped], async () => {}),
     /original session dropped/,
+  );
+});
+
+test("decodes channel zero and rejects a truncated channel name", () => {
+  assert.deepEqual(
+    decodeFixtureChannel(Buffer.from([8, 0, 26, 4, 82, 111, 111, 116])),
+    { id: 0, name: "Root" },
+  );
+  assert.throws(
+    () => decodeFixtureChannel(Buffer.from([26, 4, 82])),
+    /Truncated/,
   );
 });

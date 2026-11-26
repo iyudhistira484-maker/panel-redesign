@@ -748,6 +748,7 @@ async function main() {
         try {
           const second = await joinFixtureMumble(voicePort, "relay-ci-beta");
           try {
+            assert.ok(first.hasChannel("Root") && second.hasChannel("Root"));
             await observeMumbleSessions([first, second], assertVoiceEndpoint);
           } finally {
             second.close();
