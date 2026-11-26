@@ -1124,6 +1124,126 @@ export async function createApp({
     Params: { id: string };
     Body: {
       email: string;
+      action: "invite" | "set-sftp" | "remove";
+      mode?: "none" | "read" | "write";
+    };
+  }>(
+    "/api/v1/servers/:id/subusers",
+    {
+      config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+      schema: {
+        body: object(
+          {
+            email,
+            action: { type: "string", enum: ["invite", "set-sftp", "remove"] },
+            mode: { type: "string", enum: ["none", "read", "write"] },
+          },
+          ["email", "action"],
+        ),
+      },
+    },
+    async (req, reply) => {
+      const principal = await actor(
+        req.cookies[sessionCookie],
+        req.headers.authorization,
+      );
+      if (!principal || principal.channel !== "session")
+        return reply.code(401).send({ error: "unauthenticated" });
+      const id = req.params.id;
+      if (!UUID_V4.test(id))
+        return reply.code(404).send({ error: "not_found" });
+      const { action, mode } = req.body;
+      if ((action === "set-sftp") !== (mode !== undefined))
+        return reply.code(400).send({ error: "invalid_request" });
+      const status = await transaction(pool, async (db) => {
+        const [server] = await rows<{ owner_id: string }>(
+          db,
+          "SELECT owner_id FROM servers WHERE id=? FOR UPDATE",
+          [id],
+        );
+        if (server?.owner_id !== principal.id) return 404;
+        const [user] = await rows<{ id: string }>(
+          db,
+          "SELECT id FROM users WHERE email=?",
+          [req.body.email.toLowerCase()],
+        );
+        if (!user || user.id === principal.id) return 422;
+        const [grant] = await rows<{ permissions: string[] | string }>(
+          db,
+          "SELECT permissions FROM server_grants WHERE server_id=? AND user_id=? FOR UPDATE",
+          [id, user.id],
+        );
+        if (action === "invite") {
+          if (grant) return 409;
+          await db.execute(
+            "INSERT INTO server_grants (server_id,user_id,permissions) VALUES (?,?,JSON_ARRAY('activity.read'))",
+            [id, user.id],
+          );
+        } else {
+          if (!grant) return 404;
+          if (action === "remove")
+            await db.execute(
+              "DELETE FROM server_grants WHERE server_id=? AND user_id=?",
+              [id, user.id],
+            );
+          else {
+            const current =
+              typeof grant.permissions === "string"
+                ? (JSON.parse(grant.permissions) as string[])
+                : grant.permissions;
+            const writes = ["file.create", "file.update", "file.delete"];
+            const next = new Set(
+              current.filter(
+                (permission) =>
+                  permission !== "file.sftp" && !writes.includes(permission),
+              ),
+            );
+            if (mode !== "none")
+              for (const permission of [
+                "file.sftp",
+                "file.read",
+                "file.read-content",
+              ])
+                next.add(permission);
+            if (mode === "write")
+              for (const permission of writes) next.add(permission);
+            if (next.size)
+              await db.execute(
+                "UPDATE server_grants SET permissions=? WHERE server_id=? AND user_id=?",
+                [JSON.stringify([...next]), id, user.id],
+              );
+            else
+              await db.execute(
+                "DELETE FROM server_grants WHERE server_id=? AND user_id=?",
+                [id, user.id],
+              );
+          }
+        }
+        await db.execute(
+          "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,?,?)",
+          [
+            principal.id,
+            `catalog.subuser.${action}${mode ? `.${mode}` : ""}`,
+            id,
+          ],
+        );
+        return 204;
+      });
+      if (status === 204) return reply.code(204).send();
+      return reply.code(status).send({
+        error:
+          status === 404
+            ? "not_found"
+            : status === 409
+              ? "grant_conflict"
+              : "invalid_account",
+      });
+    },
+  );
+  app.post<{
+    Params: { id: string };
+    Body: {
+      email: string;
       action: "grant" | "revoke";
       permission?:
         | "control.start"

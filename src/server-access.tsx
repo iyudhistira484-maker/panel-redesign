@@ -58,13 +58,44 @@ export function ServerAccess({ id, locale }: { id: string; locale: Locale }) {
     }
   }
   const [result, setResult] = useState<
-    "grant" | "revoke" | "power" | "error" | null
+    "grant" | "revoke" | "power" | "subuser" | "error" | null
   >(null);
+  const [subuserChange, setSubuserChange] = useState<{
+    address: string;
+    mode: "none" | "read" | "write" | "remove";
+  } | null>(null);
+  async function manageSubuser(
+    address: string,
+    action: "invite" | "set-sftp" | "remove",
+    mode?: "none" | "read" | "write",
+  ) {
+    if (busy) return;
+    setBusy(true);
+    setResult(null);
+    setSubuserChange(null);
+    try {
+      const response = await fetch(`${base}/subusers`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json", "x-relay-request": "1" },
+        body: JSON.stringify({ email: address, action, mode }),
+        signal: AbortSignal.timeout(10000),
+      });
+      if (response.status !== 204) throw new Error("Subuser change rejected");
+      setResult(action === "invite" ? "grant" : "subuser");
+      await readList();
+    } catch {
+      setResult("error");
+    } finally {
+      setBusy(false);
+    }
+  }
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const action = (event.nativeEvent as SubmitEvent).submitter?.getAttribute(
       "value",
     );
+    if (action === "invite") await manageSubuser(email, "invite");
     if (action === "grant" || action === "revoke") await change(email, action);
   }
   async function change(
@@ -123,6 +154,14 @@ export function ServerAccess({ id, locale }: { id: string; locale: Locale }) {
         <Button type="submit" value="grant" disabled={busy}>
           {en ? "Grant activity access" : "Beri akses aktivitas"}
         </Button>
+        <Button type="submit" value="invite" disabled={busy}>
+          {en ? "Add existing account" : "Tambah akun yang sudah ada"}
+        </Button>
+        {result === "subuser" && (
+          <output>
+            {en ? "Subuser access updated." : "Akses subuser diperbarui."}
+          </output>
+        )}
         <Button type="submit" value="revoke" disabled={busy}>
           {en ? "Revoke activity access" : "Cabut akses aktivitas"}
         </Button>
@@ -172,6 +211,58 @@ export function ServerAccess({ id, locale }: { id: string; locale: Locale }) {
               <li key={row.id}>
                 <strong>{row.email}</strong>
                 <p>{row.permissions.join(", ")}</p>
+                {(["read", "write", "none", "remove"] as const).map((mode) => (
+                  <Button
+                    key={mode}
+                    disabled={busy}
+                    onClick={() =>
+                      setSubuserChange({ address: row.email, mode })
+                    }
+                  >
+                    {en
+                      ? {
+                          read: "SFTP read only",
+                          write: "SFTP read and write",
+                          none: "Disable SFTP",
+                          remove: "Remove subuser",
+                        }[mode]
+                      : {
+                          read: "SFTP baca saja",
+                          write: "SFTP baca dan tulis",
+                          none: "Nonaktifkan SFTP",
+                          remove: "Hapus subuser",
+                        }[mode]}
+                  </Button>
+                ))}
+                {subuserChange?.address === row.email && (
+                  <div>
+                    <p>
+                      {row.email} · {subuserChange.mode}
+                    </p>
+                    <Button
+                      disabled={busy}
+                      onClick={() =>
+                        void (subuserChange.mode === "remove"
+                          ? manageSubuser(row.email, "remove")
+                          : manageSubuser(
+                              row.email,
+                              "set-sftp",
+                              subuserChange.mode,
+                            ))
+                      }
+                    >
+                      {en
+                        ? "Confirm subuser change"
+                        : "Konfirmasi perubahan subuser"}
+                    </Button>
+                    <Button
+                      disabled={busy}
+                      onClick={() => setSubuserChange(null)}
+                    >
+                      {en ? "Cancel" : "Batal"}
+                    </Button>
+                  </div>
+                )}
                 {(["control.start", "control.stop"] as const).map(
                   (permission) => {
                     const name =

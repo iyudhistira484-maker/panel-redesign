@@ -1232,16 +1232,19 @@ async function main() {
             .statusCode,
           204,
         );
-        const keySftp = () =>
+        const keySftp = (
+          commands = "get fixture-docs/example.txt delegated.txt\n",
+        ) =>
           docker(
             "bash",
             [
               "-ec",
-              `printf 'get fixture-docs/example.txt delegated.txt\n' |
+              `printf '%s' "$3" |
           sftp -q -b - -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=known_hosts -i "$1" -P 12022 "$2"`,
               "sftp",
               keyPath,
               `${delegate.username}.${uuid.slice(0, 8)}@127.0.0.1`,
+              commands,
             ],
             { cwd: sftpWork, timeout: 10000 },
           );
@@ -1260,14 +1263,83 @@ async function main() {
             ? (JSON.parse(prior.permissions) as string[])
             : prior.permissions;
         assert.ok(!original.includes("file.sftp"));
-        const withSftp = JSON.stringify([
-          ...new Set([
-            ...original,
-            "file.sftp",
-            "file.read",
-            "file.read-content",
-          ]),
-        ]);
+        const subusers = (
+          requestHeaders: Record<string, string>,
+          server: string,
+          action: string,
+          address: string,
+          mode?: string,
+        ) =>
+          relay.inject({
+            method: "POST",
+            url: `/api/v1/servers/${server}/subusers`,
+            headers: { ...headers, ...requestHeaders },
+            payload: { email: address, action, mode },
+          });
+        const ownerEdit = (mode: string) =>
+          subusers(
+            ownerSession,
+            uuid,
+            "set-sftp",
+            "collaborator@example.test",
+            mode,
+          );
+        const listSubusers = (server: string) =>
+          relay.inject({
+            url: `/api/v1/servers/${server}/subusers`,
+            headers: ownerSession,
+          });
+        assert.ok(second);
+        assert.equal(
+          (
+            await subusers(
+              collaborator,
+              uuid,
+              "set-sftp",
+              "collaborator@example.test",
+              "write",
+            )
+          ).statusCode,
+          404,
+        );
+        assert.equal(
+          (
+            await subusers(
+              outsider,
+              second,
+              "invite",
+              "collaborator@example.test",
+            )
+          ).statusCode,
+          404,
+        );
+        assert.equal(
+          (
+            await subusers(
+              ownerSession,
+              second,
+              "invite",
+              "outsider@example.test",
+            )
+          ).statusCode,
+          204,
+        );
+        assert.equal(
+          (await listSubusers(second)).json().items[0].email,
+          "outsider@example.test",
+        );
+        assert.equal(
+          (
+            await subusers(
+              ownerSession,
+              second,
+              "remove",
+              "outsider@example.test",
+            )
+          ).statusCode,
+          204,
+        );
+        assert.deepEqual((await listSubusers(second)).json().items, []);
         const setGrant = (permissions: string) =>
           pool.execute(
             "UPDATE server_grants SET permissions=? WHERE server_id=? AND user_id=?",
@@ -1283,15 +1355,9 @@ async function main() {
           invalidate: () => Promise<unknown>,
           reset: () => Promise<unknown>,
         ) => {
-          await setGrant(
-            reason === "grant"
-              ? JSON.stringify([
-                  ...JSON.parse(withSftp),
-                  "file.create",
-                  "file.update",
-                  "file.delete",
-                ])
-              : withSftp,
+          assert.equal(
+            (await ownerEdit(reason === "grant" ? "write" : "read")).statusCode,
+            204,
           );
           const active = spawn(
             "sftp",
@@ -1365,7 +1431,7 @@ async function main() {
             }
             await invalidate();
             const at = performance.now();
-            if (reason === "grant" || reason === "key-removal")
+            if (reason === "key-removal")
               await assert.rejects(
                 keySftp(),
                 `New SFTP session admitted during ${reason}`,
@@ -1403,8 +1469,25 @@ async function main() {
         };
         await proveDisconnect(
           "grant",
-          () => setGrant(JSON.stringify(original)),
-          async () => {},
+          async () => assert.equal((await ownerEdit("read")).statusCode, 204),
+          async () => {
+            await keySftp(
+              "get fixture-docs/example.txt read-only-after-downgrade.txt\n-put sftp-upload-0.txt fixture-docs/sftp-write.txt\n",
+            );
+            assert.deepEqual(
+              await readFile(`${sftpWork}/read-only-after-downgrade.txt`),
+              expected,
+            );
+            assert.ok(
+              !(await client.fixtureDirectory(uuid, ["fixture-docs"])).some(
+                (row) => row.name === "sftp-write.txt",
+              ),
+            );
+            assert.deepEqual((await listSubusers(second)).json().items, []);
+            console.log(
+              "::notice::Subuser owner_api=true write_downgrade_disconnect=true new_read_only=true neighbor_unchanged=true",
+            );
+          },
         );
         const [credential] = await rows<{
           hash: string;
@@ -1783,7 +1866,10 @@ async function main() {
       assert.equal(allowed.statusCode, 200);
       assert.equal(allowed.headers["cache-control"], "no-store");
       assert.deepEqual(
-        allowed.json<{ event: string }[]>().map((row) => row.event),
+        allowed
+          .json<{ event: string }[]>()
+          .filter((row) => !row.event.startsWith("catalog.subuser."))
+          .map((row) => row.event),
         ["catalog.fixture_checked"],
       );
       assert.equal((await activity(uuid, ownerSession)).statusCode, 200);
