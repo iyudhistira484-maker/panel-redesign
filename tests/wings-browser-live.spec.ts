@@ -250,31 +250,34 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     "::notice::Chromium fixture upload verified exact Wings bytes, denied collaborator and rejected overwrite",
   );
 
-  await files.getByRole("button", { name: "example.txt", exact: true }).click();
-  const preview = page.getByRole("region", { name: "Pratinjau teks" });
-  await expect(preview.locator("pre")).toHaveText(
-    "<strong>fixture preview</strong>",
-  );
-  await expect(preview.locator("strong")).toHaveCount(0);
   const downloaded = page.waitForEvent("download");
   const attachment = page.waitForResponse(
     (r) =>
       r.url().startsWith(fileApi) &&
       new URL(r.url()).searchParams.get("download") === "1",
   );
-  await preview.getByRole("button", { name: "Unduh file teks" }).click();
+  await files
+    .getByRole("button", { name: `Unduh ${uploadName}`, exact: true })
+    .click();
   const response = await attachment;
   expect(response.headers()["content-disposition"]).toBe(
-    'attachment; filename="example.txt"',
+    `attachment; filename="${uploadName}"`,
   );
   const file = await downloaded;
-  expect(file.suggestedFilename()).toBe("example.txt");
+  expect(file.suggestedFilename()).toBe(uploadName);
   const local = await file.path();
   assert.ok(local);
-  expect(await readFile(local)).toEqual(
-    Buffer.from("<strong>fixture preview</strong>\n"),
+  expect(await readFile(local)).toEqual(uploadedBytes);
+  console.log(
+    "::notice::Chromium downloaded the newly uploaded file with original bytes",
   );
 
+  await files.getByRole("button", { name: "example.txt", exact: true }).click();
+  const preview = page.getByRole("region", { name: "Pratinjau teks" });
+  await expect(preview.locator("pre")).toHaveText(
+    "<strong>fixture preview</strong>",
+  );
+  await expect(preview.locator("strong")).toHaveCount(0);
   await preview.getByRole("button", { name: "Edit teks staging" }).click();
   await preview
     .getByRole("textbox", { name: "Editor teks" })

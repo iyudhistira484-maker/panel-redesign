@@ -349,6 +349,17 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
                   {item.directory ? "/" : ` · ${item.size} B`}
                 </span>
               )}
+              {!item.directory &&
+                item.name.endsWith(".txt") &&
+                item.size <= 16384 && (
+                  <Button
+                    disabled={busy}
+                    aria-label={`${en ? "Download" : "Unduh"} ${item.name}`}
+                    onClick={() => void downloadFile(item.name)}
+                  >
+                    {en ? "Download" : "Unduh"}
+                  </Button>
+                )}
             </li>
           ))}
         </ul>
