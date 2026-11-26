@@ -538,11 +538,49 @@ async function main() {
             );
             await reload();
           });
+          const password = randomBytes(16).toString("hex");
+          // Fixture-only, on the live test database. Avoid forwarding command
+          // output or errors that could include this ephemeral password.
+          await docker(
+            "docker",
+            [
+              "exec",
+              "--workdir",
+              "/home/container",
+              second,
+              "mumble-server",
+              "-ini",
+              "murmur.ini",
+              "-supw",
+              password,
+            ],
+            { timeout: 10000 },
+          ).catch(() => {
+            throw new Error("Could not set fixture Mumble admin password");
+          });
+          const adminSession = await joinFixtureMumble(
+            25611,
+            "SuperUser",
+            address,
+            password,
+          );
+          const channel = "relay-ci-persistent";
+          try {
+            adminSession.createChannel(channel);
+            await until(
+              "persistent channel broadcast to both original clients",
+              async () =>
+                sessions.every((session) => session.hasChannel(channel)),
+            );
+          } finally {
+            adminSession.close();
+          }
           const rollback = await observeMumbleSessions(sessions, async () => {
             await writeFile(secondConfig, original);
             await reload();
           });
           assert.ok(sessions.every((session) => session.hasChannel("Root")));
+          assert.ok(sessions.every((session) => session.hasChannel(channel)));
           console.log(
             `::notice::Mumble panel switch same_container=true original_sessions=2 cutover_samples=${cutover.samples} rollback_samples=${rollback.samples}`,
           );
@@ -556,6 +594,42 @@ async function main() {
       } finally {
         first.close();
       }
+      await secondClient.power(second, "stop");
+      await until(
+        "Mumble stopped after rollback",
+        async () => (await secondClient.state(second)) === "offline",
+      );
+      await secondClient.power(second, "start");
+      await until(
+        "Mumble restarted after rollback",
+        async () => (await secondClient.state(second)) === "running",
+      );
+      const restartedAddress = (
+        await docker(
+          "docker",
+          [
+            "inspect",
+            "--format",
+            '{{(index .NetworkSettings.Networks "relay-wings-contract-net").IPAddress}}',
+            second,
+          ],
+          { timeout: 5000 },
+        )
+      ).stdout.trim();
+      const fresh = await joinFixtureMumble(
+        25611,
+        "relay-ci-fresh",
+        restartedAddress,
+      );
+      try {
+        assert.ok(fresh.hasChannel("relay-ci-persistent"));
+        await fresh.probe();
+      } finally {
+        fresh.close();
+      }
+      console.log(
+        "::notice::Mumble channel persisted after rollback and controlled restart",
+      );
       return;
     }
     if (actual) {

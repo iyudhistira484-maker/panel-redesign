@@ -43,16 +43,22 @@ export function joinFixtureMumble(
   port: number,
   username: string,
   host = "127.0.0.1",
+  password?: string,
 ) {
   assert.ok(
     (port === 25614 && host === "127.0.0.1") ||
       (port === 25611 && /^172\.(?:1[6-9]|2[0-9]|3[01])\.\d+\.\d+$/.test(host)),
   );
-  assert.match(username, /^relay-ci-[a-z]{1,12}$/);
+  if (password !== undefined) {
+    assert.equal(port, 25611);
+    assert.equal(username, "SuperUser");
+    assert.match(password, /^[a-f0-9]{32}$/);
+  } else assert.match(username, /^relay-ci-[a-z]{1,12}$/);
   return new Promise<{
     close: () => void;
     probe: () => Promise<void>;
     hasChannel: (name: string) => boolean;
+    createChannel: (name: string) => void;
   }>((resolve, reject) => {
     const socket = connect({
       host,
@@ -78,6 +84,9 @@ export function joinFixtureMumble(
       const payload = Buffer.concat([
         Buffer.from([0x0a, name.length]),
         name,
+        ...(password
+          ? [Buffer.from([0x12, password.length]), Buffer.from(password)]
+          : []),
         Buffer.from([0x28, 1]),
       ]);
       const header = Buffer.alloc(6);
@@ -164,6 +173,20 @@ export function joinFixtureMumble(
           resolve({
             close: () => socket.destroy(),
             probe,
+            createChannel: (name: string) => {
+              assert.ok(password && !socket.destroyed);
+              assert.match(name, /^relay-ci-[a-z]{1,20}$/);
+              const body = Buffer.concat([
+                Buffer.from([0x10, 0, 0x1a, name.length]),
+                Buffer.from(name),
+              ]);
+              socket.write(
+                Buffer.concat([
+                  Buffer.from([0, 7, 0, 0, 0, body.length]),
+                  body,
+                ]),
+              );
+            },
             hasChannel: (name: string) => [...channels.values()].includes(name),
           });
         }
