@@ -2,6 +2,7 @@ import { upstreamProfiles, mumbleEgg } from "../eggs/upstream-workload";
 import { reviewedHttpEggs } from "../eggs/reviewed-workload";
 import { readFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
+import { createSocket } from "node:dgram";
 import { connect as connectTls } from "node:tls";
 import { promisify } from "node:util";
 import { WingsSocket } from "./socket";
@@ -664,16 +665,18 @@ async function main() {
         const bindings = JSON.parse(stdout.slice(boundary + 1, end));
         const address = stdout.slice(end + 1).trim();
         assert.match(address, /^172\.(?:1[6-9]|2[0-9]|3[01])\.\d+\.\d+$/);
-        const binding = bindings[`${voicePort}/tcp`] as {
-          HostIp: string;
-          HostPort: string;
-        }[];
-        assert.equal(binding.length, 1);
-        assert.match(
-          binding[0].HostIp,
-          /^(?:127\.|172\.(?:1[6-9]|2[0-9]|3[01])\.)/,
-        );
-        assert.equal(binding[0].HostPort, String(voicePort));
+        for (const protocol of ["tcp", "udp"]) {
+          const binding = bindings[`${voicePort}/${protocol}`] as {
+            HostIp: string;
+            HostPort: string;
+          }[];
+          assert.equal(binding.length, 1);
+          assert.match(
+            binding[0].HostIp,
+            /^(?:127\.|172\.(?:1[6-9]|2[0-9]|3[01])\.)/,
+          );
+          assert.equal(binding[0].HostPort, String(voicePort));
+        }
         // The disposable Mumble server generates a self-signed TLS certificate.
         // A Version frame (type 0) distinguishes it from a generic TCP listener.
         await new Promise<void>((resolve, reject) => {
@@ -704,6 +707,36 @@ async function main() {
             resolve();
             socket.destroy();
           });
+        });
+        // Legacy Mumble UDP status ping: four zero bytes followed by an
+        // opaque eight-byte nonce that the real server must echo.
+        await new Promise<void>((resolve, reject) => {
+          const socket = createSocket("udp4");
+          const ping = Buffer.concat([Buffer.alloc(4), randomBytes(8)]);
+          const complete = (error?: Error) => {
+            clearTimeout(deadline);
+            socket.close();
+            if (error) reject(error);
+            else resolve();
+          };
+          const deadline = setTimeout(
+            () => complete(new Error("Mumble UDP status timed out")),
+            4000,
+          );
+          socket.once("error", complete);
+          socket.on("message", (response, peer) => {
+            if (peer.address !== address || peer.port !== voicePort) return;
+            try {
+              assert.equal(response.length, 24);
+              assert.deepEqual(response.subarray(4, 12), ping.subarray(4));
+              assert.equal(response.readUInt32BE(16), 37);
+            } catch (error) {
+              complete(error as Error);
+              return;
+            }
+            complete();
+          });
+          socket.send(ping, voicePort, address);
         });
       };
       // Establish protocol readiness on a normal restart before comparing the
@@ -774,7 +807,7 @@ async function main() {
         async () => (await client.state(voice)) === "offline",
       );
       console.log(
-        "::notice::Mumble lifecycle approved_image=true tls_version_frame_before_after=true reinstall_callback=true sqlite_bytes_preserved=true max_users_preserved=true",
+        "::notice::Mumble lifecycle approved_image=true tls_version_frame_before_after=true udp_status_nonce_and_capacity_before_after=true reinstall_callback=true sqlite_bytes_preserved=true max_users_preserved=true",
       );
     }
     assert.equal(
