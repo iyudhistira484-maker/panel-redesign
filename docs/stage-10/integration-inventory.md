@@ -21,3 +21,9 @@ Use a source checkout of the bot or the integrator's sanitized route list. For e
 1. Run read-only paths against staging Pterodactyl and Relay; normalize generated identifiers and compare the fields and statuses the consumer uses.
 2. Reproduce writes on a disposable workload with fresh credentials, asserting both the API response and Wings/storage effects. Include expired or insufficient scopes, retries and uncertain outcomes. A route registration or equal status alone is not a pass.
 3. Pilot only when every required flow has evidence or is explicitly out of scope. Keep the legacy configuration available for rollback; do not touch production without operator approval.
+
+## Selected reference integration: Nodeactyl client bot
+
+In the absence of consumer source, use the pinned `nodeactyl@3.3.0` SDK as the reference, not as a claim about the operator's bot. The [passing legacy-panel job](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45828240395/job/139937891545) exercised the same SDK against Pterodactyl and Relay. It compared owner inventory, server detail and pagination; checked resource state and metric shapes; and observed actual Wings start, restart, stop and bounded console command effects. Relay independently checks reduced-scope and shared-user restrictions. Credentials are issued separately per panel; do not move an existing Pterodactyl key to Relay.
+
+**Decision:** the reference bot's bounded client flows qualify in disposable staging. Billing, account management, suspend, and unrestricted provisioning do not qualify by extension. Actual integration compatibility and production pilot approval are separate open gates, not requirements waived by this report.
