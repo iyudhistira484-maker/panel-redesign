@@ -10,12 +10,19 @@ import {
   UploadPartCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import type { Pool, ResultSetHeader } from "mysql2/promise";
+import { rows } from "../db";
 import type { FixtureBackupSignal } from "./remote";
 
 const endpoint = "http://127.0.0.1:19300";
 const bucket = "relay-disposable-backups";
 const max = 4 * 1024 * 1024;
-export async function s3Fixture(server: string, id: string) {
+export function s3Fixture(
+  pool: Pool,
+  server: string,
+  node: string,
+  id: string,
+) {
   const accessKeyId = process.env.RELAY_S3_FIXTURE_USER;
   const secretAccessKey = process.env.RELAY_S3_FIXTURE_PASSWORD;
   if (
@@ -37,19 +44,60 @@ export async function s3Fixture(server: string, id: string) {
   });
   const object = { Bucket: bucket, Key: `${server}/${id}.tar.gz` };
   const options = () => ({ abortSignal: AbortSignal.timeout(6000) });
-  let upload: string | undefined;
-  let issued = false;
-  let completed = false;
-  let size = 0;
-  await client.send(new CreateBucketCommand({ Bucket: bucket }), options());
-  return {
+  type Receipt = {
+    state: string;
+    upload_id: string | null;
+    size_bytes: number | null;
+    checksum: string | null;
+  };
+  const binding = [id, server, node];
+  const receipt = async () =>
+    (
+      await rows<Receipt>(
+        pool,
+        `SELECT r.state,r.upload_id,r.size_bytes,r.checksum FROM s3_fixture_receipts r JOIN servers s ON s.id=r.server_id AND s.node_id=r.node_id WHERE r.id=? AND r.server_id=? AND r.node_id=?`,
+        binding,
+      )
+    )[0];
+  const advance = async (from: string, to: string) => {
+    const [changed] = await pool.execute<ResultSetHeader>(
+      "UPDATE s3_fixture_receipts SET state=? WHERE id=? AND server_id=? AND node_id=? AND state=?",
+      [to, ...binding, from],
+    );
+    return changed.affectedRows === 1;
+  };
+  const signedGet = () =>
+    getSignedUrl(
+      client,
+      new GetObjectCommand({
+        ...object,
+        ResponseContentType: "application/gzip",
+      }),
+      { expiresIn: 45 },
+    );
+  const store = {
     id,
+    async initialize() {
+      await client.send(new CreateBucketCommand({ Bucket: bucket }), options());
+    },
+    async reserve() {
+      const [result] = await pool.execute<ResultSetHeader>(
+        "INSERT INTO s3_fixture_receipts (id,server_id,node_id) SELECT ?,id,node_id FROM servers WHERE id=? AND node_id=?",
+        binding,
+      );
+      if (result.affectedRows !== 1)
+        throw new Error("S3 receipt binding missing");
+    },
     async urls(bytes: number) {
-      if (issued || !Number.isSafeInteger(bytes) || bytes < 1 || bytes > max)
+      if (
+        !Number.isSafeInteger(bytes) ||
+        bytes < 1 ||
+        bytes > max ||
+        !(await receipt()) ||
+        !(await advance("reserved", "allocating"))
+      )
         return null;
-      issued = true;
-      size = bytes;
-      upload = (
+      const upload = (
         await client.send(
           new CreateMultipartUploadCommand({
             ...object,
@@ -58,7 +106,14 @@ export async function s3Fixture(server: string, id: string) {
           options(),
         )
       ).UploadId;
-      if (!upload) throw new Error("Missing upload ID");
+      if (!upload || upload.length > 1024)
+        throw new Error("Invalid S3 upload identifier");
+      const [saved] = await pool.execute<ResultSetHeader>(
+        "UPDATE s3_fixture_receipts SET state='uploading',upload_id=?,size_bytes=? WHERE id=? AND server_id=? AND node_id=? AND state='allocating'",
+        [upload, bytes, ...binding],
+      );
+      if (saved.affectedRows !== 1)
+        throw new Error("S3 receipt changed during allocation");
       return {
         part_size: 5 * 1024 * 1024,
         parts: [
@@ -68,51 +123,58 @@ export async function s3Fixture(server: string, id: string) {
               ...object,
               UploadId: upload,
               PartNumber: 1,
+              ContentLength: bytes,
             }),
-            { expiresIn: 45 },
+            { expiresIn: 45, signableHeaders: new Set(["content-length"]) },
           ),
         ],
       };
     },
     async complete(event: FixtureBackupSignal) {
+      const row = await receipt();
       const part = event.parts?.[0];
       if (
-        !upload ||
-        completed ||
+        !row?.upload_id ||
+        row.state !== "uploading" ||
         !event.successful ||
-        event.size !== size ||
+        event.size !== row.size_bytes ||
         event.checksum_type !== "sha1" ||
         !/^[a-f0-9]{40}$/.test(event.checksum ?? "") ||
         event.parts?.length !== 1 ||
         part?.part_number !== 1 ||
-        !/^"?[a-f0-9]{32}"?$/.test(part.etag)
+        !/^"?[a-f0-9]{32}"?$/.test(part.etag) ||
+        !(await advance("uploading", "completing"))
       )
         return false;
       await client.send(
         new CompleteMultipartUploadCommand({
           ...object,
-          UploadId: upload,
+          UploadId: row.upload_id,
           MultipartUpload: { Parts: [{ PartNumber: 1, ETag: part.etag }] },
         }),
         options(),
       );
-      completed = true;
-      return true;
+      await store.verify(await signedGet(), event);
+      const [saved] = await pool.execute<ResultSetHeader>(
+        "UPDATE s3_fixture_receipts SET state='ready',checksum=?,upload_id=NULL WHERE id=? AND server_id=? AND node_id=? AND state='completing'",
+        [event.checksum ?? null, ...binding],
+      );
+      return saved.affectedRows === 1;
     },
     async url() {
-      if (!completed) throw new Error("S3 archive incomplete");
-      return getSignedUrl(
-        client,
-        new GetObjectCommand({
-          ...object,
-          ResponseContentType: "application/gzip",
-        }),
-        {
-          expiresIn: 45,
-        },
-      );
+      if ((await receipt())?.state !== "ready")
+        throw new Error("S3 archive incomplete");
+      return signedGet();
+    },
+    async status() {
+      const row = await receipt();
+      return row
+        ? { state: row.state, size: row.size_bytes, checksum: row.checksum }
+        : null;
     },
     async verify(url: string, event: FixtureBackupSignal) {
+      const size = event.size ?? 0;
+      if (size < 1 || size > max) throw new Error("Invalid S3 archive size");
       const response = await fetch(url, {
         redirect: "error",
         signal: AbortSignal.timeout(6000),
@@ -144,17 +206,36 @@ export async function s3Fixture(server: string, id: string) {
       if (received !== size || hash.digest("hex") !== event.checksum)
         throw new Error("S3 object integrity mismatch");
     },
-    async close() {
-      try {
-        if (upload && !completed)
+    async remove() {
+      const row = await receipt();
+      if (!row) return;
+      if (!["reserved", "uploading", "ready", "deleting"].includes(row.state))
+        throw new Error("S3 operation requires inspection");
+      if (row.state !== "deleting" && !(await advance(row.state, "deleting")))
+        throw new Error("S3 receipt changed during deletion");
+      if (row.upload_id) {
+        try {
           await client.send(
-            new AbortMultipartUploadCommand({ ...object, UploadId: upload }),
+            new AbortMultipartUploadCommand({
+              ...object,
+              UploadId: row.upload_id,
+            }),
             options(),
           );
-        await client.send(new DeleteObjectCommand(object), options());
-      } finally {
-        client.destroy();
+        } catch (error) {
+          if (!(error instanceof Error) || error.name !== "NoSuchUpload")
+            throw error;
+        }
       }
+      await client.send(new DeleteObjectCommand(object), options());
+      await pool.execute(
+        "DELETE FROM s3_fixture_receipts WHERE id=? AND server_id=? AND node_id=? AND state='deleting'",
+        binding,
+      );
+    },
+    dispose() {
+      client.destroy();
     },
   };
+  return store;
 }

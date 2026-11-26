@@ -196,7 +196,6 @@ async function main() {
   let backupSignal:
     | { id: string; phase: "create" | "restore"; result?: FixtureBackupSignal }
     | undefined;
-  let remoteS3: Awaited<ReturnType<typeof s3Fixture>> | undefined;
   const relayFor = (configured: typeof node, database = pool) =>
     createApp({
       pool: database,
@@ -211,24 +210,37 @@ async function main() {
         : {}),
       ...(actual && configured === node
         ? {
-            fixtureS3Urls: async (id, size) =>
-              remoteS3?.id === id ? remoteS3.urls(size) : null,
+            ...(process.env.RELAY_S3_FIXTURE_USER
+              ? {
+                  fixtureS3Urls: async (id: string, size: number) => {
+                    const fixture = s3Fixture(database, uuid, nodeId, id);
+                    try {
+                      return await fixture.urls(size);
+                    } finally {
+                      fixture.dispose();
+                    }
+                  },
+                }
+              : {}),
             fixtureBackupCallback: async (
               id: string,
               phase: "create" | "restore",
               event: FixtureBackupSignal,
             ) => {
+              if (phase === "create" && process.env.RELAY_S3_FIXTURE_USER) {
+                const fixture = s3Fixture(database, uuid, nodeId, id);
+                try {
+                  if (await fixture.status())
+                    return await fixture.complete(event);
+                } finally {
+                  fixture.dispose();
+                }
+              }
               if (
                 !backupSignal ||
                 id !== backupSignal.id ||
                 phase !== backupSignal.phase ||
                 backupSignal.result
-              )
-                return false;
-              if (
-                phase === "create" &&
-                remoteS3?.id === id &&
-                !(await remoteS3.complete(event))
               )
                 return false;
               backupSignal.result = event;
@@ -1980,6 +1992,7 @@ async function main() {
           assert.equal(await client.state(uuid), "offline");
           if (process.env.RELAY_S3_FIXTURE_USER) {
             const s3Id = randomUUID();
+            const remoteS3 = s3Fixture(pool, uuid, nodeId, s3Id);
             const relayConfig = await readFile(config, "utf8");
             try {
               // Wings rewrites YAML on boot. Update the existing key rather than
@@ -2009,7 +2022,8 @@ async function main() {
               await writeFile(config, enabled);
               await restart(false);
               assert.equal(await client.state(uuid), "offline");
-              remoteS3 = await s3Fixture(uuid, s3Id);
+              await remoteS3.initialize();
+              await remoteS3.reserve();
               const uploadPath = `/api/remote/backups/${s3Id}?size=128`;
               assert.equal(
                 (await relay.inject({ url: uploadPath })).statusCode,
@@ -2029,15 +2043,26 @@ async function main() {
                 },
               });
               assert.equal(unknownS3.statusCode, 404);
-              backupSignal = { id: s3Id, phase: "create" };
               await client.fixtureS3Backup(uuid, s3Id);
-              await until("S3 multipart completion callback", async () =>
-                Boolean(backupSignal?.result),
+              await until(
+                "durable S3 multipart completion",
+                async () => (await remoteS3.status())?.state === "ready",
               );
-              const result = backupSignal.result;
-              assert.ok(result?.successful);
-              const download = await remoteS3.url();
-              await remoteS3.verify(download, result);
+              const reopened = s3Fixture(pool, uuid, nodeId, s3Id);
+              const result = await reopened.status();
+              try {
+                assert.ok(
+                  result?.size && result.checksum && result.state === "ready",
+                );
+                const download = await reopened.url();
+                await reopened.verify(download, {
+                  successful: true,
+                  size: result.size,
+                  checksum: result.checksum,
+                });
+              } finally {
+                reopened.dispose();
+              }
               const backupDir = relayConfig.match(
                 /^ {2}backup_directory: (\/tmp\/tmp\.[A-Za-z0-9]+\/data\/backups)$/m,
               )?.[1];
@@ -2105,14 +2130,50 @@ async function main() {
                 ),
                 checkpointBytes,
               );
+              const interruptedId = randomUUID();
+              const interrupted = s3Fixture(pool, uuid, nodeId, interruptedId);
+              const recovered = s3Fixture(pool, uuid, nodeId, interruptedId);
+              try {
+                await interrupted.reserve();
+                const upload = await interrupted.urls(4);
+                assert.ok(upload);
+                assert.equal(await recovered.urls(4), null);
+                assert.equal((await recovered.status())?.state, "uploading");
+                await recovered.remove();
+                assert.equal(await recovered.status(), null);
+                const stale = await fetch(upload.parts[0], {
+                  method: "PUT",
+                  body: "test",
+                  redirect: "error",
+                  signal: AbortSignal.timeout(5000),
+                });
+                assert.equal(stale.status, 404);
+                await stale.body?.cancel();
+              } finally {
+                try {
+                  await recovered.remove();
+                } finally {
+                  interrupted.dispose();
+                  recovered.dispose();
+                }
+              }
+              const urlBeforeDelete = await remoteS3.url();
+              await remoteS3.remove();
+              assert.equal(await remoteS3.status(), null);
+              const afterDelete = await fetch(urlBeforeDelete, {
+                redirect: "error",
+                signal: AbortSignal.timeout(5000),
+              });
+              assert.equal(afterDelete.status, 404);
+              await afterDelete.body?.cancel();
               console.log(
-                `::notice::Wings S3 backup bytes=${result.size} checksum_verified=true local_archive_absent=true restore_bytes_verified=true wrong_node_denied=true`,
+                `::notice::Wings S3 backup bytes=${result.size} checksum_verified=true local_archive_absent=true restore_bytes_verified=true wrong_node_denied=true receipt_persisted=true interrupted_upload_aborted=true deleted_object_absent=true`,
               );
             } finally {
               try {
-                await remoteS3?.close();
+                await remoteS3.remove();
               } finally {
-                remoteS3 = undefined;
+                remoteS3.dispose();
                 await writeFile(config, relayConfig);
                 await restart(false);
                 backupSignal = { id: backupId, phase: "create" };

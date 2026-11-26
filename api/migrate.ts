@@ -53,6 +53,7 @@ export async function migrate(pool: Pool, direction: "up" | "down") {
         { version: 28, file: "028_local_server_backups" },
         { version: 29, file: "029_local_backup_retention" },
         { version: 30, file: "030_backup_operation_age" },
+        { version: 31, file: "031_s3_fixture_receipts" },
       ];
       if (direction === "down") migrations.reverse();
       for (const { version, file } of migrations) {
