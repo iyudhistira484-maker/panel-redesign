@@ -25,3 +25,7 @@ Do not record passwords, API keys, private keys, production dumps or sensitive l
 4. **Approval:** Obtain explicit approval for the named node and workload, maintenance window, rollback triggers and backup. An operator self-run is useful but is not independent verification. Keep the legacy panel available during the pilot; decommissioning is a separate decision.
 
 **Immediate rollback triggers to agree before execution:** lost or incorrect writes, failed authenticated health checks, unexpected impact beyond the candidate, or loss of reliable operator access. If rollback cannot preserve writes safely, stop further writes and escalate to the recovery procedure rather than improvising.
+
+## Recommended first operator pilot
+
+Choose a disposable stateful HTTP workload on a dedicated, non-production Wings node, with a single reversible record write and a known baseline. Use the [HTTP staging pilot](http-staging-pilot.md) as the workflow. Exclude voice, external bots, customer data, application databases and provisioning from this first scope. The existing `upcloudler` host is not a candidate because it already runs other services; the standalone Mumble container on Instabox is not a Wings workload. If Instabox is used as a separate staging host, first verify free disk, validate Docker/Wings and private access, and authorize that staging deployment separately. Until a named production workload and isolated node are identified, production remains HOLD.
