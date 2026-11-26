@@ -16,6 +16,7 @@ import { canServer } from "../policy";
 import { migrate } from "../migrate";
 import { cryptoContext } from "../security";
 import { UUID_V4, WingsClient, WingsUnavailable } from "./client";
+import { s3Fixture } from "./s3-fixture";
 import { lifecycleFixture } from "./lifecycle-fixture";
 import { disposableEgg } from "./provision";
 import {
@@ -195,6 +196,7 @@ async function main() {
   let backupSignal:
     | { id: string; phase: "create" | "restore"; result?: FixtureBackupSignal }
     | undefined;
+  let remoteS3: Awaited<ReturnType<typeof s3Fixture>> | undefined;
   const relayFor = (configured: typeof node, database = pool) =>
     createApp({
       pool: database,
@@ -209,7 +211,9 @@ async function main() {
         : {}),
       ...(actual && configured === node
         ? {
-            fixtureBackupCallback: (
+            fixtureS3Urls: async (id, size) =>
+              remoteS3?.id === id ? remoteS3.urls(size) : null,
+            fixtureBackupCallback: async (
               id: string,
               phase: "create" | "restore",
               event: FixtureBackupSignal,
@@ -219,6 +223,12 @@ async function main() {
                 id !== backupSignal.id ||
                 phase !== backupSignal.phase ||
                 backupSignal.result
+              )
+                return false;
+              if (
+                phase === "create" &&
+                remoteS3?.id === id &&
+                !(await remoteS3.complete(event))
               )
                 return false;
               backupSignal.result = event;
@@ -1968,6 +1978,91 @@ async function main() {
           );
           await restart(false);
           assert.equal(await client.state(uuid), "offline");
+          if (process.env.RELAY_S3_FIXTURE_USER) {
+            const s3Id = randomUUID();
+            const relayConfig = await readFile(config, "utf8");
+            try {
+              assert.match(relayConfig, /^system:$/m);
+              await writeFile(
+                config,
+                relayConfig.replace(
+                  /^system:$/m,
+                  "system:\n  backups:\n    restore_host_allowlist: [127.0.0.1]",
+                ),
+              );
+              await restart(false);
+              assert.equal(await client.state(uuid), "offline");
+              remoteS3 = await s3Fixture(uuid, s3Id);
+              const uploadPath = `/api/remote/backups/${s3Id}?size=128`;
+              assert.equal(
+                (await relay.inject({ url: uploadPath })).statusCode,
+                401,
+              );
+              const wrong = await relay.inject({
+                url: uploadPath,
+                headers: {
+                  authorization: `Bearer ${secondNode.tokenId}.${secondNode.token}`,
+                },
+              });
+              assert.equal(wrong.statusCode, 401);
+              const unknownS3 = await relay.inject({
+                url: `/api/remote/backups/${randomUUID()}?size=128`,
+                headers: {
+                  authorization: `Bearer ${node.tokenId}.${node.token}`,
+                },
+              });
+              assert.equal(unknownS3.statusCode, 404);
+              backupSignal = { id: s3Id, phase: "create" };
+              await client.fixtureS3Backup(uuid, s3Id);
+              await until("S3 multipart completion callback", async () =>
+                Boolean(backupSignal?.result),
+              );
+              const result = backupSignal.result;
+              assert.ok(result?.successful);
+              const download = await remoteS3.url();
+              await remoteS3.verify(download, result);
+              await assert.rejects(client.fixtureBackup(uuid, s3Id, "restore"));
+              await client.writeFixtureText(
+                uuid,
+                "modified before S3 restore\n",
+              );
+              await restart(false);
+              assert.deepEqual(
+                await client.fixtureDownload(
+                  uuid,
+                  ["fixture-docs"],
+                  "example.txt",
+                ),
+                Buffer.from("modified before S3 restore\n"),
+              );
+              backupSignal = { id: s3Id, phase: "restore" };
+              await client.fixtureS3Backup(uuid, s3Id, await remoteS3.url());
+              await until("S3 restore callback", async () =>
+                Boolean(backupSignal?.result),
+              );
+              assert.equal(backupSignal.result?.successful, true);
+              assert.deepEqual(
+                await client.fixtureDownload(
+                  uuid,
+                  ["fixture-docs"],
+                  "example.txt",
+                ),
+                checkpointBytes,
+              );
+              console.log(
+                `::notice::Wings S3 backup bytes=${result.size} checksum_verified=true local_archive_absent=true restore_bytes_verified=true wrong_node_denied=true`,
+              );
+            } finally {
+              try {
+                await remoteS3?.close();
+              } finally {
+                remoteS3 = undefined;
+                await writeFile(config, relayConfig);
+                await restart(false);
+                backupSignal = { id: backupId, phase: "create" };
+              }
+            }
+          }
           const unknown = await relay.inject({
             method: "POST",
             url: `/api/remote/backups/${randomUUID()}`,

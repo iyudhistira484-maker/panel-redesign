@@ -48,6 +48,7 @@ export type Options = {
   fixtureTransfer?: FixtureTransfer;
   fixtureReceiver?: FixtureReceiver;
   fixtureBackupCallback?: FixtureBackupCallback;
+  fixtureS3Urls?: Parameters<typeof registerRemote>[7];
   enableDisposableBackups?: boolean;
 };
 type User = {
@@ -116,6 +117,7 @@ export async function createApp({
   fixtureTransfer,
   fixtureReceiver,
   fixtureBackupCallback,
+  fixtureS3Urls,
   enableDisposableBackups,
 }: Options) {
   if ((fixtureTransfer || fixtureReceiver) && !enableDisposableProvisioning)
@@ -201,7 +203,7 @@ export async function createApp({
         Boolean(await fixtureBackupCallback?.(id, phase, event))
     : fixtureBackupCallback;
   if (
-    fixtureBackupCallback &&
+    (fixtureBackupCallback || fixtureS3Urls) &&
     (!provisioner ||
       process.env.RELAY_DISPOSABLE_WINGS_CI !== "1" ||
       process.env.RUNNER_ENVIRONMENT !== "github-hosted" ||
@@ -1672,6 +1674,7 @@ export async function createApp({
           receiver?.onTransfer,
           sftpAuth,
           backupCallback,
+          fixtureS3Urls,
         ),
       { prefix: "/api/remote" },
     );

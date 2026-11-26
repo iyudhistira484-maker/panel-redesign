@@ -18,7 +18,7 @@ if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == offhost-restore ]]; then
 fi
 cleanup() {
   if [[ -n "$proxy_pid" ]]; then kill "$proxy_pid" 2>/dev/null || true; fi
-  if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then docker rm -f relay-adoption-panel relay-adoption-db relay-wings-adoption-second relay-adoption-mailpit >/dev/null 2>&1 || true; fi
+  if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then docker rm -f relay-adoption-panel relay-adoption-db relay-wings-adoption-second relay-adoption-mailpit relay-adoption-s3 >/dev/null 2>&1 || true; fi
   docker rm -f "$name" >/dev/null 2>&1 || true
   docker network rm "$network" >/dev/null 2>&1 || true
   if [[ -n "$harness_pid" ]]; then kill "$harness_pid" 2>/dev/null || true; fi
@@ -162,6 +162,16 @@ if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then
   fi
 fi
 if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then
+  if [[ "${GITHUB_WORKFLOW:-}" == Foundation ]]; then
+  export RELAY_S3_FIXTURE_USER=relay-fixture
+  RELAY_S3_FIXTURE_PASSWORD=$(openssl rand -hex 24)
+  export RELAY_S3_FIXTURE_PASSWORD
+  printf '::add-mask::%s\n' "$RELAY_S3_FIXTURE_PASSWORD"
+  docker run --detach --name relay-adoption-s3 -p 127.0.0.1:19300:9000 \
+    -e MINIO_ROOT_USER="$RELAY_S3_FIXTURE_USER" -e MINIO_ROOT_PASSWORD="$RELAY_S3_FIXTURE_PASSWORD" \
+    quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
+  curl -fsS --retry 15 --retry-connrefused --retry-delay 1 http://127.0.0.1:19300/minio/health/ready
+  fi
   export RELAY_WINGS_BROWSER=1
   openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=127.0.0.1 -addext 'subjectAltName=IP:127.0.0.1' -keyout "$work/key.pem" -out "$work/cert.pem" 2>/dev/null
   node scripts/auth-browser-proxy.mjs "$work/cert.pem" "$work/key.pem" 13200 &

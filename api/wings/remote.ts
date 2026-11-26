@@ -23,6 +23,7 @@ export type FixtureBackupSignal = {
   checksum?: string;
   checksum_type?: string;
   size?: number;
+  parts?: { etag: string; part_number: number }[];
 };
 export type FixtureBackupCallback = (
   id: string,
@@ -52,6 +53,10 @@ export async function registerRemote(
   onTransfer?: (id: string, successful: boolean) => boolean | Promise<boolean>,
   authenticateSftp?: ReturnType<typeof stagingSftpAuth>,
   fixtureBackupCallback?: FixtureBackupCallback,
+  fixtureS3Urls?: (
+    id: string,
+    size: number,
+  ) => Promise<{ part_size: number; parts: string[] } | null>,
 ) {
   if (fixture && !UUID_V4.test(fixture.uuid))
     throw new Error("Invalid test fixture UUID");
@@ -116,6 +121,22 @@ export async function registerRemote(
         return authorized ?? reply.code(403).send({ error: "sftp_denied" });
       },
     );
+  if (fixtureS3Urls)
+    app.get<{ Params: { backup: string }; Querystring: { size?: string } }>(
+      "/backups/:backup",
+      async (req, reply) => {
+        const size = req.query.size;
+        if (
+          !UUID_V4.test(req.params.backup) ||
+          typeof size !== "string" ||
+          !/^\d{1,7}$/.test(size)
+        )
+          return reply.code(404).send({ error: "backup_not_found" });
+        const urls = await fixtureS3Urls(req.params.backup, Number(size));
+        if (!urls) return reply.code(404).send({ error: "backup_not_found" });
+        return reply.header("cache-control", "no-store").send(urls);
+      },
+    );
   if (fixtureBackupCallback)
     for (const phase of ["create", "restore"] as const) {
       app.post<{ Params: { backup: string }; Body: FixtureBackupSignal }>(
@@ -131,6 +152,18 @@ export async function registerRemote(
                 checksum: { type: "string", maxLength: 128 },
                 checksum_type: { type: "string", maxLength: 16 },
                 size: { type: "integer", minimum: 0 },
+                parts: {
+                  type: "array",
+                  maxItems: 1,
+                  items: {
+                    type: "object",
+                    required: ["etag", "part_number"],
+                    properties: {
+                      etag: { type: "string", maxLength: 64 },
+                      part_number: { type: "integer" },
+                    },
+                  },
+                },
               },
             },
           },

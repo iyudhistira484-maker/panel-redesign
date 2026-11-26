@@ -388,6 +388,22 @@ export class WingsClient {
       return null;
     }
   }
+  async fixtureS3Backup(id: string, backup: string, downloadUrl?: string) {
+    if (!UUID_V4.test(backup)) throw new Error("Invalid backup UUID");
+    const base = `${this.#server(id)}/backup`;
+    const response = downloadUrl
+      ? await this.#send(`${base}/${backup}/restore`, 202, "POST", {
+          adapter: "s3",
+          truncate_directory: false,
+          download_url: downloadUrl,
+        })
+      : await this.#send(base, 202, "POST", {
+          adapter: "s3",
+          uuid: backup,
+          ignore: "",
+        });
+    await response.body?.cancel();
+  }
   async fixtureBackup(
     id: string,
     backup: string,
