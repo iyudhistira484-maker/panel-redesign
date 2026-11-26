@@ -5896,6 +5896,21 @@ async function main() {
     assert.deepEqual(await Promise.all(workloadIds.map(checksum)), hash);
     if (actual) {
       assert.ok(cutover && rollback);
+      // Disposable staging acceptance budget, not a production SLA.
+      for (const [label, phase] of [
+        ["cutover", cutover],
+        ["rollback", rollback],
+      ] as const) {
+        assert.equal(phase.ports, 2);
+        assert.ok(
+          phase.samples >= 2,
+          `${label}: at least two two-port probe rounds required`,
+        );
+        assert.ok(
+          phase.switchMs <= 30_000,
+          `${label}: staging budget exceeded`,
+        );
+      }
       console.log(
         `::notice::HTTP adoption cutover_ms=${cutover.switchMs} cutover_samples=${cutover.samples} rollback_ms=${rollback.switchMs} rollback_samples=${rollback.samples} observed_failures=0 relay_write_retained=true observed_ports=${cutover.ports} write_via_secondary=true`,
       );
