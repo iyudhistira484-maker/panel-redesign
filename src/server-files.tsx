@@ -63,9 +63,19 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
         return;
       }
       if (response.status !== 201) throw new Error("Upload unverified");
+      const created = (await response.json()) as { name?: string };
+      if (created.name !== uploadFile.name)
+        throw new Error("Upload unverified");
+      setItems(
+        (current) =>
+          current &&
+          [
+            ...current,
+            { name: uploadFile.name, directory: false, size: bytes.length },
+          ].sort((a, b) => a.name.localeCompare(b.name)),
+      );
       setUploadFile(null);
       if (fileInput.current) fileInput.current.value = "";
-      await load(["fixture-docs"]);
       setUploadStatus("uploaded");
     } catch {
       setUploadStatus("unknown");

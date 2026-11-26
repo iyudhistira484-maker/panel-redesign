@@ -134,12 +134,10 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   expect(await page.getByLabel("File teks untuk diunggah").count()).toBe(0);
   expect(
     (
-      await page
-        .context()
-        .request.post(uploadApi, {
-          headers: editHeaders,
-          data: { name: uploadName, content: uploadedBytes.toString("base64") },
-        })
+      await page.context().request.post(uploadApi, {
+        headers: editHeaders,
+        data: { name: uploadName, content: uploadedBytes.toString("base64") },
+      })
     ).status(),
   ).toBe(403);
   expect((await page.context().request.get(fileApi)).status()).toBe(404);
@@ -216,25 +214,41 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   await page.getByRole("button", { name: "Unggah file baru" }).click();
   expect((await uploadReply).status()).toBe(201);
   await expect(page.getByText("Unggahan terverifikasi.")).toBeVisible();
-  await files.getByRole("button", { name: uploadName, exact: true }).click();
-  const uploadDownload = page.waitForEvent("download");
-  await page.getByRole("button", { name: "Unduh file teks" }).click();
-  const uploadedPath = await (await uploadDownload).path();
-  assert.ok(uploadedPath);
-  expect(await readFile(uploadedPath)).toEqual(uploadedBytes);
+  await expect(
+    files.getByRole("button", { name: uploadName, exact: true }),
+  ).toBeVisible();
+  const uploadVolume = process.env.RELAY_WINGS_CONTRACT_DATA ?? "";
+  assert.match(uploadVolume, /^\/tmp\/tmp\.[A-Za-z0-9]+\/data\/volumes$/);
+  assert.match(id, /^[0-9a-f-]{36}$/);
+  const readUploaded = async () =>
+    (
+      await docker(
+        "docker",
+        [
+          "exec",
+          fixtureDaemon,
+          "cat",
+          `${uploadVolume}/${id}/fixture-docs/${uploadName}`,
+        ],
+        { encoding: "buffer", timeout: 5000 },
+      )
+    ).stdout;
+  expect(await readUploaded()).toEqual(uploadedBytes);
   expect(
     (
-      await page
-        .context()
-        .request.post(uploadApi, {
-          headers: editHeaders,
-          data: {
-            name: uploadName,
-            content: Buffer.from("overwrite").toString("base64"),
-          },
-        })
+      await page.context().request.post(uploadApi, {
+        headers: editHeaders,
+        data: {
+          name: uploadName,
+          content: Buffer.from("overwrite").toString("base64"),
+        },
+      })
     ).status(),
   ).toBe(409);
+  expect(await readUploaded()).toEqual(uploadedBytes);
+  console.log(
+    "::notice::Chromium fixture upload verified exact Wings bytes, denied collaborator and rejected overwrite",
+  );
 
   await files.getByRole("button", { name: "example.txt", exact: true }).click();
   const preview = page.getByRole("region", { name: "Pratinjau teks" });
