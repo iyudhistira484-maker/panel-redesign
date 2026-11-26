@@ -383,6 +383,13 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     ),
   ).toBeVisible();
   await expect.poll(startedAt, { timeout: 20000 }).not.toBe(beforeRestart);
+  await expect(async () => {
+    const refresh = page.getByRole("button", { name: "Perbarui status" });
+    await refresh.click();
+    await expect(
+      page.getByRole("button", { name: "Stop", exact: true }),
+    ).toBeEnabled({ timeout: 1000 });
+  }).toPass({ timeout: 12000, intervals: [1000, 1500, 2500] });
   console.log(
     "::notice::Chromium owner Restart replaced the Wings workload process",
   );
