@@ -1,3 +1,7 @@
+import {
+  registerAppDatabase,
+  type FixtureAppDatabaseDriver,
+} from "./wings/app-database-api";
 import { registerApplicationInventory } from "./application-compat";
 import { registerClientSshKeys } from "./client-ssh-keys";
 import { registerClientCompatibility } from "./client-compat";
@@ -50,6 +54,7 @@ export type Options = {
   fixtureBackupCallback?: FixtureBackupCallback;
   fixtureS3Urls?: Parameters<typeof registerRemote>[7];
   enableDisposableBackups?: boolean;
+  fixtureAppDatabase?: FixtureAppDatabaseDriver;
 };
 type User = {
   id: string;
@@ -119,7 +124,16 @@ export async function createApp({
   fixtureBackupCallback,
   fixtureS3Urls,
   enableDisposableBackups,
+  fixtureAppDatabase,
 }: Options) {
+  if (
+    fixtureAppDatabase &&
+    (process.env.RELAY_ENV !== "staging" ||
+      process.env.GITHUB_ACTIONS !== "true" ||
+      process.env.RUNNER_ENVIRONMENT !== "github-hosted" ||
+      process.env.GITHUB_WORKFLOW !== "Foundation")
+  )
+    throw new Error("Disposable application database fixture required");
   if ((fixtureTransfer || fixtureReceiver) && !enableDisposableProvisioning)
     throw new Error(
       "Fixture transfer requires explicit disposable provisioning",
@@ -392,6 +406,14 @@ export async function createApp({
     );
     return principal?.channel === "session" ? principal.id : null;
   });
+  if (fixtureAppDatabase)
+    registerAppDatabase(app, pool, fixtureAppDatabase, async (req) => {
+      const principal = await actor(
+        req.cookies[sessionCookie],
+        req.headers.authorization,
+      );
+      return principal?.channel === "session" ? principal.id : null;
+    });
   registerClientSshKeys(app, pool, async (req) => {
     if (req.headers.authorization !== undefined) return null;
     const principal = await actor(req.cookies[sessionCookie], undefined);

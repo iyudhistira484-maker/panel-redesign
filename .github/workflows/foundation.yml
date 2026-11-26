@@ -79,6 +79,8 @@ jobs:
         image: mysql:8.4.8
         env:
           MYSQL_ROOT_PASSWORD: disposable-app-source-root
+        ports:
+          - 3306/tcp
         options: >-
           --health-cmd="mysqladmin ping -h 127.0.0.1"
           --health-interval=5s
@@ -107,6 +109,7 @@ jobs:
         env:
           RELAY_ENV: staging
           RELAY_APP_DB_CI_SERVICE: ${{ job.services.source.id }}
+          RELAY_APP_DB_CONTROL_PORT: ${{ job.services.source.ports[3306] }}
           RELAY_APP_DB_RECOVERY_SERVICE: ${{ job.services.recovery.id }}
           RELAY_APP_DB_RECOVERY_PORT: ${{ job.services.recovery.ports[3306] }}
   wings-bootstrap:

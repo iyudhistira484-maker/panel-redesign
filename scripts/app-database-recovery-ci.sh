@@ -101,6 +101,19 @@ GRANT SELECT, UPDATE ON relay_app_recovery.accounts TO 'fixture_app_runtime'@'%'
 GRANT SELECT, INSERT ON relay_app_recovery.ledger TO 'fixture_app_runtime'@'%';
 SQL
 RELAY_EXPECTED_RECOVERY_UUID="$recovery_uuid" ./node_modules/.bin/tsx api/wings/app-database-smoke.ts
+root "$service" <<'SQL'
+CREATE DATABASE relay_test_appdb;
+CREATE USER 'fixture_app_control'@'%' IDENTIFIED BY 'disposable-app-control';
+GRANT ALL PRIVILEGES ON relay_test_appdb.* TO 'fixture_app_control'@'%';
+SQL
+root "$recovery" <<'SQL'
+CREATE DATABASE relay_app_ownerrecovery CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+GRANT ALL PRIVILEGES ON relay_app_ownerrecovery.* TO 'fixture_app_restore'@'localhost';
+SQL
+./node_modules/.bin/tsx api/wings/app-database-api-fixture.ts
+restore -NBr relay_app_ownerrecovery -e "$snapshot" >"$work/owner-restored.rows"
+cmp "$work/current.rows" "$work/owner-restored.rows"
+echo '::notice::Owner application database API: independent_target=true restored_rows_match=true source_unchanged=true'
 reader -NBr relay_app_source -e "$snapshot" >"$work/source-after-restore.rows"
 cmp "$work/current.rows" "$work/source-after-restore.rows"
 printf '::notice::Application MySQL restore: backup_ms=%s restore_ms=%s fresh_mysql_instance=true http_read_write_restart=true concurrent_writer=true checkpoint_rows_match=true binary_json_verified=true foreign_key_enforced=true source_unchanged=true tamper_detected=true\n' "$backup_ms" "$restore_ms"
