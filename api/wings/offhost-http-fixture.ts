@@ -9,6 +9,20 @@ http_pid=$!
 trap 'kill -TERM "$http_pid" 2>/dev/null || true; wait "$http_pid" || true; exit 0' TERM INT
 wait "$http_pid"
 `;
+// Legacy adoption fixture owns exactly secondary TCP port 25616. The
+// off-host workload retains the single-listener startup above.
+export const adoptionStartup = `#!/bin/sh
+set -eu
+cd /home/container
+busybox-extras httpd -f -p "\${SERVER_PORT:?}" -h /home/container/relay-pilot-http &
+primary=$!
+busybox-extras httpd -f -p 25616 -h /home/container/relay-pilot-http &
+secondary=$!
+trap 'kill -TERM "$primary" "$secondary" 2>/dev/null || true; wait "$primary" "$secondary" || true' EXIT
+trap 'exit 0' TERM INT
+printf '%s\\n' RELAY_CONTRACT_READY
+wait "$primary"
+`;
 export const recordCgi = `#!/bin/sh
 set -eu
 cd /home/container/relay-pilot-http
@@ -34,7 +48,14 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 const docker = promisify(execFile);
 
-export async function fixtureHttp(uuid: string, body?: string) {
+type FixtureHttpPort = 25610 | 25616;
+export async function fixtureHttp(
+  uuid: string,
+  body?: string,
+  port: FixtureHttpPort = 25610,
+) {
+  assert.match(uuid, /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/);
+  assert.ok(port === 25610 || port === 25616);
   const address = (
     await docker(
       "docker",
@@ -64,7 +85,7 @@ export async function fixtureHttp(uuid: string, body?: string) {
         "2",
         "-qO-",
         ...(body === undefined ? [] : ["--post-data", body]),
-        `http://${address}:25610/cgi-bin/record`,
+        `http://${address}:${port}/cgi-bin/record`,
       ],
       { timeout: 8000 },
     )
@@ -75,14 +96,20 @@ export async function observeHttpSwitch(
   uuid: string,
   expected: string,
   operation: () => Promise<void>,
+  ports: readonly FixtureHttpPort[] = [25610],
 ) {
+  assert.ok(ports.length > 0 && new Set(ports).size === ports.length);
   let finished = false;
   let samples = 0;
   let failures = 0;
+  const probeAll = () =>
+    Promise.all(
+      ports.map((port) => fixtureHttp(uuid, undefined, port).catch(() => null)),
+    );
   const observe = async () => {
     do {
-      const content = await fixtureHttp(uuid).catch(() => null);
-      if (content !== expected) failures++;
+      const observed = await probeAll();
+      failures += observed.filter((value) => value !== expected).length;
       samples++;
       if (!finished) await new Promise((resolve) => setTimeout(resolve, 200));
     } while (!finished);
@@ -95,11 +122,18 @@ export async function observeHttpSwitch(
     finished = true;
     await probe;
   }
-  assert.equal(await fixtureHttp(uuid), expected);
+  assert.deepEqual(
+    await probeAll(),
+    ports.map(() => expected),
+  );
   assert.equal(
     failures,
     0,
     "HTTP client observed interruption or unexpected data",
   );
-  return { samples, switchMs: Math.round(performance.now() - started) };
+  return {
+    samples,
+    ports: ports.length,
+    switchMs: Math.round(performance.now() - started),
+  };
 }

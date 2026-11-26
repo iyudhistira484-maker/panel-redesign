@@ -21,6 +21,7 @@ import { s3Fixture } from "./s3-fixture";
 import { lifecycleFixture } from "./lifecycle-fixture";
 import { disposableEgg } from "./provision";
 import {
+  adoptionStartup,
   checkpointRecord,
   fixtureHttp,
   observeHttpSwitch,
@@ -523,8 +524,9 @@ async function main() {
             : `cd "$1"; mv relay-start.original relay-start.sh; rm -r relay-pilot-http`,
           "http-switch",
           `${root}/${uuid}`,
-          startup,
+          adoptionStartup,
           recordCgi,
+          startup,
           checkpointRecord,
         ],
         { timeout: 5000 },
@@ -540,7 +542,9 @@ async function main() {
     if (actual)
       await until(
         "legacy HTTP checkpoint",
-        async () => (await fixtureHttp(uuid)) === checkpointRecord,
+        async () =>
+          (await fixtureHttp(uuid)) === checkpointRecord &&
+          (await fixtureHttp(uuid, undefined, 25616)) === checkpointRecord,
       );
     const before = await Promise.all(workloadIds.map(inspect)),
       hash = await Promise.all(workloadIds.map(checksum));
@@ -900,12 +904,18 @@ async function main() {
     }
     const calls = legacyCalls;
     const cutover = actual
-      ? await observeHttpSwitch(uuid, checkpointRecord, () => restart())
+      ? await observeHttpSwitch(
+          uuid,
+          checkpointRecord,
+          () => restart(),
+          [25610, 25616],
+        )
       : undefined;
     if (!actual) await restart();
     if (actual) {
-      assert.equal(await fixtureHttp(uuid, switchRecord), switchRecord);
+      assert.equal(await fixtureHttp(uuid, switchRecord, 25616), switchRecord);
       assert.equal(await fixtureHttp(uuid), switchRecord);
+      assert.equal(await fixtureHttp(uuid, undefined, 25616), switchRecord);
     }
     assert.equal(legacyCalls, calls);
     assert.deepEqual(await Promise.all(workloadIds.map(inspect)), before);
@@ -2952,6 +2962,7 @@ async function main() {
                 `${sourceRoot}/${uuid}`,
                 startup,
                 recordCgi,
+                startup,
                 checkpointRecord,
               ],
               { timeout: 30000 },
@@ -5654,7 +5665,12 @@ async function main() {
       await restart();
     };
     const rollback = actual
-      ? await observeHttpSwitch(uuid, switchRecord, restoreLegacy)
+      ? await observeHttpSwitch(
+          uuid,
+          switchRecord,
+          restoreLegacy,
+          [25610, 25616],
+        )
       : undefined;
     if (!actual) await restoreLegacy();
     if (actual)
@@ -5668,7 +5684,7 @@ async function main() {
     if (actual) {
       assert.ok(cutover && rollback);
       console.log(
-        `::notice::HTTP adoption cutover_ms=${cutover.switchMs} cutover_samples=${cutover.samples} rollback_ms=${rollback.switchMs} rollback_samples=${rollback.samples} observed_failures=0 relay_write_retained=true`,
+        `::notice::HTTP adoption cutover_ms=${cutover.switchMs} cutover_samples=${cutover.samples} rollback_ms=${rollback.switchMs} rollback_samples=${rollback.samples} observed_failures=0 relay_write_retained=true observed_ports=${cutover.ports} write_via_secondary=true`,
       );
       await client.power(uuid, "stop");
       await until(
