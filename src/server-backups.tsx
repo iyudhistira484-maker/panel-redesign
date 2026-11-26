@@ -27,6 +27,7 @@ export function ServerBackups({ id, locale }: { id: string; locale: Locale }) {
       const request = (method: string, path: string) =>
         fetch(base + path, {
           method,
+          headers: method === "GET" ? undefined : { "x-relay-request": "1" },
           cache: "no-store",
           credentials: "same-origin",
           signal: AbortSignal.timeout(15000),

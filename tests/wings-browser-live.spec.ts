@@ -296,6 +296,101 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     backups.getByRole("button", { name: "Buat backup" }),
   ).toBeEnabled();
 
+  const refreshBackups = backups.getByRole("button", {
+    name: "Muat ulang backup",
+  });
+  const backupRow = backups.getByRole("listitem");
+  async function readyBackup() {
+    await expect(async () => {
+      await refreshBackups.click();
+      await expect(refreshBackups).toBeEnabled();
+      await expect(
+        backupRow.getByRole("link", { name: "Unduh backup" }),
+      ).toBeVisible({ timeout: 300 });
+    }).toPass({ timeout: 7000, intervals: [700, 1200, 2000] });
+  }
+  await backups.getByRole("button", { name: "Buat backup" }).click();
+  await expect(backups.getByRole("status")).toContainText(
+    "Permintaan diterima",
+  );
+  await readyBackup();
+  const archiveDownload = page.waitForEvent("download");
+  await backupRow.getByRole("link", { name: "Unduh backup" }).click();
+  const archive = await archiveDownload;
+  expect(archive.suggestedFilename()).toMatch(/^[0-9a-f-]{36}\.tar\.gz$/);
+  const archivePath = await archive.path();
+  assert.ok(archivePath);
+  const extracted = await docker(
+    "tar",
+    ["-xOzf", archivePath, "fixture-docs/example.txt"],
+    { encoding: "buffer", timeout: 5000 },
+  );
+  const checkpoint = Buffer.from("Saved from Chromium\n");
+  expect(extracted.stdout).toEqual(checkpoint);
+  await backupRow
+    .getByRole("button", { name: "Kunci backup", exact: true })
+    .click();
+  await expect(backupRow).toContainText("Terkunci");
+  await expect(
+    backupRow.getByRole("button", { name: "Hapus backup" }),
+  ).toHaveCount(0);
+  await backupRow.getByRole("button", { name: "Buka kunci backup" }).click();
+  await expect(
+    backupRow.getByRole("button", { name: "Hapus backup" }),
+  ).toBeVisible();
+  const newer = "After the browser backup\n";
+  expect(
+    (
+      await page
+        .context()
+        .request.post(editApi, {
+          headers: editHeaders,
+          data: {
+            version: createHash("sha256").update(checkpoint).digest("hex"),
+            text: newer,
+          },
+        })
+    ).status(),
+  ).toBe(200);
+  const fileBytes = async () => {
+    const response = await page
+      .context()
+      .request.get(fileApi, {
+        params: {
+          directory: "/fixture-docs",
+          preview: "example.txt",
+          download: "1",
+        },
+      });
+    expect(response.status()).toBe(200);
+    return response.body();
+  };
+  expect(await fileBytes()).toEqual(Buffer.from(newer));
+  await backupRow.getByRole("button", { name: "Pulihkan backup" }).click();
+  await expect(
+    backupRow.getByText("Pulihkan dan timpa file yang cocok?"),
+  ).toBeVisible();
+  await backupRow.getByRole("button", { name: "Konfirmasi" }).click();
+  await expect(backups.getByRole("status")).toContainText(
+    "Permintaan diterima",
+  );
+  await readyBackup();
+  expect(await fileBytes()).toEqual(checkpoint);
+  await backupRow.getByRole("button", { name: "Hapus backup" }).click();
+  await backupRow.getByRole("button", { name: "Batal" }).click();
+  await expect(
+    backupRow.getByRole("link", { name: "Unduh backup" }),
+  ).toBeVisible();
+  await backupRow.getByRole("button", { name: "Hapus backup" }).click();
+  await expect(
+    backupRow.getByText("Hapus backup ini secara permanen?"),
+  ).toBeVisible();
+  await backupRow.getByRole("button", { name: "Konfirmasi" }).click();
+  await expect(backups.getByText("Belum ada backup.")).toBeVisible();
+  console.log(
+    "::notice::Chromium verified backup create download lock unlock restore delete and checkpoint bytes",
+  );
+
   // Pause only the first disposable CI daemon after observing a valid state.
   // Refreshing runtime first would hide the action and not test dispatch failure.
   const refresh = page.getByRole("button", { name: "Perbarui status" });

@@ -5089,7 +5089,19 @@ async function main() {
             "INSERT INTO server_grants (server_id,user_id,permissions) SELECT ?,id,JSON_ARRAY('activity.read','control.stop') FROM users WHERE email='outsider@example.test'",
             [uuid],
           );
+          const browserLegacyRemote = await readFile(config, "utf8");
+          assert.ok(
+            browserLegacyRemote.includes("remote: http://127.0.0.1:13202"),
+          );
           try {
+            await writeFile(
+              config,
+              browserLegacyRemote.replace(
+                "remote: http://127.0.0.1:13202",
+                "remote: http://127.0.0.1:13200",
+              ),
+            );
+            await restart(false);
             const run = await docker(
               "./node_modules/.bin/playwright",
               [
@@ -5134,6 +5146,8 @@ async function main() {
                 console.log(output.replaceAll(password, "[redacted]"));
             throw new Error("Disposable Wings browser contract failed");
           } finally {
+            await writeFile(config, browserLegacyRemote);
+            await restart(false);
             await pool.execute("DELETE FROM server_grants WHERE server_id=?", [
               uuid,
             ]);
