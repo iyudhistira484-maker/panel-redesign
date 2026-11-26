@@ -256,6 +256,31 @@ export class WingsClient {
       throw new WingsUnavailable("payload");
     return entries.some((entry) => entry.name === name);
   }
+  async writeExtractedFixture(id: string, directory: string, text: string) {
+    if (!/^extract-[0-9a-f]{32}$/.test(directory))
+      throw new WingsUnavailable("payload");
+    if (await this.fixtureUploadTargetExists(id, directory))
+      throw new WingsUnavailable("payload");
+    const created = await this.#send(
+      `${this.#server(id)}/files/create-directory`,
+      204,
+      "POST",
+      { path: "/fixture-docs", name: directory },
+    );
+    await created.body?.cancel();
+    if (
+      (await this.fixtureDirectory(id, ["fixture-docs", directory])).length !==
+      0
+    )
+      throw new WingsUnavailable("payload");
+    const written = await this.#send(
+      `${this.#server(id)}/files/write?file=${encodeURIComponent(`/fixture-docs/${directory}/extracted.txt`)}`,
+      204,
+      "POST",
+      text,
+    );
+    await written.body?.cancel();
+  }
   async renameUploadedFixture(
     id: string,
     source: string,

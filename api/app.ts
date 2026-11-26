@@ -1,3 +1,4 @@
+import { compressFixtureText } from "./wings/fixture-gzip";
 import {
   registerAppDatabase,
   type FixtureAppDatabaseDriver,
@@ -1567,6 +1568,86 @@ export async function createApp({
         }
       },
     );
+  if (provisioner) {
+    app.get<{ Params: { id: string }; Querystring: { name: string } }>(
+      "/api/v1/servers/:id/files/gzip-fixture",
+      {
+        config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+        schema: { querystring: object({ name: text(1, 80) }) },
+      },
+      async (req, reply) => {
+        reply.header("cache-control", "no-store");
+        const principal = await actor(
+          req.cookies[sessionCookie],
+          req.headers.authorization,
+        );
+        if (!principal || principal.channel !== "session")
+          return reply.code(401).send({ error: "unauthenticated" });
+        if (!UUID_V4.test(req.params.id))
+          return reply.code(404).send({ error: "server_not_found" });
+        try {
+          const source = await provisioner.files(
+            req.params.id,
+            principal,
+            "/fixture-docs",
+            req.query.name,
+            true,
+          );
+          if (!Buffer.isBuffer(source))
+            return reply
+              .code(502)
+              .send({ error: "file_compression_unverified" });
+          return reply
+            .type("application/gzip")
+            .header(
+              "content-disposition",
+              `attachment; filename="${req.query.name}.gz"`,
+            )
+            .send(compressFixtureText(source));
+        } catch (error) {
+          if (error instanceof ProvisionError)
+            return reply.code(error.status).send({ error: error.code });
+          throw error;
+        }
+      },
+    );
+    app.post<{ Params: { id: string }; Body: { content: string } }>(
+      "/api/v1/servers/:id/files/gunzip-fixture",
+      {
+        bodyLimit: 24000,
+        config: { rateLimit: { max: 8, timeWindow: "1 minute" } },
+        schema: {
+          body: object({ content: text(1, 22016, "^[A-Za-z0-9+/]*={0,2}$") }),
+        },
+      },
+      async (req, reply) => {
+        reply.header("cache-control", "no-store");
+        const principal = await actor(
+          req.cookies[sessionCookie],
+          req.headers.authorization,
+        );
+        if (!principal || principal.channel !== "session")
+          return reply.code(401).send({ error: "unauthenticated" });
+        if (!UUID_V4.test(req.params.id))
+          return reply.code(404).send({ error: "server_not_found" });
+        try {
+          return reply
+            .code(201)
+            .send(
+              await provisioner.extractFixture(
+                req.params.id,
+                principal,
+                req.body.content,
+              ),
+            );
+        } catch (error) {
+          if (error instanceof ProvisionError)
+            return reply.code(error.status).send({ error: error.code });
+          throw error;
+        }
+      },
+    );
+  }
   if (provisioner)
     app.post<{
       Params: { id: string };

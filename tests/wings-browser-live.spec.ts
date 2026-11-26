@@ -340,12 +340,10 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     "::notice::Chromium rename verified destination bytes and removed source without overwrite",
   );
   const moveTarget = "moved-fixture.txt";
-  const badDestination = await page
-    .context()
-    .request.post(renameApi, {
-      headers: editHeaders,
-      data: { source: renamed, target: moveTarget, destination: "../" },
-    });
+  const badDestination = await page.context().request.post(renameApi, {
+    headers: editHeaders,
+    data: { source: renamed, target: moveTarget, destination: "../" },
+  });
   expect(badDestination.status()).toBe(400);
   await page.getByLabel("File teks sumber").selectOption(renamed);
   await page.getByLabel("Nama file baru").fill(moveTarget);
@@ -405,6 +403,62 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   }
   console.log(
     "::notice::Chromium fixture move verified destination bytes, source absence and relocated receipt",
+  );
+  const gzip = await page
+    .context()
+    .request.get(`${fileApi}/gzip-fixture`, { params: { name: uploadName } });
+  expect(gzip.status()).toBe(200);
+  expect(gzip.headers()["content-type"]).toBe("application/gzip");
+  const unpack = (content: string) =>
+    page.context().request.post(`${fileApi}/gunzip-fixture`, {
+      headers: editHeaders,
+      data: { content },
+    });
+  const gzipResult = await unpack((await gzip.body()).toString("base64"));
+  expect(gzipResult.status()).toBe(201);
+  const result = (await gzipResult.json()) as {
+    directory: string;
+    name: string;
+    size: number;
+  };
+  expect(result.directory).toMatch(/^\/fixture-docs\/extract-[0-9a-f]{32}$/);
+  expect(result.name).toBe("extracted.txt");
+  const actualExtract = (
+    await docker(
+      "docker",
+      [
+        "exec",
+        fixtureDaemon,
+        "cat",
+        `${uploadVolume}/${id}${result.directory}/${result.name}`,
+      ],
+      { encoding: "buffer", timeout: 5000 },
+    )
+  ).stdout;
+  expect(actualExtract).toEqual(uploadedBytes);
+  expect(result.size).toBe(uploadedBytes.length);
+  const entries = async () =>
+    (
+      await docker(
+        "docker",
+        [
+          "exec",
+          fixtureDaemon,
+          "ls",
+          "-1",
+          `${uploadVolume}/${id}/fixture-docs`,
+        ],
+        { timeout: 5000 },
+      )
+    ).stdout;
+  const beforeInvalid = await entries();
+  expect(
+    (await unpack(Buffer.from("invalid gzip").toString("base64"))).status(),
+  ).toBe(400);
+  expect(await entries()).toBe(beforeInvalid);
+  expect(await readUploaded()).toEqual(uploadedBytes);
+  console.log(
+    "::notice::Wings gzip round-trip verified exact bytes in a new folder; corrupt input created nothing",
   );
   const rejectedUploads = [
     {
