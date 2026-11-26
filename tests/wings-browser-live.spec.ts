@@ -127,10 +127,20 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   const initialVersion = createHash("sha256")
     .update("<strong>fixture preview</strong>\n")
     .digest("hex");
+  const copyApi = `${fileApi}/copy-fixture`;
+  const copyName = "browser-copy.txt";
+  const requestCopy = (source: string, target: string) =>
+    page
+      .context()
+      .request.post(copyApi, {
+        headers: editHeaders,
+        data: { source, target },
+      });
   const uploadApi = `${fileApi}/upload-fixture`;
   const uploadedBytes = Buffer.from("Browser upload: å\r\n");
   const uploadName = "browser-upload.txt";
   await open("collaborator@example.test");
+  expect((await requestCopy("example.txt", copyName)).status()).toBe(404);
   expect(await page.getByLabel("File teks untuk diunggah").count()).toBe(0);
   expect(
     (
@@ -245,6 +255,33 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       })
     ).status(),
   ).toBe(409);
+  const copied = await requestCopy(uploadName, copyName);
+  expect(copied.status()).toBe(201);
+  expect(await copied.json()).toEqual({
+    name: copyName,
+    size: uploadedBytes.length,
+  });
+  expect((await requestCopy(uploadName, copyName)).status()).toBe(409);
+  expect(
+    (await requestCopy("../relay-start.sh", "invalid-copy.txt")).status(),
+  ).toBe(400);
+  const copiedBytes = (
+    await docker(
+      "docker",
+      [
+        "exec",
+        fixtureDaemon,
+        "cat",
+        `${uploadVolume}/${id}/fixture-docs/${copyName}`,
+      ],
+      { encoding: "buffer", timeout: 5000 },
+    )
+  ).stdout;
+  expect(copiedBytes).toEqual(uploadedBytes);
+  expect(await readUploaded()).toEqual(uploadedBytes);
+  console.log(
+    "::notice::Wings fixture copy verified source and destination bytes and rejected overwrite and collaborator",
+  );
   const rejectedUploads = [
     {
       name: "../upload-traversal.txt",
@@ -394,15 +431,13 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
 
   await send("Start", 202);
   await verify("running");
-  const onlineUpload = await page
-    .context()
-    .request.post(uploadApi, {
-      headers: editHeaders,
-      data: {
-        name: "upload-while-running.txt",
-        content: uploadedBytes.toString("base64"),
-      },
-    });
+  const onlineUpload = await page.context().request.post(uploadApi, {
+    headers: editHeaders,
+    data: {
+      name: "upload-while-running.txt",
+      content: uploadedBytes.toString("base64"),
+    },
+  });
   expect(onlineUpload.status()).toBe(409);
   expect((await onlineUpload.json()).error).toBe("server_not_offline");
   await absentUpload("fixture-docs/upload-while-running.txt");

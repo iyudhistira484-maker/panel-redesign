@@ -1570,6 +1570,53 @@ export async function createApp({
   if (provisioner)
     app.post<{
       Params: { id: string };
+      Body: { source: string; target: string };
+    }>(
+      "/api/v1/servers/:id/files/copy-fixture",
+      {
+        config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+        schema: { body: object({ source: text(1, 80), target: text(1, 80) }) },
+      },
+      async (req, reply) => {
+        reply.header("cache-control", "no-store");
+        const principal = await actor(
+          req.cookies[sessionCookie],
+          req.headers.authorization,
+        );
+        if (!principal || principal.channel !== "session")
+          return reply.code(401).send({ error: "unauthenticated" });
+        if (!UUID_V4.test(req.params.id))
+          return reply.code(404).send({ error: "server_not_found" });
+        try {
+          const source = await provisioner.files(
+            req.params.id,
+            principal,
+            "/fixture-docs",
+            req.body.source,
+            true,
+          );
+          if (!Buffer.isBuffer(source))
+            return reply.code(502).send({ error: "file_copy_unverified" });
+          await provisioner.compatFiles.upload(
+            req.params.id,
+            principal,
+            req.body.target,
+            source,
+            Date.now() + 30_000,
+          );
+          return reply
+            .code(201)
+            .send({ name: req.body.target, size: source.length });
+        } catch (error) {
+          if (error instanceof ProvisionError)
+            return reply.code(error.status).send({ error: error.code });
+          throw error;
+        }
+      },
+    );
+  if (provisioner)
+    app.post<{
+      Params: { id: string };
       Body: { name: string; content: string };
     }>(
       "/api/v1/servers/:id/files/upload-fixture",
