@@ -344,6 +344,25 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   await expect(page.getByLabel("Cuplikan sumber daya Wings")).toContainText(
     "MiB",
   );
+  const startedAt = async () =>
+    (
+      await docker(
+        "docker",
+        ["inspect", "--format", "{{.State.StartedAt}}", id],
+        { timeout: 3000 },
+      )
+    ).stdout.trim();
+  const beforeRestart = await startedAt();
+  await send("Restart", 202);
+  await expect(
+    page.getByText(
+      "Restart diminta. Status berjalan saja tidak membuktikan restart.",
+    ),
+  ).toBeVisible();
+  await expect.poll(startedAt, { timeout: 20000 }).not.toBe(beforeRestart);
+  console.log(
+    "::notice::Chromium owner Restart replaced the Wings workload process",
+  );
   await send("Stop", 202);
   await verify("offline");
 

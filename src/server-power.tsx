@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { Locale } from "./i18n";
 import { Button } from "./ui";
 
-type Action = "start" | "stop";
+type Action = "start" | "stop" | "restart";
 async function read(base: string, signal?: AbortSignal) {
   const response = await fetch(`${base}/runtime`, {
     cache: "no-store",
@@ -21,7 +21,13 @@ export function ServerPower({ id, locale }: { id: string; locale: Locale }) {
   const [busy, setBusy] = useState(true);
   const [confirm, setConfirm] = useState<Action | null>(null);
   const [message, setMessage] = useState<
-    "unavailable" | "denied" | "unknown" | "pending" | "verified" | null
+    | "unavailable"
+    | "denied"
+    | "unknown"
+    | "restartAccepted"
+    | "pending"
+    | "verified"
+    | null
   >(null);
   const [desired, setDesired] = useState<string | null>(null);
   const base = `/api/v1/servers/${encodeURIComponent(id)}`;
@@ -90,6 +96,12 @@ export function ServerPower({ id, locale }: { id: string; locale: Locale }) {
         );
         return;
       }
+      if (action === "restart") {
+        setDesired(null);
+        setState(await read(base).catch(() => null));
+        setMessage("restartAccepted");
+        return;
+      }
       const target = action === "start" ? "running" : "offline";
       setDesired(target);
       const result = await read(base).catch(() => null);
@@ -112,6 +124,8 @@ export function ServerPower({ id, locale }: { id: string; locale: Locale }) {
         unknown: "The outcome is unknown. Check status before retrying.",
         pending:
           "Request accepted. The target state is not yet confirmed; refresh status.",
+        restartAccepted:
+          "Restart requested. Running status alone does not confirm a restart.",
         verified: "Target state verified by Wings.",
       }
     : {
@@ -120,6 +134,8 @@ export function ServerPower({ id, locale }: { id: string; locale: Locale }) {
         unknown: "Hasil belum diketahui. Periksa status sebelum mencoba lagi.",
         pending:
           "Permintaan diterima. Status tujuan belum terverifikasi; perbarui status.",
+        restartAccepted:
+          "Restart diminta. Status berjalan saja tidak membuktikan restart.",
         verified: "Status tujuan terverifikasi oleh Wings.",
       };
   return (
@@ -133,6 +149,11 @@ export function ServerPower({ id, locale }: { id: string; locale: Locale }) {
       {!confirm && action && !desired && (
         <Button disabled={busy} onClick={() => setConfirm(action)}>
           {action === "start" ? "Start" : "Stop"}
+        </Button>
+      )}
+      {!confirm && state === "running" && !desired && (
+        <Button disabled={busy} onClick={() => setConfirm("restart")}>
+          Restart
         </Button>
       )}
       {confirm && (

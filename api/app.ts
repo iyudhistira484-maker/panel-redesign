@@ -1656,14 +1656,14 @@ export async function createApp({
   if (provisioner)
     app.post<{
       Params: { id: string };
-      Body: { action: "start" | "stop"; confirm: true };
+      Body: { action: "start" | "stop" | "restart"; confirm: true };
     }>(
       "/api/v1/servers/:id/power",
       {
         config: { rateLimit: { max: 15, timeWindow: "1 minute" } },
         schema: {
           body: object({
-            action: { type: "string", enum: ["start", "stop"] },
+            action: { type: "string", enum: ["start", "stop", "restart"] },
             confirm: { type: "boolean", const: true },
           }),
         },
