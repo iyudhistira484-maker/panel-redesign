@@ -155,7 +155,7 @@ jobs:
       - run: npm ci
       - run: npm run test:wings
       - if: matrix.scenario == 'legacy-panel'
-        run: npm run build
+        run: RELAY_AUTHENTICATED_ENTRY=1 npm run build
       - if: matrix.scenario == 'legacy-panel'
         name: Use runner Chromium or install Playwright browser
         run: |
@@ -173,6 +173,7 @@ jobs:
         env:
           RELAY_RECOVERY_MYSQL_SERVICE: ${{ job.services.mysql.id }}
           RELAY_BOOTSTRAP_SCENARIO: ${{ matrix.scenario == 'mumble-cutover' && 'legacy-panel' || matrix.scenario }}
+          RELAY_BROWSER_LOGIN_FIRST: ${{ matrix.scenario == 'legacy-panel' && '1' || '' }}
           RELAY_MUMBLE_CUTOVER: ${{ matrix.scenario == 'mumble-cutover' && '1' || '' }}
           RELAY_EXPERIMENTAL_GITEA: ${{ matrix.scenario == 'gitea-qualification' && '1' || '' }}
           RELAY_STAGING_DATABASE_URL: mysql://relay:disposable-ci@127.0.0.1:${{ job.services.mysql.ports[3306] }}/relay_test

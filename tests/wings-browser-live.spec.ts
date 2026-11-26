@@ -27,18 +27,23 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   const origin = "https://127.0.0.1:4443";
   const runtime = `${origin}/api/v1/servers/${id}/runtime`,
     power = `${origin}/api/v1/servers/${id}/power`;
-  const detail = page.getByRole("button", { name: "Detail server" });
+  const loginFirst = process.env.RELAY_BROWSER_LOGIN_FIRST === "1";
+  const detail = page.getByRole("button", {
+    name: /^(Detail server|Buka konsol)$/,
+  });
   async function open(email: string) {
-    await page.goto(`${origin}/#authView`);
+    await page.goto(loginFirst ? origin : `${origin}/#authView`);
+    await expect(page.getByText("Atlas Survival")).toHaveCount(0);
     await page.getByLabel("Email", { exact: true }).fill(email);
     await page
       .getByLabel("Kata sandi", { exact: true })
       .fill(password as string);
-    await page.getByRole("button", { name: "Masuk", exact: true }).click();
     const list = page.waitForResponse(
       (r) => r.url() === `${origin}/api/v1/servers`,
     );
-    await page.getByRole("button", { name: "Muat daftar server" }).click();
+    await page.getByRole("button", { name: "Masuk", exact: true }).click();
+    if (!loginFirst)
+      await page.getByRole("button", { name: "Muat daftar server" }).click();
     const data = (await (await list).json()) as {
       items: { id: string; name: string }[];
     };
@@ -47,7 +52,12 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     const state = page.waitForResponse((r) => r.url() === runtime);
     await page
       .locator(`[data-server-id="${id}"]`)
-      .getByRole("button", { name: "Detail server" })
+      .getByRole("button", {
+        name:
+          loginFirst && email === "adoption@example.test"
+            ? "Buka konsol"
+            : "Detail server",
+      })
       .click();
     expect((await state).status()).toBe(200);
     await expect(
@@ -141,10 +151,23 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   await readActivity.click();
   await expect(activity).toContainText("catalog.fixture_checked");
   await expect(activity.locator("time").first()).toBeVisible();
-  await readConsole(404);
-  await expect(
-    page.getByText("Cuplikan konsol tidak tersedia", { exact: false }),
-  ).toBeVisible();
+  if (loginFirst) {
+    await expect(
+      page.getByRole("button", { name: "Baca konsol staging" }),
+    ).toHaveCount(0);
+    expect(
+      (
+        await page
+          .context()
+          .request.get(`${origin}/api/v1/servers/${id}/console`)
+      ).status(),
+    ).toBe(404);
+  } else {
+    await readConsole(404);
+    await expect(
+      page.getByText("Cuplikan konsol tidak tersedia", { exact: false }),
+    ).toBeVisible();
+  }
   await readMetrics(404);
   await expect(
     page.getByRole("alert").filter({ hasText: "Penggunaan sumber daya" }),
