@@ -110,6 +110,10 @@ root "$recovery" <<'SQL'
 CREATE DATABASE relay_app_ownerrecovery CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 GRANT ALL PRIVILEGES ON relay_app_ownerrecovery.* TO 'fixture_app_restore'@'localhost';
 SQL
+root "$recovery" <<'SQL'
+CREATE DATABASE relay_app_interrupted CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+GRANT ALL PRIVILEGES ON relay_app_interrupted.* TO 'fixture_app_restore'@'localhost';
+SQL
 ./node_modules/.bin/tsx api/wings/app-database-api-fixture.ts
 restore -NBr relay_app_ownerrecovery -e "$snapshot" >"$work/owner-restored.rows"
 cmp "$work/current.rows" "$work/owner-restored.rows"

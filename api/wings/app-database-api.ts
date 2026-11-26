@@ -77,7 +77,10 @@ export function registerAppDatabase(
             recoveryState: string;
           }>(
             pool,
-            "SELECT id,label,recovery_state AS recoveryState FROM app_database_bindings WHERE server_id=? ORDER BY id LIMIT 20",
+            `SELECT id,label,recovery_state AS recoveryState,recovery_backup_id AS recoveryBackupId,
+               recovery_started_at AS recoveryStartedAt,recovery_finished_at AS recoveryFinishedAt,
+               CASE WHEN recovery_state='needs_review' OR (recovery_state='restoring' AND (recovery_started_at IS NULL OR recovery_started_at<=UTC_TIMESTAMP(3)-INTERVAL 2 MINUTE)) THEN 1 ELSE 0 END AS recoveryNeedsReview
+               FROM app_database_bindings WHERE server_id=? ORDER BY id LIMIT 20`,
             [server],
           );
           return { items: items.filter((item) => driver.bound(item.id)) };
@@ -178,8 +181,8 @@ export function registerAppDatabase(
           )
             return { status: 422 } as const;
           await db.execute(
-            "UPDATE app_database_bindings SET recovery_state='restoring' WHERE id=?",
-            [database],
+            "UPDATE app_database_bindings SET recovery_state='restoring',recovery_backup_id=?,recovery_started_at=UTC_TIMESTAMP(3),recovery_finished_at=NULL WHERE id=?",
+            [backup, database],
           );
           await db.execute(
             "INSERT INTO audit_log(actor_id,event,subject_id) VALUES (?,'app_database.restore_requested',?)",
@@ -199,17 +202,23 @@ export function registerAppDatabase(
         try {
           await driver.restore(database, claim.dump);
         } catch {
-          await pool.execute(
-            "UPDATE app_database_bindings SET recovery_state='needs_review' WHERE id=? AND recovery_state='restoring'",
-            [database],
-          );
+          await transaction(pool, async (db) => {
+            await db.execute(
+              "UPDATE app_database_bindings SET recovery_state='needs_review',recovery_finished_at=UTC_TIMESTAMP(3) WHERE id=? AND recovery_state='restoring'",
+              [database],
+            );
+            await db.execute(
+              "INSERT INTO audit_log(actor_id,event,subject_id) VALUES (?,'app_database.restore_unconfirmed',?)",
+              [owner, backup],
+            );
+          });
           return reply
             .code(502)
             .send({ error: "database_restore_unconfirmed" });
         }
         await transaction(pool, async (db) => {
           await db.execute(
-            "UPDATE app_database_bindings SET recovery_state='restored' WHERE id=? AND recovery_state='restoring'",
+            "UPDATE app_database_bindings SET recovery_state='restored',recovery_finished_at=UTC_TIMESTAMP(3) WHERE id=? AND recovery_state='restoring'",
             [database],
           );
           await db.execute(

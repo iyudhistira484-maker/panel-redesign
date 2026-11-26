@@ -48,22 +48,40 @@ async function main() {
       child.stdin?.end(input);
     });
   }
+  const interruptedId = randomUUID();
   const id = randomUUID(),
     server = randomUUID(),
     neighbor = randomUUID(),
     owner = randomUUID(),
     outsider = randomUUID();
   let restores = 0;
+  let interruptedAttempts = 0;
   const driver: FixtureAppDatabaseDriver = {
-    bound: (database) => database === id,
+    bound: (database) => database === id || database === interruptedId,
     async snapshot(database) {
-      assert.equal(database, id);
+      assert.ok(database === id || database === interruptedId);
       return execute(
         src,
         "MYSQL_PWD=disposable-app-reader exec mysqldump -ufixture_app_reader --default-character-set=utf8mb4 --single-transaction --no-tablespaces --set-gtid-purged=OFF --skip-lock-tables --skip-triggers --hex-blob relay_app_source",
       );
     },
     async restore(database, dump) {
+      if (database === interruptedId) {
+        interruptedAttempts++;
+        const sql = dump.toString("utf8");
+        const cut = sql.indexOf("-- Table structure for table `ledger`");
+        assert.ok(cut > 0);
+        // Import the first table, then fail after its rows committed. Earlier
+        // MySQL DDL is not transactional with the remainder of the dump.
+        await execute(
+          dst,
+          "MYSQL_PWD=disposable-app-restore exec mysql -ufixture_app_restore --default-character-set=utf8mb4 relay_app_interrupted",
+          Buffer.from(
+            `${sql.slice(0, cut)}\nSIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='fixture import interrupted';\n`,
+          ),
+        );
+        throw new Error("Expected partial import to terminate");
+      }
       assert.equal(database, id);
       const empty = await execute(
         dst,
@@ -133,6 +151,10 @@ async function main() {
     await pool.execute(
       "INSERT INTO app_database_bindings(id,server_id,label) VALUES (?,?,'Ledger MySQL')",
       [id, server],
+    );
+    await pool.execute(
+      "INSERT INTO app_database_bindings(id,server_id,label) VALUES (?,?,'Interrupted ledger MySQL')",
+      [interruptedId, server],
     );
     const auth = {
       cookie: await cookie(owner),
@@ -232,8 +254,9 @@ async function main() {
       );
       assert.equal(restores, 1);
       assert.equal(
-        (await fresh.inject({ url: root, headers: auth })).json().items[0]
-          .recoveryState,
+        (await fresh.inject({ url: root, headers: auth }))
+          .json()
+          .items.find((item: { id: string }) => item.id === id).recoveryState,
         "restored",
       );
       assert.equal(
@@ -251,6 +274,95 @@ async function main() {
       );
     } finally {
       await fresh.close();
+    }
+    const interruptedPath = `${root}/${interruptedId}/backups`;
+    let partialBackup: string;
+    const beforeRestart = await launch();
+    try {
+      const created = await beforeRestart.inject({
+        method: "POST",
+        url: interruptedPath,
+        headers: auth,
+      });
+      assert.equal(created.statusCode, 201);
+      partialBackup = created.json().id;
+      const request = {
+        method: "POST" as const,
+        url: `${interruptedPath}/${partialBackup}/restore`,
+        headers: auth,
+        payload: { confirm: true },
+      };
+      const interrupted = await beforeRestart.inject(request);
+      assert.equal(interrupted.statusCode, 502);
+      assert.equal(interrupted.json().error, "database_restore_unconfirmed");
+    } finally {
+      await beforeRestart.close();
+    }
+    const readPartial = async () =>
+      (
+        await execute(
+          dst,
+          "MYSQL_PWD=disposable-app-restore exec mysql -ufixture_app_restore -NBr relay_app_interrupted -e 'SELECT balance FROM accounts ORDER BY id; SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=\"ledger\"' ",
+        )
+      )
+        .toString()
+        .trim();
+    assert.equal(await readPartial(), "70\n30\n0");
+    await execute(
+      dst,
+      "MYSQL_PWD=disposable-app-restore exec mysql -ufixture_app_restore relay_app_interrupted -e 'UPDATE accounts SET balance=71 WHERE id=1'",
+    );
+    const afterRestart = await launch();
+    try {
+      const get = async () => {
+        const result = await afterRestart.inject({ url: root, headers: auth });
+        assert.equal(result.statusCode, 200);
+        return result
+          .json()
+          .items.find((item: { id: string }) => item.id === interruptedId);
+      };
+      const observation = await get();
+      assert.equal(observation.recoveryState, "needs_review");
+      assert.equal(observation.recoveryNeedsReview, 1);
+      assert.equal(observation.recoveryBackupId, partialBackup);
+      assert.ok(
+        observation.recoveryStartedAt && observation.recoveryFinishedAt,
+      );
+      const retry = () =>
+        afterRestart.inject({
+          method: "POST",
+          url: `${interruptedPath}/${partialBackup}/restore`,
+          headers: auth,
+          payload: { confirm: true },
+        });
+      assert.equal((await retry()).statusCode, 409);
+      assert.equal(await readPartial(), "71\n30\n0");
+      assert.equal(interruptedAttempts, 1);
+      assert.equal(
+        (
+          await rows(
+            pool,
+            "SELECT id FROM audit_log WHERE actor_id=? AND subject_id=? AND event='app_database.restore_unconfirmed'",
+            [owner, partialBackup],
+          )
+        ).length,
+        1,
+      );
+      // Simulate the lost response window: durable claim, no terminal update.
+      await pool.execute(
+        "UPDATE app_database_bindings SET recovery_state='restoring',recovery_started_at=UTC_TIMESTAMP(3)-INTERVAL 3 MINUTE,recovery_finished_at=NULL WHERE id=?",
+        [interruptedId],
+      );
+      const unknown = await get();
+      assert.equal(unknown.recoveryState, "restoring");
+      assert.equal(unknown.recoveryNeedsReview, 1);
+      assert.equal((await retry()).statusCode, 409);
+      assert.equal(await readPartial(), "71\n30\n0");
+      console.log(
+        "::notice::Application database partial restore: real_partial_import=true review_survived_restart=true lost_result_flagged=true retry_blocked=true newer_target_write_preserved=true",
+      );
+    } finally {
+      await afterRestart.close();
     }
   } finally {
     await pool.end();
