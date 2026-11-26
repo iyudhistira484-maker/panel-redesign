@@ -1,5 +1,6 @@
 import { upstreamProfiles, mumbleEgg } from "../eggs/upstream-workload";
 import { reviewedHttpEggs } from "../eggs/reviewed-workload";
+import { readFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { WingsSocket } from "./socket";
@@ -291,18 +292,36 @@ async function main() {
         "relay-wings-contract-diagnostic:ci",
       );
       const bindings = JSON.parse(stdout.slice(space + 1));
+      // Wings translates the catalog loopback allocation to its Docker
+      // interface address when it creates the actual port bindings.
+      const configPath = process.env.RELAY_ADOPTION_FIXTURE_CONFIG ?? "";
+      assert.match(
+        configPath,
+        /^\/tmp\/tmp\.[A-Za-z0-9]+\/config\/config\.yml$/,
+      );
+      const config = await readFile(configPath, "utf8");
+      const bindingIp = config.match(
+        /^\s+interface: (\d+\.\d+\.\d+\.\d+)$/m,
+      )?.[1];
+      assert.ok(
+        bindingIp &&
+          /^(?:127\.|172\.(?:1[6-9]|2[0-9]|3[01])\.)/.test(bindingIp),
+      );
       for (const port of [25610, 25620])
         assert.ok(
           bindings[`${port}/tcp`]?.some(
             (binding: { HostIp: string; HostPort: string }) =>
-              binding.HostPort === String(port) &&
-              binding.HostIp === "127.0.0.1",
+              binding.HostPort === String(port) && binding.HostIp === bindingIp,
           ),
+          `Fixture port ${port} bound to configured private interface`,
         );
-      assert.ok(
-        (await consoleSnapshot()).lines.includes(
-          "RELAY_CONTRACT_PROFILE_DIAGNOSTIC",
-        ),
+      await until(
+        "diagnostic startup console marker",
+        async () =>
+          (await consoleSnapshot()).lines.includes(
+            "RELAY_CONTRACT_PROFILE_DIAGNOSTIC",
+          ),
+        6,
       );
     };
     const retained = "stored before reinstall\n";
