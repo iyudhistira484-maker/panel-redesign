@@ -492,6 +492,24 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       (await subuser.request.get(`${origin}/api/v1/account`)).status(),
     ).toBe(200);
     expect((await subuser.request.get(history)).status()).toBe(404);
+    await page
+      .getByRole("button", { name: "Tambah akun yang sudah ada" })
+      .click();
+    await expect(removable).toContainText("activity.read");
+    async function changeSubuser(label: string) {
+      await removable.getByRole("button", { name: label, exact: true }).click();
+      await removable
+        .getByRole("button", { name: "Konfirmasi perubahan subuser" })
+        .click();
+    }
+    await changeSubuser("SFTP baca dan tulis");
+    await expect(removable).toContainText("file.create");
+    await changeSubuser("SFTP baca saja");
+    await expect(removable).not.toContainText("file.create");
+    await expect(removable).toContainText("file.sftp");
+    await changeSubuser("Hapus subuser");
+    await expect(removable).toHaveCount(0);
+    await expect(mixed).toContainText("control.stop");
   } finally {
     await subuser.close();
   }
