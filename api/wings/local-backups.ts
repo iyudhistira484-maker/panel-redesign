@@ -16,12 +16,13 @@ const MAX_RECEIPTS = 3;
 type Backup = {
   id: string;
   state: string;
+  locked: number;
   sizeBytes: number | null;
   checksum: string | null;
   createdAt: string;
 };
 const columns =
-  "b.id,b.state,b.size_bytes AS sizeBytes,b.checksum,b.created_at AS createdAt";
+  "b.id,b.state,b.locked,b.size_bytes AS sizeBytes,b.checksum,b.created_at AS createdAt";
 type Target = { id: string; owner: string; nodeId: string; cipher: Buffer };
 
 export function localBackupService(
@@ -198,6 +199,68 @@ export function localBackupService(
         }
       },
     );
+    for (const action of ["lock", "unlock", "delete"] as const) {
+      app.route<{ Params: Params }>({
+        method: action === "delete" ? "DELETE" : "POST",
+        url: `${root}/:backup${action === "delete" ? "" : `/${action}`}`,
+        config,
+        bodyLimit: 1024,
+        handler: async (req, reply) => {
+          const owner = await sessionUser(req);
+          if (!owner) return reply.code(401).send({ error: "unauthenticated" });
+          const { id: server, backup: id } = req.params;
+          if (!id || !UUID_V4.test(id) || !UUID_V4.test(server))
+            return reply.code(404).send({ error: "not_found" });
+          if (req.body !== undefined)
+            return reply.code(400).send({ error: "invalid_request" });
+          const result = await transaction(pool, async (db) => {
+            const record = await target(db, server, owner, true);
+            const backup = record && (await lookup(db, record, id));
+            if (!record || !backup) return { status: 404 } as const;
+            if (action !== "delete") {
+              if (backup.state !== "ready") return { status: 409 } as const;
+              await db.execute(
+                "UPDATE local_server_backups SET locked=? WHERE id=?",
+                [action === "lock" ? 1 : 0, id],
+              );
+              return { status: 204 } as const;
+            }
+            if (
+              backup.locked ||
+              ![
+                "ready",
+                "create_failed",
+                "restore_failed",
+                "deleting",
+              ].includes(backup.state)
+            )
+              return { status: 409 } as const;
+            await db.execute(
+              "UPDATE local_server_backups SET state='deleting' WHERE id=?",
+              [id],
+            );
+            return { status: 202, nodeId: record.nodeId } as const;
+          });
+          if (result.status === 204) return reply.code(204).send();
+          if (result.status !== 202)
+            return reply
+              .code(result.status)
+              .send({
+                error: result.status === 404 ? "not_found" : "backup_conflict",
+              });
+          try {
+            await client.fixtureBackup(server, id, "delete");
+          } catch {
+            return reply.code(502).send({ error: "backup_delete_uncertain" });
+          }
+          await pool.execute(
+            "DELETE FROM local_server_backups WHERE id=? AND server_id=? AND node_id=? AND state='deleting'",
+            [id, server, result.nodeId],
+          );
+          return reply.code(204).send();
+        },
+      });
+    }
     for (const action of ["create", "restore"] as const) {
       app.post<{ Params: Params }>(
         action === "create" ? root : `${root}/:backup/restore`,

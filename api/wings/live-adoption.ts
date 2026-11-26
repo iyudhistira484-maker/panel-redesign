@@ -2057,7 +2057,7 @@ async function main() {
           const createdIds: string[] = [];
           const api = (
             app: typeof relay,
-            method: "GET" | "POST",
+            method: "GET" | "POST" | "DELETE",
             suffix = "",
             session: Record<string, string> = ownerSession,
           ) =>
@@ -2169,8 +2169,64 @@ async function main() {
             await createReceipt();
             await createReceipt();
             assert.equal((await api(relay, "POST")).statusCode, 409);
+            assert.equal(
+              (await api(relay, "POST", `/${durableId}/lock`, outsider))
+                .statusCode,
+              404,
+            );
+            assert.equal(
+              (await api(relay, "POST", `/${durableId}/lock`)).statusCode,
+              204,
+            );
+            assert.equal(
+              (await api(relay, "DELETE", `/${durableId}`)).statusCode,
+              409,
+            );
+            const reopened = await relayFor(node);
+            try {
+              assert.equal(
+                (await api(reopened, "DELETE", `/${durableId}`)).statusCode,
+                409,
+              );
+              assert.equal(
+                (await api(reopened, "POST", `/${durableId}/unlock`))
+                  .statusCode,
+                204,
+              );
+              assert.equal(
+                (await api(reopened, "DELETE", `/${durableId}`)).statusCode,
+                204,
+              );
+              assert.equal(
+                (await api(reopened, "GET", `/${durableId}/download`))
+                  .statusCode,
+                404,
+              );
+              const retryId = createdIds[1];
+              // Crash window: Wings removed the archive but Relay did not clear the receipt.
+              await pool.execute(
+                "UPDATE local_server_backups SET state='deleting' WHERE id=?",
+                [retryId],
+              );
+              await client.fixtureBackup(uuid, retryId, "delete");
+              assert.equal(
+                (await api(reopened, "DELETE", `/${retryId}`, outsider))
+                  .statusCode,
+                404,
+              );
+              assert.equal(
+                (await api(reopened, "DELETE", `/${retryId}`)).statusCode,
+                204,
+              );
+              assert.equal(
+                (await api(reopened, "DELETE", `/${retryId}`)).statusCode,
+                404,
+              );
+            } finally {
+              await reopened.close();
+            }
             console.log(
-              "::notice::Local backup API persistent_receipts=true scoped_owner=true checksum_verified=true restore_verified=true quota_enforced=true",
+              "::notice::Local backup API persistent_receipts=true scoped_owner=true checksum_verified=true restore_verified=true quota_enforced=true lock_persisted=true delete_reconciled=true",
             );
           } finally {
             for (const id of createdIds) {

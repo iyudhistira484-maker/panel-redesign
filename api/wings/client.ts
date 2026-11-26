@@ -391,8 +391,18 @@ export class WingsClient {
               adapter: "wings",
               truncate_directory: false,
             })
-          : await this.#send(`${base}/${backup}`, 204, "DELETE");
-    await response.body?.cancel();
+          : await this.#send(
+              `${base}/${backup}`,
+              204,
+              "DELETE",
+              undefined,
+              true,
+            ).catch((err: unknown) => {
+              if (err instanceof WingsUnavailable && err.reason === "not_found")
+                return null;
+              throw err;
+            });
+    await response?.body?.cancel();
   }
   async writeFixtureText(id: string, text: string) {
     const response = await this.#send(
