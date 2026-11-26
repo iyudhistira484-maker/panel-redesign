@@ -17,12 +17,13 @@ type Backup = {
   id: string;
   state: string;
   locked: number;
+  needsReview: number;
   sizeBytes: number | null;
   checksum: string | null;
   createdAt: string;
 };
 const columns =
-  "b.id,b.state,b.locked,b.size_bytes AS sizeBytes,b.checksum,b.created_at AS createdAt";
+  "b.id,b.state,b.locked,b.size_bytes AS sizeBytes,b.checksum,b.created_at AS createdAt, CASE WHEN b.state IN ('creating','restoring') AND b.operation_started_at <= CURRENT_TIMESTAMP(3) - INTERVAL 2 MINUTE THEN 1 ELSE 0 END AS needsReview";
 type Target = { id: string; owner: string; nodeId: string; cipher: Buffer };
 
 export function localBackupService(
@@ -86,8 +87,8 @@ export function localBackupService(
           (event.size ?? 0) <= MAX_BYTES));
     const [result] = await pool.execute<ResultSetHeader>(
       creating
-        ? "UPDATE local_server_backups SET state=?,size_bytes=?,checksum=? WHERE id=? AND node_id=? AND state='creating'"
-        : "UPDATE local_server_backups SET state=? WHERE id=? AND node_id=? AND state='restoring'",
+        ? "UPDATE local_server_backups SET state=?,size_bytes=?,checksum=?,operation_started_at=NULL WHERE id=? AND node_id=? AND state='creating'"
+        : "UPDATE local_server_backups SET state=?,operation_started_at=NULL WHERE id=? AND node_id=? AND state='restoring'",
       creating
         ? [
             valid ? "ready" : "create_failed",
@@ -218,7 +219,11 @@ export function localBackupService(
             const backup = record && (await lookup(db, record, id));
             if (!record || !backup) return { status: 404 } as const;
             if (action !== "delete") {
-              if (backup.state !== "ready") return { status: 409 } as const;
+              if (
+                backup.state !== "ready" &&
+                !(action === "unlock" && backup.state === "restore_failed")
+              )
+                return { status: 409 } as const;
               await db.execute(
                 "UPDATE local_server_backups SET locked=? WHERE id=?",
                 [action === "lock" ? 1 : 0, id],
@@ -308,13 +313,13 @@ export function localBackupService(
             if (action === "create") {
               if (existing.length >= MAX_RECEIPTS) return 409;
               await db.execute(
-                "INSERT INTO local_server_backups(id,server_id,node_id,state) VALUES (?,?,?,'creating')",
+                "INSERT INTO local_server_backups(id,server_id,node_id,state,operation_started_at) VALUES (?,?,?,'creating',CURRENT_TIMESTAMP(3))",
                 [id, server, record.nodeId],
               );
             } else {
               if (selected?.state !== "ready") return 409;
               await db.execute(
-                "UPDATE local_server_backups SET state='restoring' WHERE id=? AND state='ready'",
+                "UPDATE local_server_backups SET state='restoring',operation_started_at=CURRENT_TIMESTAMP(3) WHERE id=? AND state='ready'",
                 [id],
               );
             }

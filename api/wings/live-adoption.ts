@@ -2188,6 +2188,34 @@ async function main() {
                 (await api(reopened, "DELETE", `/${durableId}`)).statusCode,
                 409,
               );
+              // Exercise the delayed callback path without sleeping or repeating a restore.
+              await pool.execute(
+                "UPDATE local_server_backups SET state='restoring',operation_started_at=CURRENT_TIMESTAMP(3)-INTERVAL 3 MINUTE WHERE id=?",
+                [durableId],
+              );
+              const pending = (await api(reopened, "GET"))
+                .json()
+                .items.find((row: { id: string }) => row.id === durableId);
+              assert.equal(pending.needsReview, 1);
+              assert.equal(
+                (await api(reopened, "POST", `/${durableId}/restore`))
+                  .statusCode,
+                409,
+              );
+              const late = await relay.inject({
+                method: "POST",
+                url: `/api/remote/backups/${durableId}/restore`,
+                headers: {
+                  authorization: `Bearer ${node.tokenId}.${node.token}`,
+                },
+                payload: { successful: false },
+              });
+              assert.equal(late.statusCode, 204);
+              const failed = (await api(reopened, "GET"))
+                .json()
+                .items.find((row: { id: string }) => row.id === durableId);
+              assert.equal(failed.state, "restore_failed");
+              assert.equal(failed.needsReview, 0);
               assert.equal(
                 (await api(reopened, "POST", `/${durableId}/unlock`))
                   .statusCode,

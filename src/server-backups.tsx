@@ -6,6 +6,7 @@ type Receipt = {
   id: string;
   state: string;
   locked: number;
+  needsReview: number;
   sizeBytes: number | null;
 };
 type Action = "restore" | "delete";
@@ -114,6 +115,21 @@ export function ServerBackups({ id, locale }: { id: string; locale: Locale }) {
                   <code>{item.id}</code> · {states[item.state] ?? item.state}
                   {item.locked ? ` · ${en ? "Locked" : "Terkunci"}` : ""}
                 </p>
+                {item.needsReview === 1 && (
+                  <p>
+                    {en
+                      ? "Wings has not confirmed the result. Do not retry or start another backup operation; check Wings logs."
+                      : "Wings belum mengonfirmasi hasil. Jangan ulangi operasi backup; periksa log Wings."}
+                  </p>
+                )}
+                {item.state === "restore_failed" && item.locked === 1 && (
+                  <Button
+                    disabled={busy}
+                    onClick={() => void run("POST", `/${item.id}/unlock`)}
+                  >
+                    {en ? "Unlock backup" : "Buka kunci backup"}
+                  </Button>
+                )}
                 {item.state === "ready" && (
                   <>
                     <a

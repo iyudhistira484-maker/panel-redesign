@@ -52,6 +52,7 @@ export async function migrate(pool: Pool, direction: "up" | "down") {
         { version: 27, file: "027_compat_sftp_key_metadata" },
         { version: 28, file: "028_local_server_backups" },
         { version: 29, file: "029_local_backup_retention" },
+        { version: 30, file: "030_backup_operation_age" },
       ];
       if (direction === "down") migrations.reverse();
       for (const { version, file } of migrations) {
