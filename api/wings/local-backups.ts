@@ -103,7 +103,11 @@ export function localBackupService(
   };
   const callback: FixtureBackupCallback = async (id, phase, event) => {
     const record = await bound(id);
-    if (!record) return false;
+    if (
+      !record ||
+      record.state !== (phase === "create" ? "creating" : "restoring")
+    )
+      return false;
     if (
       record.adapter === "s3" &&
       (!s3Enabled ||
@@ -196,6 +200,7 @@ export function localBackupService(
     const root = "/api/v1/servers/:id/backups";
     const config = { rateLimit: { max: 12, timeWindow: "1 minute" } };
     app.get<{ Params: Params }>(root, { config }, async (req, reply) => {
+      reply.header("cache-control", "no-store");
       const owner = await sessionUser(req);
       if (!owner) return reply.code(401).send({ error: "unauthenticated" });
       const record = UUID_V4.test(req.params.id)
@@ -214,6 +219,7 @@ export function localBackupService(
       `${root}/:backup/download`,
       { config },
       async (req, reply) => {
+        reply.header("cache-control", "no-store");
         const owner = await sessionUser(req);
         if (!owner) return reply.code(401).send({ error: "unauthenticated" });
         const record = UUID_V4.test(req.params.id)

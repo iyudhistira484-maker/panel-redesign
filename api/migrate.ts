@@ -100,6 +100,16 @@ export async function migrate(pool: Pool, direction: "up" | "down") {
               "Provision table exists outside the migration ledger",
             );
         }
+        if (direction === "down" && version === 33) {
+          const s3Rows = await rows(
+            connection,
+            "SELECT id FROM local_server_backups WHERE adapter='s3' LIMIT 1",
+          );
+          if (s3Rows.length)
+            throw new Error(
+              "Remove S3 backup receipts before dropping the backup adapter column",
+            );
+        }
         const statements = (
           await readFile(
             new URL(`../migrations/${file}.${direction}.sql`, import.meta.url),
