@@ -1,3 +1,4 @@
+import { mumbleEgg } from "../eggs/upstream-workload";
 import WebSocket from "ws";
 import { createRequire } from "node:module";
 import { legacyPreflight } from "../import/legacy-preflight";
@@ -591,12 +592,22 @@ async function main() {
         Math.max(0, ...expanded[table].map((row) => Number(row.id))) + 1;
       const extraId = nextId("servers"),
         extraAllocation = nextId("allocations");
+      const catalogMumbleEgg = randomUUID();
+      const catalogMumbleEggId = nextId("eggs");
+      const sourceEgg = expanded.eggs.find((row) => row.id === template.egg_id);
+      assert.ok(sourceEgg);
+      expanded.eggs.push({
+        ...sourceEgg,
+        id: catalogMumbleEggId,
+        uuid: catalogMumbleEgg,
+      });
       expanded.servers.push({
         ...template,
         id: extraId,
         uuid: extra,
         external_id: null,
         owner_id: otherOwner.id,
+        egg_id: catalogMumbleEggId,
         allocation_id: extraAllocation,
       });
       expanded.allocations.push({
@@ -614,6 +625,7 @@ async function main() {
       });
       const expandedCredentials = {
         ...credentials,
+        reviewedMumbleEggs: new Set([catalogMumbleEgg]),
         allocations: new Map([
           ...credentials.allocations,
           [extra, randomUUID()],
@@ -626,6 +638,28 @@ async function main() {
       assert.equal(
         (await applyLegacyFixture(pool, expanded, expandedCredentials)).applied,
         false,
+      );
+      assert.deepEqual(
+        await rows(
+          pool,
+          `SELECT e.document, s.mumble_max_users AS maxUsers FROM servers s JOIN eggs e ON e.id=s.egg_id WHERE s.id=?`,
+          [extra],
+        ),
+        [{ document: Buffer.from(mumbleEgg), maxUsers: "37" }],
+      );
+      await assert.rejects(
+        applyLegacyFixture(pool, expanded, {
+          ...expandedCredentials,
+          reviewedMumbleEggs: new Set([randomUUID()]),
+        }),
+        /not found in manifest/,
+      );
+      await assert.rejects(
+        applyLegacyFixture(pool, expanded, {
+          ...expandedCredentials,
+          reviewedMumbleEggs: undefined,
+        }),
+        /conflicts with import/,
       );
       assert.deepEqual(
         await rows(pool, "SELECT owner_id FROM servers WHERE id=?", [extra]),
