@@ -71,10 +71,44 @@ jobs:
       - run: bash scripts/auth-browser-contract.sh
         env:
           RELAY_STAGING_DATABASE_URL: mysql://relay:disposable-ci@127.0.0.1:${{ job.services.mysql.ports[3306] }}/relay_test
-      - name: Prove application database backup and restore
+  application-database-recovery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    services:
+      source:
+        image: mysql:8.4.8
+        env:
+          MYSQL_ROOT_PASSWORD: disposable-app-source-root
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
+      recovery:
+        image: mysql:8.4.8
+        env:
+          MYSQL_ROOT_PASSWORD: disposable-app-recovery-root
+        ports:
+          - 3306/tcp
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Recover application database to an independent MySQL instance
         run: bash scripts/app-database-recovery-ci.sh
         env:
-          RELAY_APP_DB_CI_SERVICE: ${{ job.services.mysql.id }}
+          RELAY_ENV: staging
+          RELAY_APP_DB_CI_SERVICE: ${{ job.services.source.id }}
+          RELAY_APP_DB_RECOVERY_SERVICE: ${{ job.services.recovery.id }}
+          RELAY_APP_DB_RECOVERY_PORT: ${{ job.services.recovery.ports[3306] }}
   wings-bootstrap:
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04

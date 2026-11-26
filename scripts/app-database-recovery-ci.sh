@@ -3,41 +3,55 @@ set -euo pipefail
 # Dedicated CI fixture only: the Relay control-plane database is never dumped or restored here.
 [[ "${GITHUB_ACTIONS:-}" == true && "${RUNNER_ENVIRONMENT:-}" == github-hosted && "${GITHUB_WORKFLOW:-}" == Foundation && "${RELAY_ENV:-}" == staging ]]
 service=${RELAY_APP_DB_CI_SERVICE:?}
-[[ "$service" =~ ^[a-f0-9]{64}$ ]]
-[[ "$(docker inspect --format '{{.Config.Image}}' "$service")" == mysql:8.4.8 ]]
+recovery=${RELAY_APP_DB_RECOVERY_SERVICE:?}
+[[ "$service" =~ ^[a-f0-9]{64}$ && "$recovery" =~ ^[a-f0-9]{64}$ && "$service" != "$recovery" ]]
+for container in "$service" "$recovery"; do
+  [[ "$(docker inspect --format '{{.Config.Image}}' "$container")" == mysql:8.4.8 ]]
+done
 umask 077
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
 
 root() {
-  docker exec -i "$service" sh -ec 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot "$@"' sh "$@"
+  local container=$1; shift
+  docker exec -i "$container" sh -ec 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot "$@"' sh "$@"
 }
 app() {
-  docker exec -i "$service" sh -ec 'MYSQL_PWD="$1"; export MYSQL_PWD; shift; exec mysql "$@"' sh "$@"
+  local container=$1; shift
+  docker exec -i "$container" sh -ec 'MYSQL_PWD="$1"; export MYSQL_PWD; shift; exec mysql "$@"' sh "$@"
 }
 # These accounts and schemas exist only for the lifetime of the runner service.
-root <<'SQL'
+root "$service" <<'SQL'
 CREATE DATABASE relay_app_source CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
-CREATE DATABASE relay_app_recovery CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 CREATE USER 'fixture_app_reader'@'localhost' IDENTIFIED BY 'disposable-app-reader';
 CREATE USER 'fixture_app_writer'@'localhost' IDENTIFIED BY 'disposable-app-writer';
-CREATE USER 'fixture_app_restore'@'localhost' IDENTIFIED BY 'disposable-app-restore';
 GRANT SELECT ON relay_app_source.* TO 'fixture_app_reader'@'localhost';
 GRANT SELECT, UPDATE ON relay_app_source.* TO 'fixture_app_writer'@'localhost';
-GRANT ALL PRIVILEGES ON relay_app_recovery.* TO 'fixture_app_restore'@'localhost';
 USE relay_app_source;
 CREATE TABLE accounts (id INT PRIMARY KEY, balance INT NOT NULL, label VARCHAR(64) NOT NULL) ENGINE=InnoDB;
 CREATE TABLE ledger (id INT PRIMARY KEY, account_id INT NOT NULL, amount INT NOT NULL, payload VARBINARY(64) NOT NULL, metadata JSON NOT NULL, FOREIGN KEY (account_id) REFERENCES accounts(id)) ENGINE=InnoDB;
 INSERT INTO accounts VALUES (1,80,'Kopi • Surabaya'),(2,20,'Cadangan');
 INSERT INTO ledger VALUES (1,1,80,UNHEX('000A0D80FF'),JSON_OBJECT('reason','checkpoint')),(2,2,20,UNHEX('00FF'),JSON_OBJECT('reason','checkpoint'));
 SQL
-reader() { app disposable-app-reader -ufixture_app_reader --default-character-set=utf8mb4 "$@"; }
-writer() { app disposable-app-writer -ufixture_app_writer --default-character-set=utf8mb4 "$@"; }
-restore() { app disposable-app-restore -ufixture_app_restore --default-character-set=utf8mb4 "$@"; }
+reader() { app "$service" disposable-app-reader -ufixture_app_reader --default-character-set=utf8mb4 "$@"; }
+writer() { app "$service" disposable-app-writer -ufixture_app_writer --default-character-set=utf8mb4 "$@"; }
+restore() { app "$recovery" disposable-app-restore -ufixture_app_restore --default-character-set=utf8mb4 "$@"; }
+source_uuid=$(root "$service" -NBr -e 'SELECT @@server_uuid')
+recovery_uuid=$(root "$recovery" -NBr -e 'SELECT @@server_uuid')
+[[ "$source_uuid" =~ ^[0-9a-f-]{36}$ && "$recovery_uuid" =~ ^[0-9a-f-]{36}$ && "$source_uuid" != "$recovery_uuid" ]]
+[[ "$(root "$recovery" -NBr -e "SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME LIKE 'relay\_app\_%'")" == 0 ]]
+root "$recovery" <<'SQL'
+CREATE DATABASE relay_app_recovery CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+CREATE USER 'fixture_app_restore'@'localhost' IDENTIFIED BY 'disposable-app-restore';
+CREATE USER 'fixture_app_runtime'@'%' IDENTIFIED BY 'disposable-app-runtime';
+GRANT ALL PRIVILEGES ON relay_app_recovery.* TO 'fixture_app_restore'@'localhost';
+GRANT SELECT, UPDATE ON relay_app_recovery.accounts TO 'fixture_app_runtime'@'%';
+GRANT SELECT, INSERT ON relay_app_recovery.ledger TO 'fixture_app_runtime'@'%';
+SQL
 snapshot='SELECT id,balance,HEX(label) FROM accounts ORDER BY id; SELECT id,account_id,amount,HEX(payload),JSON_UNQUOTE(JSON_EXTRACT(metadata,"$.reason")) FROM ledger ORDER BY id;'
 reader -NBr relay_app_source -e "$snapshot" >"$work/checkpoint.rows"
 if reader relay_app_source -e 'UPDATE accounts SET balance=0' >"$work/unexpected" 2>&1; then echo '::error::Backup reader unexpectedly has write access'; exit 1; fi
-if restore relay_app_source -e 'SELECT id FROM accounts' >"$work/unexpected" 2>&1; then echo '::error::Restore identity can read the source'; exit 1; fi
+if app "$service" disposable-app-restore -ufixture_app_restore relay_app_source -e 'SELECT id FROM accounts' >"$work/unexpected" 2>&1; then echo '::error::Restore identity can read the source'; exit 1; fi
 
 # Keep a transfer transaction open while mysqldump reads the committed snapshot.
 writer relay_app_source >"$work/writer.out" <<'SQL' &
@@ -83,6 +97,7 @@ cmp "$work/checkpoint.rows" "$work/restored.rows"
 if restore relay_app_recovery -e "INSERT INTO ledger VALUES (9,99,1,UNHEX('AB'),JSON_OBJECT('reason','invalid'))" >"$work/unexpected" 2>&1; then echo '::error::Recovered schema did not enforce foreign key'; exit 1; fi
 restore relay_app_recovery -e "START TRANSACTION; INSERT INTO ledger VALUES (9,1,1,UNHEX('AB'),JSON_OBJECT('reason','smoke')); ROLLBACK;"
 [[ "$(restore -NBr relay_app_recovery -e 'SELECT COUNT(*) FROM ledger WHERE id=9')" == 0 ]]
+RELAY_EXPECTED_RECOVERY_UUID="$recovery_uuid" ./node_modules/.bin/tsx api/wings/app-database-smoke.ts
 reader -NBr relay_app_source -e "$snapshot" >"$work/source-after-restore.rows"
 cmp "$work/current.rows" "$work/source-after-restore.rows"
-printf '::notice::Application MySQL restore: backup_ms=%s restore_ms=%s concurrent_writer=true checkpoint_rows_match=true binary_json_verified=true foreign_key_enforced=true source_unchanged=true tamper_detected=true\n' "$backup_ms" "$restore_ms"
+printf '::notice::Application MySQL restore: backup_ms=%s restore_ms=%s fresh_mysql_instance=true http_read_write_restart=true concurrent_writer=true checkpoint_rows_match=true binary_json_verified=true foreign_key_enforced=true source_unchanged=true tamper_detected=true\n' "$backup_ms" "$restore_ms"
