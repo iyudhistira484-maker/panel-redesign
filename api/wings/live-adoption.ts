@@ -2781,6 +2781,25 @@ async function main() {
               remoteAddress: "127.0.0.5",
             });
             assert.equal(missing.statusCode, 404);
+            const history = await scheduleRequest("GET", ownerSession);
+            assert.equal(history.statusCode, 200);
+            const ready = history
+              .json()
+              .runs.filter(
+                (run: { outcome: string; backupId: string | null }) =>
+                  run.outcome === "ready" && run.backupId,
+              );
+            assert.equal(ready.length, 3);
+            assert.ok(
+              ready.some(
+                (run: { backupId: string }) =>
+                  run.backupId === secondScheduled.id,
+              ),
+            );
+            assert.equal(
+              (await scheduleRequest("GET", collaborator)).statusCode,
+              404,
+            );
             console.log(
               "::notice::Scheduled backup staging: competing_workers=true one_receipt_per_slot=true locked_backup_preserved=true retention_removed_unlocked=true",
             );

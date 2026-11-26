@@ -1,3 +1,4 @@
+import { BackupSchedule } from "./backup-schedule";
 import { ServerBackups } from "./server-backups";
 import { ServerFiles } from "./server-files";
 import { ServerAccess } from "./server-access";
@@ -133,11 +134,18 @@ export function StagingServers({ locale }: { locale: Locale }) {
                       <ServerAccess id={item.id} locale={locale} />
                       <ServerFiles id={item.id} locale={locale} />
                       {item.localBackups === true && (
-                        <ServerBackups
-                          id={item.id}
-                          locale={locale}
-                          s3={item.s3Backups === true}
-                        />
+                        <>
+                          <ServerBackups
+                            id={item.id}
+                            locale={locale}
+                            s3={item.s3Backups === true}
+                          />
+                          <BackupSchedule
+                            id={item.id}
+                            locale={locale}
+                            s3={item.s3Backups === true}
+                          />
+                        </>
                       )}
                     </>
                   )}

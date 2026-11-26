@@ -125,21 +125,29 @@ export function localBackupService(
           Number.isSafeInteger(event.size) &&
           (event.size ?? 0) > 0 &&
           (event.size ?? 0) <= MAX_BYTES));
-    const [result] = await pool.execute<ResultSetHeader>(
-      creating
-        ? "UPDATE local_server_backups SET state=?,size_bytes=?,checksum=?,operation_started_at=NULL WHERE id=? AND node_id=? AND state='creating'"
-        : "UPDATE local_server_backups SET state=?,operation_started_at=NULL WHERE id=? AND node_id=? AND state='restoring'",
-      creating
-        ? [
-            valid ? "ready" : "create_failed",
-            valid ? (event.size ?? null) : null,
-            valid ? (event.checksum ?? null) : null,
-            id,
-            record.nodeId,
-          ]
-        : [valid ? "ready" : "restore_failed", id, record.nodeId],
-    );
-    return result.affectedRows === 1;
+    return transaction(pool, async (db) => {
+      const [result] = await db.execute<ResultSetHeader>(
+        creating
+          ? "UPDATE local_server_backups SET state=?,size_bytes=?,checksum=?,operation_started_at=NULL WHERE id=? AND node_id=? AND state='creating'"
+          : "UPDATE local_server_backups SET state=?,operation_started_at=NULL WHERE id=? AND node_id=? AND state='restoring'",
+        creating
+          ? [
+              valid ? "ready" : "create_failed",
+              valid ? (event.size ?? null) : null,
+              valid ? (event.checksum ?? null) : null,
+              id,
+              record.nodeId,
+            ]
+          : [valid ? "ready" : "restore_failed", id, record.nodeId],
+      );
+      if (result.affectedRows !== 1) return false;
+      if (creating)
+        await db.execute(
+          "UPDATE backup_schedule_runs SET outcome=?,finished_at=CURRENT_TIMESTAMP(3) WHERE backup_id=? AND server_id=? AND node_id=? AND outcome='reserved'",
+          [valid ? "ready" : "create_failed", id, record.id, record.nodeId],
+        );
+      return true;
+    });
   };
   const download = async (record: Target, backup: Backup) => {
     if (!backup.sizeBytes || backup.sizeBytes > MAX_BYTES || !backup.checksum)
@@ -256,6 +264,19 @@ export function localBackupService(
         await db.execute(
           "UPDATE backup_schedules SET next_run_at=CURRENT_TIMESTAMP(3)+INTERVAL interval_minutes MINUTE,last_result=? WHERE server_id=?",
           [reason, record.id],
+        );
+        await db.execute(
+          "INSERT INTO backup_schedule_runs(server_id,owner_id,node_id,slot,adapter,outcome,backup_id,finished_at) VALUES (?,?,?,?,?,?,?,IF(?='reserved',NULL,CURRENT_TIMESTAMP(3)))",
+          [
+            record.id,
+            record.owner,
+            record.nodeId,
+            slot.next_run_at,
+            slot.adapter,
+            reason,
+            reason === "reserved" ? id : null,
+            reason,
+          ],
         );
         if (reason !== "reserved") return false;
         await db.execute(
@@ -408,7 +429,16 @@ export function localBackupService(
               "SELECT adapter,interval_minutes AS intervalMinutes,keep_count AS keep,next_run_at AS nextRunAt,last_result AS lastResult FROM backup_schedules WHERE server_id=? AND node_id=? AND owner_id=?",
               [server, record.nodeId, owner],
             );
-            return { schedule: schedule ?? null };
+            const runs =
+              method === "DELETE"
+                ? []
+                : await rows(
+                    db,
+                    `SELECT r.slot,r.adapter,CASE WHEN r.outcome='reserved' AND b.operation_started_at <= CURRENT_TIMESTAMP(3)-INTERVAL 2 MINUTE THEN 'unconfirmed' ELSE r.outcome END AS outcome,r.backup_id AS backupId,r.finished_at AS finishedAt
+              FROM backup_schedule_runs r LEFT JOIN local_server_backups b ON r.backup_id=b.id AND r.server_id=b.server_id AND r.node_id=b.node_id WHERE r.server_id=? AND r.node_id=? AND r.owner_id=? ORDER BY r.slot DESC LIMIT 20`,
+                    [server, record.nodeId, owner],
+                  );
+            return { schedule: schedule ?? null, runs };
           });
           if (!result) return reply.code(404).send({ error: "not_found" });
           return method === "DELETE"

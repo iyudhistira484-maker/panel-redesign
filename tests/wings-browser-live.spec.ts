@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { expect, test } from "@playwright/test";
+import { stagingPool } from "../api/db";
 
 test.use({
   ignoreHTTPSErrors: true,
@@ -270,6 +271,65 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
 
   await send("Start", 202);
   await verify("running");
+  const schedule = page.getByRole("region", {
+    name: "Jadwal backup",
+    exact: true,
+  });
+  const refreshSchedule = schedule.getByRole("button", {
+    name: "Muat ulang jadwal dan riwayat",
+  });
+  await schedule.getByRole("button", { name: "Muat jadwal backup" }).click();
+  await expect(schedule.getByText("Tidak ada jadwal aktif.")).toBeVisible();
+  await schedule.getByLabel("Interval (menit)").fill("15");
+  await schedule
+    .getByLabel("Jumlah backup terjadwal yang disimpan")
+    .selectOption("2");
+  if (process.env.RELAY_S3_FIXTURE_USER)
+    await schedule.getByLabel("Penyimpanan").selectOption("s3");
+  await schedule.getByRole("button", { name: "Simpan jadwal" }).click();
+  await expect(schedule.getByRole("status")).toHaveText("Jadwal disimpan.");
+  await expect(
+    schedule.getByText("Jadwal berikutnya:", { exact: false }),
+  ).toBeVisible();
+  // Advance only the disposable fixture clock/deadline. The worker sees real Wings running.
+  const scheduleDb = stagingPool();
+  try {
+    await scheduleDb.execute(
+      "UPDATE backup_schedules SET next_run_at=CURRENT_TIMESTAMP(3)-INTERVAL 1 SECOND WHERE server_id=?",
+      [id],
+    );
+  } finally {
+    await scheduleDb.end();
+  }
+  await expect(async () => {
+    await refreshSchedule.click();
+    await expect(refreshSchedule).toBeEnabled();
+    await expect(
+      schedule.getByText(
+        "Dilewati: server tidak offline atau tidak terjangkau",
+        { exact: false },
+      ),
+    ).toBeVisible({ timeout: 500 });
+  }).toPass({ timeout: 9000, intervals: [700, 1200, 2000] });
+  await expect(schedule.getByLabel("Interval (menit)")).toHaveValue("15");
+  await expect(
+    schedule.getByLabel("Jumlah backup terjadwal yang disimpan"),
+  ).toHaveValue("2");
+  await schedule
+    .getByRole("button", { name: "Nonaktifkan jadwal", exact: true })
+    .click();
+  await schedule
+    .getByRole("button", { name: "Konfirmasi nonaktifkan" })
+    .click();
+  await expect(schedule.getByText("Tidak ada jadwal aktif.")).toBeVisible();
+  await expect(
+    schedule.getByText("Dilewati: server tidak offline atau tidak terjangkau", {
+      exact: false,
+    }),
+  ).toBeVisible();
+  console.log(
+    "::notice::Chromium verified schedule setup, real skipped run history, and disable preserving history",
+  );
   await readConsole(200);
   await expect(page.getByLabel("Cuplikan konsol Wings")).toContainText(
     "RELAY_CONTRACT_READY",
