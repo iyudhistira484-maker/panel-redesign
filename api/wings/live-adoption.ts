@@ -2335,6 +2335,93 @@ async function main() {
               );
             }
           }
+          let lostCreateId: string | undefined;
+          try {
+            await writeFile(config, legacyRemote);
+            await restart(false);
+            const accepted = await api(relay, "POST");
+            assert.equal(accepted.statusCode, 202);
+            lostCreateId = accepted.json().id;
+            assert.ok(lostCreateId);
+            assert.match(lostCreateId ?? "", UUID_V4);
+            await until(
+              "Wings rejected create completion at the wrong panel",
+              async () => {
+                const log = await docker(
+                  "docker",
+                  ["logs", "--tail", "100", "relay-wings-contract"],
+                  { timeout: 5000 },
+                );
+                return `${log.stdout}\n${log.stderr}`.includes(
+                  "failed to notify panel of successful backup state",
+                );
+              },
+            );
+            const archiveDirectory = legacyRemote.match(
+              /^ {2}backup_directory: (\/tmp\/tmp\.[A-Za-z0-9]+\/data\/backups)$/m,
+            )?.[1];
+            assert.ok(archiveDirectory);
+            await docker(
+              "docker",
+              [
+                "exec",
+                "relay-wings-contract",
+                "test",
+                "!",
+                "-e",
+                `${archiveDirectory}/${lostCreateId}.tar.gz`,
+              ],
+              { timeout: 5000 },
+            );
+            await restart(false);
+            const fresh = await relayFor(node);
+            try {
+              await pool.execute(
+                "UPDATE local_server_backups SET operation_started_at=CURRENT_TIMESTAMP(3)-INTERVAL 3 MINUTE WHERE id=?",
+                [lostCreateId],
+              );
+              const listed = await api(fresh, "GET");
+              assert.equal(listed.statusCode, 200);
+              const pending = listed
+                .json()
+                .items.find((row: { id: string }) => row.id === lostCreateId);
+              assert.equal(pending.state, "creating");
+              assert.equal(pending.needsReview, 1);
+              assert.equal(
+                (await api(fresh, "GET", `/${lostCreateId}/download`))
+                  .statusCode,
+                409,
+              );
+              assert.equal((await api(fresh, "POST")).statusCode, 409);
+              assert.equal(
+                (await api(fresh, "DELETE", `/${lostCreateId}`)).statusCode,
+                409,
+              );
+              assert.deepEqual(
+                await client.fixtureDownload(
+                  uuid,
+                  ["fixture-docs"],
+                  "example.txt",
+                ),
+                checkpointBytes,
+              );
+              console.log(
+                "::notice::Local backup create callback outage: wings_archive_removed=true receipt_pending=true duplicate_blocked=true source_unchanged=true",
+              );
+            } finally {
+              await fresh.close();
+            }
+          } finally {
+            if (lostCreateId) {
+              await client
+                .fixtureBackup(uuid, lostCreateId, "delete")
+                .catch(() => {});
+              await pool.execute(
+                "DELETE FROM local_server_backups WHERE id=? AND server_id=?",
+                [lostCreateId, uuid],
+              );
+            }
+          }
         } finally {
           backupSignal = undefined;
           try {
