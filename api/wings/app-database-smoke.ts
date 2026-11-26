@@ -41,7 +41,7 @@ async function smoke() {
       ),
       entries: await rows(
         db,
-        "SELECT id,account_id AS accountId,amount,HEX(payload) AS payload,JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.reason')) AS reason FROM ledger ORDER BY id",
+        "SELECT id,account_id AS accountId,amount,CAST(HEX(payload) AS CHAR CHARACTER SET utf8mb4) AS payload,CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.reason')) AS CHAR CHARACTER SET utf8mb4) AS reason FROM ledger ORDER BY id",
       ),
     }));
     app.post("/transfers", async (req, reply) => {
@@ -155,8 +155,14 @@ async function smoke() {
   }
 }
 void smoke().catch((error) => {
+  const detail =
+    error instanceof assert.AssertionError
+      ? error.message.slice(0, 1200)
+      : error instanceof Error
+        ? error.message.split("\n")[0]
+        : "Unknown error";
   console.error(
-    `::error title=Application HTTP recovery smoke failed::${error instanceof Error ? error.message.split("\n")[0] : "Unknown error"}`,
+    `::error title=Application HTTP recovery smoke failed::${detail.replaceAll("%", "%25").replaceAll("\n", "%0A").replaceAll("\r", "%0D")}`,
   );
   process.exitCode = 1;
 });
