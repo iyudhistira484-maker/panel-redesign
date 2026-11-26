@@ -1982,14 +1982,31 @@ async function main() {
             const s3Id = randomUUID();
             const relayConfig = await readFile(config, "utf8");
             try {
-              assert.match(relayConfig, /^system:$/m);
-              await writeFile(
-                config,
-                relayConfig.replace(
-                  /^system:$/m,
-                  "system:\n  backups:\n    restore_host_allowlist: [127.0.0.1]",
-                ),
+              // Wings rewrites YAML on boot. Update the existing key rather than
+              // appending a second backups mapping that the decoder may shadow.
+              const allowed = /^([ ]+)restore_host_allowlist: (?:\[\]|null)$/m;
+              const backups = /^([ ]+)backups:$/m;
+              const enabled = allowed.test(relayConfig)
+                ? relayConfig.replace(
+                    allowed,
+                    "$1restore_host_allowlist: [127.0.0.1]",
+                  )
+                : backups.test(relayConfig)
+                  ? relayConfig.replace(
+                      backups,
+                      "$&\n$1  restore_host_allowlist: [127.0.0.1]",
+                    )
+                  : relayConfig.replace(
+                      /^system:$/m,
+                      "system:\n  backups:\n    restore_host_allowlist: [127.0.0.1]",
+                    );
+              assert.notEqual(enabled, relayConfig);
+              assert.equal((enabled.match(/^[ ]+backups:$/gm) ?? []).length, 1);
+              assert.equal(
+                (enabled.match(/^[ ]+restore_host_allowlist:/gm) ?? []).length,
+                1,
               );
+              await writeFile(config, enabled);
               await restart(false);
               assert.equal(await client.state(uuid), "offline");
               remoteS3 = await s3Fixture(uuid, s3Id);
