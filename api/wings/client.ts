@@ -372,6 +372,28 @@ export class WingsClient {
       return null;
     }
   }
+  async fixtureBackup(
+    id: string,
+    backup: string,
+    operation: "create" | "restore" | "delete",
+  ) {
+    if (!UUID_V4.test(backup)) throw new Error("Invalid fixture backup UUID");
+    const base = `${this.#server(id)}/backup`;
+    const response =
+      operation === "create"
+        ? await this.#send(base, 202, "POST", {
+            adapter: "wings",
+            uuid: backup,
+            ignore: "",
+          })
+        : operation === "restore"
+          ? await this.#send(`${base}/${backup}/restore`, 202, "POST", {
+              adapter: "wings",
+              truncate_directory: false,
+            })
+          : await this.#send(`${base}/${backup}`, 204, "DELETE");
+    await response.body?.cancel();
+  }
   async writeFixtureText(id: string, text: string) {
     const response = await this.#send(
       `${this.#server(id)}/files/write?file=%2Ffixture-docs%2Fexample.txt`,

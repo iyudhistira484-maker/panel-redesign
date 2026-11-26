@@ -8,7 +8,7 @@ import {
 import { createProvisioner, ProvisionError } from "./wings/provision";
 import { registerCatalog, type FixtureTransfer } from "./catalog/routes";
 import { stagingSftpAuth } from "./wings/sftp-auth";
-import { registerRemote } from "./wings/remote";
+import { registerRemote, type FixtureBackupCallback } from "./wings/remote";
 import { UUID_V4, type WingsNode } from "./wings/client";
 import { randomBytes, randomUUID } from "node:crypto";
 import Fastify from "fastify";
@@ -46,6 +46,7 @@ export type Options = {
   allowedCatalogNodeOrigins?: readonly string[];
   fixtureTransfer?: FixtureTransfer;
   fixtureReceiver?: FixtureReceiver;
+  fixtureBackupCallback?: FixtureBackupCallback;
 };
 type User = {
   id: string;
@@ -112,6 +113,7 @@ export async function createApp({
   allowedCatalogNodeOrigins,
   fixtureTransfer,
   fixtureReceiver,
+  fixtureBackupCallback,
 }: Options) {
   if ((fixtureTransfer || fixtureReceiver) && !enableDisposableProvisioning)
     throw new Error(
@@ -184,6 +186,16 @@ export async function createApp({
     process.env.RELAY_BOOTSTRAP_SCENARIO === "legacy-panel"
       ? stagingSftpAuth(pool, wingsTestNode, catalogNodeKey, pepper)
       : undefined;
+  if (
+    fixtureBackupCallback &&
+    (!provisioner ||
+      process.env.RELAY_DISPOSABLE_WINGS_CI !== "1" ||
+      process.env.RUNNER_ENVIRONMENT !== "github-hosted" ||
+      process.env.RELAY_BOOTSTRAP_SCENARIO !== "legacy-panel")
+  )
+    throw new Error(
+      "Backup callback fixture requires disposable legacy staging",
+    );
   app.addHook("onRequest", async (req, reply) => {
     reply.header("Cache-Control", "no-store");
     if (
@@ -196,6 +208,16 @@ export async function createApp({
             req.routeOptions.url ===
               "/api/remote/servers/:uuid/transfer/:result")) &&
         req.method === "POST"
+      ) &&
+      !(
+        fixtureBackupCallback &&
+        req.method === "POST" &&
+        [
+          "/api/remote/backups/:backup",
+          "/api/remote/backups/:backup/restore",
+        ].includes(req.routeOptions.url ?? "") &&
+        req.headers.origin === undefined &&
+        req.headers.cookie === undefined
       ) &&
       !(
         sftpAuth &&
@@ -1624,6 +1646,7 @@ export async function createApp({
           receiver?.provider ?? provisioner?.provider,
           receiver?.onTransfer,
           sftpAuth,
+          fixtureBackupCallback,
         ),
       { prefix: "/api/remote" },
     );

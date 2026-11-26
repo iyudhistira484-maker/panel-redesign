@@ -18,6 +18,17 @@ export type ContractWorkload = {
     reinstall: boolean;
   }) => void | Promise<void>;
 };
+export type FixtureBackupSignal = {
+  successful: boolean;
+  checksum?: string;
+  checksum_type?: string;
+  size?: number;
+};
+export type FixtureBackupCallback = (
+  id: string,
+  phase: "create" | "restore",
+  event: FixtureBackupSignal,
+) => boolean;
 export type WorkloadProvider = {
   lookup: (id: string) => Promise<ContractWorkload | undefined>;
   list: (
@@ -40,6 +51,7 @@ export async function registerRemote(
   provider?: WorkloadProvider,
   onTransfer?: (id: string, successful: boolean) => boolean | Promise<boolean>,
   authenticateSftp?: ReturnType<typeof stagingSftpAuth>,
+  fixtureBackupCallback?: FixtureBackupCallback,
 ) {
   if (fixture && !UUID_V4.test(fixture.uuid))
     throw new Error("Invalid test fixture UUID");
@@ -104,6 +116,35 @@ export async function registerRemote(
         return authorized ?? reply.code(403).send({ error: "sftp_denied" });
       },
     );
+  if (fixtureBackupCallback)
+    for (const phase of ["create", "restore"] as const) {
+      app.post<{ Params: { backup: string }; Body: FixtureBackupSignal }>(
+        `/backups/:backup${phase === "restore" ? "/restore" : ""}`,
+        {
+          bodyLimit: 4096,
+          schema: {
+            body: {
+              type: "object",
+              required: ["successful"],
+              properties: {
+                successful: { type: "boolean" },
+                checksum: { type: "string", maxLength: 128 },
+                checksum_type: { type: "string", maxLength: 16 },
+                size: { type: "integer", minimum: 0 },
+              },
+            },
+          },
+        },
+        async (req, reply) => {
+          if (
+            !UUID_V4.test(req.params.backup) ||
+            !fixtureBackupCallback(req.params.backup, phase, req.body)
+          )
+            return reply.code(404).send({ error: "backup_not_found" });
+          return reply.code(204).send();
+        },
+      );
+    }
   app.get<{ Querystring: { page?: string; per_page?: string } }>(
     "/servers",
     {

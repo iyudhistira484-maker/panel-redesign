@@ -6,7 +6,7 @@ import { applyLegacyFixture } from "../import/legacy-fixture-apply";
 import { readLegacySnapshot } from "../import/legacy-snapshot";
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHmac, createHash, randomBytes, randomUUID } from "node:crypto";
 import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import Fastify from "fastify";
@@ -26,7 +26,7 @@ import {
   startup,
 } from "./offhost-http-fixture";
 import { offhostKey } from "./offhost-keys";
-import { registerRemote } from "./remote";
+import { registerRemote, type FixtureBackupSignal } from "./remote";
 
 async function until(label: string, action: () => Promise<boolean>) {
   for (let i = 0; i < 40; i++) {
@@ -192,6 +192,9 @@ async function main() {
     assert.ok(deliver);
     assert.equal((await deliver()).status, 202);
   }
+  let backupSignal:
+    | { id: string; phase: "create" | "restore"; result?: FixtureBackupSignal }
+    | undefined;
   const relayFor = (configured: typeof node, database = pool) =>
     createApp({
       pool: database,
@@ -203,6 +206,25 @@ async function main() {
       wingsTestNode: configured,
       ...(configured === node
         ? { applicationDispatchRequest, verifyApplicationDeletion }
+        : {}),
+      ...(actual && configured === node
+        ? {
+            fixtureBackupCallback: (
+              id: string,
+              phase: "create" | "restore",
+              event: FixtureBackupSignal,
+            ) => {
+              if (
+                !backupSignal ||
+                id !== backupSignal.id ||
+                phase !== backupSignal.phase ||
+                backupSignal.result
+              )
+                return false;
+              backupSignal.result = event;
+              return true;
+            },
+          }
         : {}),
       enableDisposableProvisioning: true,
       deliverReset: mail.deliverReset,
@@ -1924,6 +1946,103 @@ async function main() {
           "volume checkpoint quiescent",
           async () => (await client.state(uuid)) === "offline",
         );
+        const backupId = randomUUID();
+        const checkpointBytes = await client.fixtureDownload(
+          uuid,
+          ["fixture-docs"],
+          "example.txt",
+        );
+        if ((await client.state(uuid)) !== "offline")
+          throw new Error("Local backup fixture must be offline");
+        backupSignal = { id: backupId, phase: "create" };
+        try {
+          const unknown = await relay.inject({
+            method: "POST",
+            url: `/api/remote/backups/${randomUUID()}`,
+            headers: { authorization: `Bearer ${node.tokenId}.${node.token}` },
+            payload: { successful: true },
+          });
+          assert.equal(unknown.statusCode, 404);
+          await client.fixtureBackup(uuid, backupId, "create");
+          await until("local backup creation callback", async () =>
+            Boolean(backupSignal?.result),
+          );
+          const created = backupSignal.result;
+          assert.ok(
+            created?.successful &&
+              created.checksum_type === "sha1" &&
+              typeof created.size === "number" &&
+              created.size > 0 &&
+              created.size <= 300 * 1024 * 1024,
+          );
+          assert.match(created.checksum ?? "", /^[a-f0-9]{40}$/);
+          const now = Math.floor(Date.now() / 1000);
+          const encoded = (value: object) =>
+            Buffer.from(JSON.stringify(value)).toString("base64url");
+          const signed = `${encoded({ alg: "HS256", typ: "JWT" })}.${encoded({ iss: origin, aud: [node.origin], iat: now, nbf: now - 1, exp: now + 15, jti: randomUUID(), unique_id: randomUUID(), server_uuid: uuid, user_uuid: owner, backup_uuid: backupId, scope: "backup-download" })}`;
+          const url = new URL("/download/backup", node.origin);
+          url.searchParams.set(
+            "token",
+            `${signed}.${createHmac("sha256", node.token).update(signed).digest("base64url")}`,
+          );
+          const downloaded = await fetch(url, {
+            redirect: "error",
+            signal: AbortSignal.timeout(12000),
+          });
+          assert.equal(downloaded.status, 200);
+          assert.equal(
+            Number(downloaded.headers.get("content-length")),
+            created.size,
+          );
+          const hash = createHash("sha1");
+          let bytes = 0;
+          assert.ok(downloaded.body);
+          const reader = downloaded.body.getReader();
+          try {
+            for (;;) {
+              const chunk = await reader.read();
+              if (chunk.done) break;
+              bytes += chunk.value.length;
+              assert.ok(bytes <= created.size);
+              hash.update(chunk.value);
+            }
+          } finally {
+            await reader.cancel().catch(() => {});
+          }
+          assert.equal(bytes, created.size);
+          assert.equal(hash.digest("hex"), created.checksum);
+          const replay = await fetch(url, {
+            redirect: "error",
+            signal: AbortSignal.timeout(5000),
+          });
+          assert.equal(replay.status, 404);
+          await replay.body?.cancel();
+          const changed = "after local backup\n";
+          await client.writeFixtureText(uuid, changed);
+          await assert.rejects(
+            client.fixtureBackup(uuid, randomUUID(), "restore"),
+          );
+          assert.deepEqual(
+            await client.fixtureDownload(uuid, ["fixture-docs"], "example.txt"),
+            Buffer.from(changed),
+          );
+          backupSignal = { id: backupId, phase: "restore" };
+          await client.fixtureBackup(uuid, backupId, "restore");
+          await until("local backup restore callback", async () =>
+            Boolean(backupSignal?.result),
+          );
+          assert.equal(backupSignal.result?.successful, true);
+          assert.deepEqual(
+            await client.fixtureDownload(uuid, ["fixture-docs"], "example.txt"),
+            checkpointBytes,
+          );
+          console.log(
+            `::notice::Local Wings backup bytes=${bytes} checksum_verified=true token_replay_denied=true restore_verified=true missing_backup_preserved=true`,
+          );
+        } finally {
+          backupSignal = undefined;
+          await client.fixtureBackup(uuid, backupId, "delete").catch(() => {});
+        }
         const pilotPayload = process.env.RELAY_OFFHOST_EXPORT
           ? await docker(
               "docker",
