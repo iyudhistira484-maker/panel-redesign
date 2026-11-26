@@ -8,3 +8,7 @@ Prosedur ini untuk fixture Wings staging, bukan instruksi operasi produksi. `202
 4. Jika callback sah tiba belakangan, baca status yang baru dan cocokkan dengan bukti. Jika tidak tiba, biarkan receipt tertunda; jangan mengirim callback palsu atau mengubah baris DB untuk memaksa status sukses. Untuk fixture yang boleh dibuang, simpan bukti lalu buat ulang fixture. Jangan mengulangi restore ke volume asli hanya untuk menghapus status pending.
 
 Batas saat ini: prosedur ini mempertahankan bukti dan mencegah retry yang bisa menimpa data lebih baru, bukan mekanisme untuk melepas receipt secara manual. Pemulihan restore yang tak bisa dibuktikan dilakukan dari checkpoint yang sudah diverifikasi ke volume staging terpisah.
+
+## Bukti staging
+
+[Foundation 45747073205 — job legacy-panel](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45747073205/job/139665609061) menguji hilangnya callback **buat** dan **restore** pada Wings nyata. Pada skenario buat, Wings berhasil membangun arsip, menolak menganggap callback sukses, lalu menghapus arsip ketika panel tujuan menolak callback. Setelah restart, Relay tetap menyimpan receipt `creating`; pengunduhan, pembuatan ulang, dan penghapusan ditolak, sementara byte file sumber tidak berubah. Ini bukan jaminan arsip selalu hilang saat callback gagal: kegagalan pada waktu lain tetap harus diperiksa mengikuti prosedur di atas.
