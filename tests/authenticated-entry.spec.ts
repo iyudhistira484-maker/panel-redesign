@@ -49,3 +49,55 @@ test("authenticated entry never displays fixture servers", async ({ page }) => {
     await server.close();
   }
 });
+
+test("login-first owner opens a console snapshot while a shared server does not request one", async ({
+  page,
+}) => {
+  const server = await createServer({
+    define: { __RELAY_AUTHENTICATED_ENTRY__: "true" },
+    server: { host: "127.0.0.1", port: 4198, strictPort: true },
+  });
+  await server.listen();
+  try {
+    const paths: string[] = [];
+    await page.route("**/api/v1/account", (route) =>
+      route.fulfill({ json: { displayName: "Pilot operator" } }),
+    );
+    await page.route("**/api/v1/servers", (route) =>
+      route.fulfill({
+        json: {
+          items: [
+            { id: "owner-fixture", name: "Owner fixture", isOwner: true },
+            { id: "shared-fixture", name: "Shared fixture", isOwner: false },
+          ],
+          next: null,
+        },
+      }),
+    );
+    await page.route("**/api/v1/servers/*/console", async (route) => {
+      paths.push(new URL(route.request().url()).pathname);
+      await route.fulfill({
+        json: { lines: ["RELAY_CONTRACT_READY"], truncated: false },
+      });
+    });
+    await page.goto("http://127.0.0.1:4198/");
+    await page
+      .getByRole("button", { name: /^(Open console|Buka konsol)$/ })
+      .click();
+    await expect(
+      page.getByText("RELAY_CONTRACT_READY", { exact: true }),
+    ).toBeVisible();
+    await page
+      .getByRole("listitem")
+      .filter({ hasText: "Shared fixture" })
+      .getByRole("button", { name: /^(Server detail|Detail server)$/ })
+      .click();
+    await expect(
+      page.getByText("RELAY_CONTRACT_READY", { exact: true }),
+    ).toHaveCount(0);
+    expect(paths).toEqual(["/api/v1/servers/owner-fixture/console"]);
+  } finally {
+    await page.goto("about:blank");
+    await server.close();
+  }
+});

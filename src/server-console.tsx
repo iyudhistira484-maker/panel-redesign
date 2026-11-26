@@ -1,40 +1,60 @@
 import { consoleSnapshotLimit, isConsoleMarker } from "./console-markers";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Locale } from "./i18n";
 import { Button } from "./ui";
 
 type Snapshot = { lines: string[]; truncated: boolean };
-export function ServerConsole({ id, locale }: { id: string; locale: Locale }) {
+export function ServerConsole({
+  id,
+  locale,
+  autoLoad = false,
+}: {
+  id: string;
+  locale: Locale;
+  autoLoad?: boolean;
+}) {
   const en = locale === "en";
   const [result, setResult] = useState<Snapshot | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
-  async function load() {
-    setResult(null);
-    setStatus("loading");
-    try {
-      const response = await fetch(
-        `/api/v1/servers/${encodeURIComponent(id)}/console`,
-        {
-          cache: "no-store",
-          credentials: "same-origin",
-          signal: AbortSignal.timeout(10000),
-        },
-      );
-      if (!response.ok) throw new Error("Console unavailable");
-      const data = (await response.json()) as Snapshot;
-      if (
-        !Array.isArray(data?.lines) ||
-        data.lines.length > consoleSnapshotLimit ||
-        !data.lines.every(isConsoleMarker) ||
-        typeof data.truncated !== "boolean"
-      )
-        throw new Error("Invalid fixture snapshot");
-      setResult(data);
-      setStatus("idle");
-    } catch {
-      setStatus("error");
-    }
-  }
+  const load = useCallback(
+    async (signal?: AbortSignal) => {
+      setResult(null);
+      setStatus("loading");
+      try {
+        const response = await fetch(
+          `/api/v1/servers/${encodeURIComponent(id)}/console`,
+          {
+            cache: "no-store",
+            credentials: "same-origin",
+            signal: signal
+              ? AbortSignal.any([signal, AbortSignal.timeout(10000)])
+              : AbortSignal.timeout(10000),
+          },
+        );
+        if (!response.ok) throw new Error("Console unavailable");
+        const data = (await response.json()) as Snapshot;
+        if (
+          !Array.isArray(data?.lines) ||
+          data.lines.length > consoleSnapshotLimit ||
+          !data.lines.every(isConsoleMarker) ||
+          typeof data.truncated !== "boolean"
+        )
+          throw new Error("Invalid fixture snapshot");
+        if (signal?.aborted) return;
+        setResult(data);
+        setStatus("idle");
+      } catch {
+        if (!signal?.aborted) setStatus("error");
+      }
+    },
+    [id],
+  );
+  useEffect(() => {
+    if (!autoLoad) return;
+    const controller = new AbortController();
+    void load(controller.signal);
+    return () => controller.abort();
+  }, [autoLoad, load]);
   return (
     <div aria-busy={status === "loading"}>
       <Button disabled={status === "loading"} onClick={() => void load()}>

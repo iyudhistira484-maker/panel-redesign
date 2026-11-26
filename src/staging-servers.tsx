@@ -136,7 +136,13 @@ export function StagingServers({
                 }
                 onClick={() => setOpened(opened === item.id ? null : item.id)}
               >
-                {en ? "Server detail" : "Detail server"}
+                {autoLoad && item.isOwner === true
+                  ? en
+                    ? "Open console"
+                    : "Buka konsol"
+                  : en
+                    ? "Server detail"
+                    : "Detail server"}
               </Button>
               {opened === item.id && (
                 <section
@@ -144,9 +150,12 @@ export function StagingServers({
                   aria-label={item.name}
                   className="staging-server-detail"
                 >
+                  {autoLoad && item.isOwner === true && (
+                    <ServerConsole id={item.id} locale={locale} autoLoad />
+                  )}
                   <ServerPower id={item.id} locale={locale} />
                   <ServerMetrics id={item.id} locale={locale} />
-                  <ServerConsole id={item.id} locale={locale} />
+                  {!autoLoad && <ServerConsole id={item.id} locale={locale} />}
                   <ServerActivity id={item.id} locale={locale} />
                   {item.isOwner === true && (
                     <>
