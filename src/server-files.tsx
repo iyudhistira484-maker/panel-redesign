@@ -27,9 +27,9 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
   const [copySource, setCopySource] = useState("");
   const [copyTarget, setCopyTarget] = useState("");
   const [copyStatus, setCopyStatus] = useState<
-    "done" | "rejected" | "unknown" | null
+    "done" | "renamed" | "rejected" | "unknown" | null
   >(null);
-  async function copyFile() {
+  async function copyFile(rename = false) {
     if (
       busy ||
       !copySource ||
@@ -41,7 +41,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
     setCopyStatus(null);
     try {
       const reply = await fetch(
-        `/api/v1/servers/${encodeURIComponent(id)}/files/copy-fixture`,
+        `/api/v1/servers/${encodeURIComponent(id)}/files/${rename ? "rename" : "copy"}-fixture`,
         {
           method: "POST",
           credentials: "same-origin",
@@ -55,13 +55,15 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
       );
       if (
         reply.status === 400 ||
+        reply.status === 404 ||
         reply.status === 409 ||
         reply.status === 422
       ) {
         setCopyStatus("rejected");
         return;
       }
-      if (reply.status !== 201) throw new Error("Copy unverified");
+      if (reply.status !== (rename ? 200 : 201))
+        throw new Error("Copy unverified");
       const data = (await reply.json()) as { name?: string; size: number };
       if (
         data.name !== copyTarget ||
@@ -74,12 +76,17 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
         (current) =>
           current &&
           [
-            ...current,
+            ...current.filter((item) => !rename || item.name !== copySource),
             { name: copyTarget, size: data.size, directory: false },
           ].sort((a, b) => a.name.localeCompare(b.name)),
       );
       setCopyTarget("");
-      setCopyStatus("done");
+      if (rename) {
+        setCopySource("");
+        setPreview(null);
+        setDraft(null);
+      }
+      setCopyStatus(rename ? "renamed" : "done");
     } catch {
       setCopyStatus("unknown");
     } finally {
@@ -361,7 +368,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
       {path.join("/") === "fixture-docs" && items && (
         <div>
           <label>
-            {en ? "File to copy" : "File yang disalin"}{" "}
+            {en ? "Source text file" : "File teks sumber"}{" "}
             <select
               value={copySource}
               disabled={busy}
@@ -388,7 +395,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
             </select>
           </label>{" "}
           <label>
-            {en ? "Copy filename" : "Nama file salinan"}{" "}
+            {en ? "New filename" : "Nama file baru"}{" "}
             <input
               value={copyTarget}
               maxLength={80}
@@ -411,19 +418,35 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
           >
             {en ? "Copy text file" : "Salin file teks"}
           </Button>
+          <Button
+            disabled={
+              busy ||
+              !copySource ||
+              copySource === copyTarget ||
+              !/^[A-Za-z0-9_][A-Za-z0-9_. -]{0,79}$/.test(copyTarget) ||
+              !copyTarget.endsWith(".txt")
+            }
+            onClick={() => void copyFile(true)}
+          >
+            {en ? "Rename uploaded file" : "Ubah nama file unggahan"}
+          </Button>
           {copyStatus && (
             <output>
-              {copyStatus === "done"
+              {copyStatus === "renamed"
                 ? en
-                  ? "Copy verified."
-                  : "Salinan terverifikasi."
-                : copyStatus === "rejected"
+                  ? "Rename verified."
+                  : "Perubahan nama terverifikasi."
+                : copyStatus === "done"
                   ? en
-                    ? "Copy rejected. Check the filename and offline status."
-                    : "Salinan ditolak. Periksa nama file dan status offline."
-                  : en
-                    ? "Copy not confirmed. Check the file list before retrying."
-                    : "Salinan belum terkonfirmasi. Periksa daftar file sebelum mencoba lagi."}
+                    ? "Copy verified."
+                    : "Salinan terverifikasi."
+                  : copyStatus === "rejected"
+                    ? en
+                      ? "Operation rejected. Check the filename and offline status."
+                      : "Operasi ditolak. Periksa nama file dan status offline."
+                    : en
+                      ? "Operation not confirmed. Check the file list before retrying."
+                      : "Operasi belum terkonfirmasi. Periksa daftar file sebelum mencoba lagi."}
             </output>
           )}
         </div>

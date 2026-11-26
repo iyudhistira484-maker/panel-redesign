@@ -127,6 +127,15 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   const initialVersion = createHash("sha256")
     .update("<strong>fixture preview</strong>\n")
     .digest("hex");
+  const renameApi = `${fileApi}/rename-fixture`;
+  const renamed = "browser-renamed.txt";
+  const requestRename = (source: string, target: string) =>
+    page
+      .context()
+      .request.post(renameApi, {
+        headers: editHeaders,
+        data: { source, target },
+      });
   const copyApi = `${fileApi}/copy-fixture`;
   const copyName = "browser-copy.txt";
   const requestCopy = (source: string, target: string) =>
@@ -138,6 +147,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   const uploadedBytes = Buffer.from("Browser upload: å\r\n");
   const uploadName = "browser-upload.txt";
   await open("collaborator@example.test");
+  expect((await requestRename("example.txt", renamed)).status()).toBe(404);
   expect((await requestCopy("example.txt", copyName)).status()).toBe(404);
   expect(await page.getByLabel("File teks untuk diunggah").count()).toBe(0);
   expect(
@@ -253,8 +263,8 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       })
     ).status(),
   ).toBe(409);
-  await page.getByLabel("File yang disalin").selectOption(uploadName);
-  await page.getByLabel("Nama file salinan").fill(copyName);
+  await page.getByLabel("File teks sumber").selectOption(uploadName);
+  await page.getByLabel("Nama file baru").fill(copyName);
   const copied = page.waitForResponse((response) => response.url() === copyApi);
   await page.getByRole("button", { name: "Salin file teks" }).click();
   expect((await copied).status()).toBe(201);
@@ -282,6 +292,54 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   expect(await readUploaded()).toEqual(uploadedBytes);
   console.log(
     "::notice::Wings fixture copy verified source and destination bytes and rejected overwrite and collaborator",
+  );
+  expect((await requestRename(copyName, uploadName)).status()).toBe(409);
+  expect((await requestRename("example.txt", renamed)).status()).toBe(404);
+  expect((await requestRename(copyName, "../rename-escape.txt")).status()).toBe(
+    400,
+  );
+  await page.getByLabel("File teks sumber").selectOption(copyName);
+  await page.getByLabel("Nama file baru").fill(renamed);
+  const renameReply = page.waitForResponse(
+    (response) => response.url() === renameApi,
+  );
+  await page.getByRole("button", { name: "Ubah nama file unggahan" }).click();
+  expect((await renameReply).status()).toBe(200);
+  await expect(page.getByText("Perubahan nama terverifikasi.")).toBeVisible();
+  await expect(
+    files.getByRole("button", { name: copyName, exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    files.getByRole("button", { name: renamed, exact: true }),
+  ).toBeVisible();
+  expect(
+    (
+      await docker(
+        "docker",
+        [
+          "exec",
+          fixtureDaemon,
+          "cat",
+          `${uploadVolume}/${id}/fixture-docs/${renamed}`,
+        ],
+        { encoding: "buffer", timeout: 5000 },
+      )
+    ).stdout,
+  ).toEqual(uploadedBytes);
+  await docker(
+    "docker",
+    [
+      "exec",
+      fixtureDaemon,
+      "test",
+      "!",
+      "-e",
+      `${uploadVolume}/${id}/fixture-docs/${copyName}`,
+    ],
+    { timeout: 5000 },
+  );
+  console.log(
+    "::notice::Chromium rename verified destination bytes and removed source without overwrite",
   );
   const rejectedUploads = [
     {

@@ -255,6 +255,21 @@ export class WingsClient {
       throw new WingsUnavailable("payload");
     return entries.some((entry) => entry.name === name);
   }
+  async renameUploadedFixture(id: string, source: string, target: string) {
+    if (
+      ![source, target].every(
+        (name) => fixturePathSegment(name) && name.endsWith(".txt"),
+      )
+    )
+      throw new WingsUnavailable("payload");
+    const response = await this.#send(
+      `${this.#server(id)}/files/rename`,
+      204,
+      "PUT",
+      { root: "/fixture-docs", files: [{ from: source, to: target }] },
+    );
+    await response.body?.cancel();
+  }
   async deleteUploadedFixture(id: string, name: string) {
     if (!fixturePathSegment(name) || !name.endsWith(".txt"))
       throw new WingsUnavailable("payload");
