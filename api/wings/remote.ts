@@ -28,7 +28,7 @@ export type FixtureBackupCallback = (
   id: string,
   phase: "create" | "restore",
   event: FixtureBackupSignal,
-) => boolean;
+) => boolean | Promise<boolean>;
 export type WorkloadProvider = {
   lookup: (id: string) => Promise<ContractWorkload | undefined>;
   list: (
@@ -138,7 +138,7 @@ export async function registerRemote(
         async (req, reply) => {
           if (
             !UUID_V4.test(req.params.backup) ||
-            !fixtureBackupCallback(req.params.backup, phase, req.body)
+            !(await fixtureBackupCallback(req.params.backup, phase, req.body))
           )
             return reply.code(404).send({ error: "backup_not_found" });
           return reply.code(204).send();

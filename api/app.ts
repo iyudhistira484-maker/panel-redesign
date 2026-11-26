@@ -7,6 +7,7 @@ import {
 } from "./wings/transfer-receiver";
 import { createProvisioner, ProvisionError } from "./wings/provision";
 import { registerCatalog, type FixtureTransfer } from "./catalog/routes";
+import { localBackupService } from "./wings/local-backups";
 import { stagingSftpAuth } from "./wings/sftp-auth";
 import { registerRemote, type FixtureBackupCallback } from "./wings/remote";
 import { UUID_V4, type WingsNode } from "./wings/client";
@@ -47,6 +48,7 @@ export type Options = {
   fixtureTransfer?: FixtureTransfer;
   fixtureReceiver?: FixtureReceiver;
   fixtureBackupCallback?: FixtureBackupCallback;
+  enableDisposableBackups?: boolean;
 };
 type User = {
   id: string;
@@ -114,6 +116,7 @@ export async function createApp({
   fixtureTransfer,
   fixtureReceiver,
   fixtureBackupCallback,
+  enableDisposableBackups,
 }: Options) {
   if ((fixtureTransfer || fixtureReceiver) && !enableDisposableProvisioning)
     throw new Error(
@@ -186,6 +189,17 @@ export async function createApp({
     process.env.RELAY_BOOTSTRAP_SCENARIO === "legacy-panel"
       ? stagingSftpAuth(pool, wingsTestNode, catalogNodeKey, pepper)
       : undefined;
+  const localBackups =
+    enableDisposableBackups && sftpAuth && wingsTestNode && catalogNodeKey
+      ? localBackupService(pool, wingsTestNode, catalogNodeKey, pepper, origin)
+      : undefined;
+  if (enableDisposableBackups && !localBackups)
+    throw new Error("Local backup API requires the disposable staging fixture");
+  const backupCallback: FixtureBackupCallback | undefined = localBackups
+    ? async (id, phase, event) =>
+        (await localBackups.callback(id, phase, event)) ||
+        Boolean(await fixtureBackupCallback?.(id, phase, event))
+    : fixtureBackupCallback;
   if (
     fixtureBackupCallback &&
     (!provisioner ||
@@ -210,7 +224,7 @@ export async function createApp({
         req.method === "POST"
       ) &&
       !(
-        fixtureBackupCallback &&
+        backupCallback &&
         req.method === "POST" &&
         [
           "/api/remote/backups/:backup",
@@ -362,6 +376,13 @@ export async function createApp({
       ? { id: u.id, admin: !!u.is_admin, channel: "session" }
       : null;
   }
+  localBackups?.register(app, async (req) => {
+    const principal = await actor(
+      req.cookies[sessionCookie],
+      req.headers.authorization,
+    );
+    return principal?.channel === "session" ? principal.id : null;
+  });
   registerClientSshKeys(app, pool, async (req) => {
     if (req.headers.authorization !== undefined) return null;
     const principal = await actor(req.cookies[sessionCookie], undefined);
@@ -1646,7 +1667,7 @@ export async function createApp({
           receiver?.provider ?? provisioner?.provider,
           receiver?.onTransfer,
           sftpAuth,
-          fixtureBackupCallback,
+          backupCallback,
         ),
       { prefix: "/api/remote" },
     );

@@ -226,6 +226,7 @@ async function main() {
             },
           }
         : {}),
+      enableDisposableBackups: actual && configured === node,
       enableDisposableProvisioning: true,
       deliverReset: mail.deliverReset,
     });
@@ -2050,6 +2051,136 @@ async function main() {
           console.log(
             `::notice::Local Wings backup bytes=${bytes} checksum_verified=true token_replay_denied=true restore_verified=true missing_backup_preserved=true`,
           );
+          // Fresh Relay instance: receipts must survive a process restart, not just
+          // the fixture callback collector used above. The original listener services Wings callbacks.
+          const apiPath = `/api/v1/servers/${uuid}/backups`;
+          const createdIds: string[] = [];
+          const api = (
+            app: typeof relay,
+            method: "GET" | "POST",
+            suffix = "",
+            session: Record<string, string> = ownerSession,
+          ) =>
+            app.inject({
+              method,
+              url: apiPath + suffix,
+              headers: { ...headers, ...session },
+            });
+          async function createReceipt() {
+            const receipt = await api(relay, "POST");
+            assert.equal(receipt.statusCode, 202);
+            const { id } = receipt.json();
+            assert.match(id, UUID_V4);
+            createdIds.push(id);
+            await until("durable local backup ready", async () => {
+              const response = await api(relay, "GET");
+              return (
+                response.statusCode === 200 &&
+                response
+                  .json()
+                  .items.some(
+                    (row: { id: string; state: string }) =>
+                      row.id === id && row.state === "ready",
+                  )
+              );
+            });
+            return id as string;
+          }
+          try {
+            assert.equal(
+              (await api(relay, "GET", "", outsider)).statusCode,
+              404,
+            );
+            assert.equal(
+              (await api(relay, "POST", "", collaborator)).statusCode,
+              404,
+            );
+            const durableId = await createReceipt();
+            const fresh = await relayFor(node);
+            try {
+              const listed = await api(fresh, "GET");
+              assert.equal(listed.statusCode, 200);
+              const receipt = listed
+                .json()
+                .items.find((row: { id: string }) => row.id === durableId);
+              assert.equal(receipt.state, "ready");
+              assert.equal(
+                (await api(fresh, "GET", `/${durableId}/download`, outsider))
+                  .statusCode,
+                404,
+              );
+              const archive = await api(fresh, "GET", `/${durableId}/download`);
+              assert.equal(archive.statusCode, 200);
+              assert.equal(archive.rawPayload.length, receipt.sizeBytes);
+              assert.equal(
+                createHash("sha1").update(archive.rawPayload).digest("hex"),
+                receipt.checksum,
+              );
+              await client.writeFixtureText(uuid, "after durable backup\n");
+              assert.equal(
+                (await api(fresh, "POST", `/${randomUUID()}/restore`))
+                  .statusCode,
+                404,
+              );
+              assert.deepEqual(
+                await client.fixtureDownload(
+                  uuid,
+                  ["fixture-docs"],
+                  "example.txt",
+                ),
+                Buffer.from("after durable backup\n"),
+              );
+              assert.equal(
+                (await api(fresh, "POST", `/${durableId}/restore`)).statusCode,
+                202,
+              );
+              await until("durable local restore complete", async () => {
+                const response = await api(fresh, "GET");
+                return (
+                  response.statusCode === 200 &&
+                  response
+                    .json()
+                    .items.some(
+                      (row: { id: string; state: string }) =>
+                        row.id === durableId && row.state === "ready",
+                    )
+                );
+              });
+              assert.deepEqual(
+                await client.fixtureDownload(
+                  uuid,
+                  ["fixture-docs"],
+                  "example.txt",
+                ),
+                checkpointBytes,
+              );
+              const duplicate = await relay.inject({
+                method: "POST",
+                url: `/api/remote/backups/${durableId}/restore`,
+                headers: {
+                  authorization: `Bearer ${node.tokenId}.${node.token}`,
+                },
+                payload: { successful: true },
+              });
+              assert.equal(duplicate.statusCode, 404);
+            } finally {
+              await fresh.close();
+            }
+            await createReceipt();
+            await createReceipt();
+            assert.equal((await api(relay, "POST")).statusCode, 409);
+            console.log(
+              "::notice::Local backup API persistent_receipts=true scoped_owner=true checksum_verified=true restore_verified=true quota_enforced=true",
+            );
+          } finally {
+            for (const id of createdIds) {
+              await client.fixtureBackup(uuid, id, "delete").catch(() => {});
+              await pool.execute(
+                "DELETE FROM local_server_backups WHERE id=? AND server_id=?",
+                [id, uuid],
+              );
+            }
+          }
         } finally {
           backupSignal = undefined;
           try {
