@@ -729,7 +729,7 @@ async function main() {
                 assert.equal(response.length, 24);
                 assert.deepEqual(response.subarray(4, 12), ping.subarray(4));
                 assert.equal(response.readUInt32BE(12), 2);
-              assert.equal(response.readUInt32BE(16), 37);
+                assert.equal(response.readUInt32BE(16), 37);
               } catch (error) {
                 complete(error as Error);
                 return;
@@ -745,7 +745,9 @@ async function main() {
         try {
           const second = await joinFixtureMumble(voicePort, "relay-ci-beta");
           try {
+            await Promise.all([first.probe(), second.probe()]);
             await assertVoiceEndpoint();
+            await Promise.all([first.probe(), second.probe()]);
           } finally {
             second.close();
           }

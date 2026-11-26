@@ -6,59 +6,109 @@ import { connect } from "node:tls";
 export function joinFixtureMumble(port: number, username: string) {
   assert.equal(port, 25614);
   assert.match(username, /^relay-ci-[a-z]{1,12}$/);
-  return new Promise<{ close: () => void }>((resolve, reject) => {
-    const socket = connect({
-      host: "127.0.0.1",
-      port,
-      rejectUnauthorized: false,
-    });
-    const deadline = setTimeout(
-      () => socket.destroy(new Error("Mumble ServerSync timed out")),
-      6000,
-    );
-    const cleanup = () => clearTimeout(deadline);
-    socket.once("error", (error) => {
-      cleanup();
-      reject(error);
-    });
-    socket.once("close", () => {
-      cleanup();
-      reject(new Error("Mumble closed before ServerSync"));
-    });
-    socket.once("secureConnect", () => {
-      // Authenticate (type 2), protobuf field 1: username, field 5: Opus.
-      const name = Buffer.from(username);
-      const payload = Buffer.concat([
-        Buffer.from([0x0a, name.length]),
-        name,
-        Buffer.from([0x28, 1]),
-      ]);
-      const header = Buffer.alloc(6);
-      header.writeUInt16BE(2);
-      header.writeUInt32BE(payload.length, 2);
-      socket.write(Buffer.concat([header, payload]));
-    });
-    let pending = Buffer.alloc(0);
-    socket.on("data", (chunk) => {
-      pending = Buffer.concat([pending, chunk]);
-      while (pending.length >= 6) {
-        const type = pending.readUInt16BE(0);
-        const length = pending.readUInt32BE(2);
-        if (length > 262144) {
-          socket.destroy(new Error("Oversized Mumble fixture frame"));
-          return;
+  return new Promise<{ close: () => void; probe: () => Promise<void> }>(
+    (resolve, reject) => {
+      const socket = connect({
+        host: "127.0.0.1",
+        port,
+        rejectUnauthorized: false,
+      });
+      const deadline = setTimeout(
+        () => socket.destroy(new Error("Mumble ServerSync timed out")),
+        6000,
+      );
+      const cleanup = () => clearTimeout(deadline);
+      socket.once("error", (error) => {
+        cleanup();
+        reject(error);
+      });
+      socket.once("close", () => {
+        cleanup();
+        reject(new Error("Mumble closed before ServerSync"));
+      });
+      socket.once("secureConnect", () => {
+        // Authenticate (type 2), protobuf field 1: username, field 5: Opus.
+        const name = Buffer.from(username);
+        const payload = Buffer.concat([
+          Buffer.from([0x0a, name.length]),
+          name,
+          Buffer.from([0x28, 1]),
+        ]);
+        const header = Buffer.alloc(6);
+        header.writeUInt16BE(2);
+        header.writeUInt32BE(payload.length, 2);
+        socket.write(Buffer.concat([header, payload]));
+      });
+      let synced = false;
+      let serial = 0;
+      let waiting:
+        | { payload: Buffer; finish: (error?: Error) => void }
+        | undefined;
+      socket.once("close", () =>
+        waiting?.finish(new Error("Original Mumble session closed")),
+      );
+      const probe = async () => {
+        assert.ok(
+          synced && !socket.destroyed && !socket.readableEnded,
+          "Original Mumble session is no longer connected",
+        );
+        assert.ok(!waiting, "Mumble fixture probe already pending");
+        assert.ok(++serial < 128, "Mumble fixture probe budget exceeded");
+        // Ping (type 3), protobuf field 1: echoed timestamp. A new nonce
+        // proves a fresh reply on the original TLS socket, not a reconnect.
+        const payload = Buffer.from([8, serial]);
+        await new Promise<void>((resolveProbe, rejectProbe) => {
+          const timer = setTimeout(
+            () => waiting?.finish(new Error("Mumble session ping timed out")),
+            4000,
+          );
+          waiting = {
+            payload,
+            finish(error) {
+              clearTimeout(timer);
+              waiting = undefined;
+              if (error) rejectProbe(error);
+              else resolveProbe();
+            },
+          };
+          socket.write(
+            Buffer.concat([
+              Buffer.from([0, 3, 0, 0, 0, payload.length]),
+              payload,
+            ]),
+          );
+        });
+      };
+      let pending = Buffer.alloc(0);
+      socket.on("data", (chunk) => {
+        pending = Buffer.concat([pending, chunk]);
+        while (pending.length >= 6) {
+          const type = pending.readUInt16BE(0);
+          const length = pending.readUInt32BE(2);
+          if (length > 262144) {
+            socket.destroy(new Error("Oversized Mumble fixture frame"));
+            return;
+          }
+          if (pending.length < 6 + length) return;
+          const payload = pending.subarray(6, 6 + length);
+          pending = pending.subarray(6 + length);
+          if (
+            type === 3 &&
+            waiting &&
+            payload.subarray(0, 2).equals(waiting.payload)
+          )
+            waiting.finish();
+          if (type === 4) {
+            socket.destroy(new Error("Mumble rejected fixture authentication"));
+            return;
+          }
+          if (type === 5 && length > 0) {
+            cleanup();
+            synced = true;
+            resolve({ close: () => socket.destroy(), probe });
+          }
         }
-        if (pending.length < 6 + length) return;
-        pending = pending.subarray(6 + length);
-        if (type === 4) {
-          socket.destroy(new Error("Mumble rejected fixture authentication"));
-          return;
-        }
-        if (type === 5 && length > 0) {
-          cleanup();
-          resolve({ close: () => socket.destroy() });
-        }
-      }
-    });
-  });
+      });
+    },
+  );
 }
