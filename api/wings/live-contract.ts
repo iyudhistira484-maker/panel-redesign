@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { createSocket } from "node:dgram";
 import { connect as connectTls } from "node:tls";
 import { promisify } from "node:util";
+import { joinFixtureMumble } from "./mumble-fixture-client";
 import { WingsSocket } from "./socket";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -738,6 +739,19 @@ async function main() {
           });
         }
       };
+      const assertTwoVoiceClients = async () => {
+        const first = await joinFixtureMumble(voicePort, "relay-ci-alpha");
+        try {
+          const second = await joinFixtureMumble(voicePort, "relay-ci-beta");
+          try {
+            await assertVoiceEndpoint();
+          } finally {
+            second.close();
+          }
+        } finally {
+          first.close();
+        }
+      };
       // Establish protocol readiness on a normal restart before comparing the
       // exact offline application database bytes across the reinstall callback.
       assert.equal((await voicePower("start")).statusCode, 202);
@@ -745,7 +759,7 @@ async function main() {
         "Mumble running before reinstall",
         async () => (await client.state(voice)) === "running",
       );
-      await assertVoiceEndpoint();
+      await assertTwoVoiceClients();
       assert.equal((await voicePower("stop")).statusCode, 202);
       await until(
         "Mumble offline before reinstall",
@@ -789,7 +803,7 @@ async function main() {
         "Mumble running after reinstall",
         async () => (await client.state(voice)) === "running",
       );
-      await assertVoiceEndpoint();
+      await assertTwoVoiceClients();
       assert.match(
         (
           await docker(
@@ -806,7 +820,7 @@ async function main() {
         async () => (await client.state(voice)) === "offline",
       );
       console.log(
-        "::notice::Mumble lifecycle approved_image=true tls_version_frame_before_after=true udp_status_nonce_and_capacity_before_after=true host_loopback_forwarding=true reinstall_callback=true sqlite_bytes_preserved=true max_users_preserved=true",
+        "::notice::Mumble lifecycle approved_image=true tls_version_frame_before_after=true udp_status_nonce_and_capacity_before_after=true host_loopback_forwarding=true two_clients_server_sync_before_after=true reinstall_callback=true sqlite_bytes_preserved=true max_users_preserved=true",
       );
     }
     assert.equal(
