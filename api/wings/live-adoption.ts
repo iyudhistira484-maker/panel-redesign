@@ -2021,7 +2021,22 @@ async function main() {
               assert.ok(result?.successful);
               const download = await remoteS3.url();
               await remoteS3.verify(download, result);
-              await assert.rejects(client.fixtureBackup(uuid, s3Id, "restore"));
+              const backupDir = relayConfig.match(
+                /^ {2}backup_directory: (\/tmp\/tmp\.[A-Za-z0-9]+\/data\/backups)$/m,
+              )?.[1];
+              assert.ok(backupDir);
+              await docker(
+                "docker",
+                [
+                  "exec",
+                  "relay-wings-contract",
+                  "test",
+                  "!",
+                  "-e",
+                  `${backupDir}/${s3Id}.tar.gz`,
+                ],
+                { timeout: 5000 },
+              );
               await client.writeFixtureText(
                 uuid,
                 "modified before S3 restore\n",
@@ -2036,7 +2051,31 @@ async function main() {
                 Buffer.from("modified before S3 restore\n"),
               );
               backupSignal = { id: s3Id, phase: "restore" };
-              await client.fixtureS3Backup(uuid, s3Id, await remoteS3.url());
+              const restoreClient = new WingsClient(
+                node,
+                async (input, init) => {
+                  const response = await fetch(input, init);
+                  if (response.status !== 202) {
+                    const message = (await response.text()).slice(0, 1024);
+                    const reason = message.includes("blocked address")
+                      ? "destination blocked"
+                      : message.includes("not a supported content type")
+                        ? "media type rejected"
+                        : message.includes("invalid response status")
+                          ? "object HTTP response rejected"
+                          : "other";
+                    console.log(
+                      `::warning::S3 restore dispatch status=${response.status} reason=${reason}`,
+                    );
+                  }
+                  return response;
+                },
+              );
+              await restoreClient.fixtureS3Backup(
+                uuid,
+                s3Id,
+                await remoteS3.url(),
+              );
               await until("S3 restore callback", async () =>
                 Boolean(backupSignal?.result),
               );
