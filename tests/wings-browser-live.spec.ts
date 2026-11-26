@@ -296,7 +296,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     .click();
   await expect(backups.getByText("Belum ada backup.")).toBeVisible();
   await expect(
-    backups.getByRole("button", { name: "Buat backup" }),
+    backups.getByRole("button", { name: "Buat backup", exact: true }),
   ).toBeEnabled();
 
   const refreshBackups = backups.getByRole("button", {
