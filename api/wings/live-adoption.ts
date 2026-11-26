@@ -1,3 +1,7 @@
+import {
+  joinFixtureMumble,
+  observeMumbleSessions,
+} from "./mumble-fixture-client";
 import { mumbleEgg } from "../eggs/upstream-workload";
 import WebSocket from "ws";
 import { createRequire } from "node:module";
@@ -450,6 +454,109 @@ async function main() {
           port: 25611,
         },
       ]);
+    }
+    if (actual && process.env.RELAY_MUMBLE_CUTOVER === "1") {
+      assert.ok(second && secondEgg && secondConfig && secondClient);
+      const { secondaryAllocations } = legacyPreflight(manifest);
+      assert.equal(secondaryAllocations.length, 1);
+      const collaborator = process.env.RELAY_ADOPTION_COLLABORATOR_UUID;
+      const outsider = process.env.RELAY_ADOPTION_OUTSIDER_UUID;
+      assert.ok(collaborator && outsider);
+      assert.equal(
+        (
+          await applyLegacyFixture(pool, manifest, {
+            accounts: new Map([
+              [owner, "adoption@example.test"],
+              [collaborator, "collaborator@example.test"],
+              [outsider, "outsider@example.test"],
+            ]),
+            nodes: new Map([
+              [nodeId, node],
+              [secondNodeId, secondNode],
+            ]),
+            key,
+            pepper,
+            allocations: new Map([
+              [uuid, allocation],
+              [second, secondAllocation],
+            ]),
+            secondaryAllocations: new Map([
+              [secondaryAllocations[0].legacyId, randomUUID()],
+            ]),
+            reviewedMumbleEggs: new Set([secondEgg]),
+          })
+        ).applied,
+        true,
+      );
+      await secondClient.power(second, "start");
+      await until(
+        "legacy Mumble running",
+        async () => (await secondClient.state(second)) === "running",
+      );
+      const before = await inspect(second);
+      const { stdout } = await docker(
+        "docker",
+        [
+          "inspect",
+          "--format",
+          '{{(index .NetworkSettings.Networks "relay-wings-contract-net").IPAddress}}',
+          second,
+        ],
+        { timeout: 5000 },
+      );
+      const address = stdout.trim();
+      const first = await joinFixtureMumble(25611, "relay-ci-alpha", address);
+      const original = await readFile(secondConfig, "utf8");
+      assert.equal(original.split("remote: http://127.0.0.1:13202").length, 2);
+      const reload = async () => {
+        await docker(
+          "docker",
+          ["restart", "--time", "10", "relay-wings-adoption-second"],
+          { timeout: 20000 },
+        );
+        await until(
+          "Mumble rediscovered",
+          async () => (await secondClient.state(second)) === "running",
+        );
+        assert.equal(await inspect(second), before);
+      };
+      try {
+        const secondSession = await joinFixtureMumble(
+          25611,
+          "relay-ci-beta",
+          address,
+        );
+        try {
+          const sessions = [first, secondSession];
+          const cutover = await observeMumbleSessions(sessions, async () => {
+            await writeFile(
+              secondConfig,
+              original.replace(
+                "remote: http://127.0.0.1:13202",
+                "remote: http://127.0.0.1:13201",
+              ),
+            );
+            await reload();
+          });
+          const rollback = await observeMumbleSessions(sessions, async () => {
+            await writeFile(secondConfig, original);
+            await reload();
+          });
+          assert.ok(sessions.every((session) => session.hasChannel("Root")));
+          console.log(
+            `::notice::Mumble panel switch same_container=true original_sessions=2 cutover_samples=${cutover.samples} rollback_samples=${rollback.samples}`,
+          );
+        } finally {
+          secondSession.close();
+          if ((await readFile(secondConfig, "utf8")) !== original) {
+            await writeFile(secondConfig, original);
+            await reload();
+          }
+        }
+      } finally {
+        first.close();
+      }
+      return;
     }
     if (actual) {
       const base = "http://127.0.0.1:13202";

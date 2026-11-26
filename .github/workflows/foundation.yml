@@ -127,7 +127,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [lifecycle, adoption, legacy-panel, gitea-qualification]
+        scenario: [lifecycle, adoption, legacy-panel, mumble-cutover, gitea-qualification]
     services:
       mysql:
         image: mysql:8.4.8
@@ -164,7 +164,7 @@ jobs:
           else
             npx playwright install --with-deps chromium
           fi
-      - if: matrix.scenario == 'legacy-panel'
+      - if: matrix.scenario == 'legacy-panel' || matrix.scenario == 'mumble-cutover'
         uses: actions/setup-go@v5
         with:
           go-version: '1.26.9'
@@ -172,7 +172,8 @@ jobs:
       - run: bash scripts/wings-contract.sh
         env:
           RELAY_RECOVERY_MYSQL_SERVICE: ${{ job.services.mysql.id }}
-          RELAY_BOOTSTRAP_SCENARIO: ${{ matrix.scenario }}
+          RELAY_BOOTSTRAP_SCENARIO: ${{ matrix.scenario == 'mumble-cutover' && 'legacy-panel' || matrix.scenario }}
+          RELAY_MUMBLE_CUTOVER: ${{ matrix.scenario == 'mumble-cutover' && '1' || '' }}
           RELAY_EXPERIMENTAL_GITEA: ${{ matrix.scenario == 'gitea-qualification' && '1' || '' }}
           RELAY_STAGING_DATABASE_URL: mysql://relay:disposable-ci@127.0.0.1:${{ job.services.mysql.ports[3306] }}/relay_test
   wings-transfer:

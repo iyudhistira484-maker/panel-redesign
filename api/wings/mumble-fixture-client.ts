@@ -39,8 +39,15 @@ export function decodeFixtureChannel(payload: Buffer) {
 
 // Test-only anonymous authentication on the disposable runner. The workload
 // generates a self-signed certificate; never use this client for production.
-export function joinFixtureMumble(port: number, username: string) {
-  assert.equal(port, 25614);
+export function joinFixtureMumble(
+  port: number,
+  username: string,
+  host = "127.0.0.1",
+) {
+  assert.ok(
+    (port === 25614 && host === "127.0.0.1") ||
+      (port === 25611 && /^172\.(?:1[6-9]|2[0-9]|3[01])\.\d+\.\d+$/.test(host)),
+  );
   assert.match(username, /^relay-ci-[a-z]{1,12}$/);
   return new Promise<{
     close: () => void;
@@ -48,7 +55,7 @@ export function joinFixtureMumble(port: number, username: string) {
     hasChannel: (name: string) => boolean;
   }>((resolve, reject) => {
     const socket = connect({
-      host: "127.0.0.1",
+      host,
       port,
       rejectUnauthorized: false,
     });

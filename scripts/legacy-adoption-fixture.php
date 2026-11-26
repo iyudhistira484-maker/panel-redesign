@@ -128,6 +128,24 @@ SCRIPT,
     unset($copy['id']);
     $copy['uuid'] = getenv('RELAY_ADOPTION_SECOND_EGG_UUID');
     $copy['name'] = 'Second adoption fixture';
+    $mumble = getenv('RELAY_MUMBLE_CUTOVER') === '1';
+    if ($mumble) {
+        $copy['startup'] = 'mumble-server -fg -ini murmur.ini';
+        $copy['docker_images'] = '{"Mumble":"ghcr.io/parkervcp/yolks:voice_mumble"}';
+        $copy['config_startup'] = '{"done":"Server listening on"}';
+        $copy['config_stop'] = '^C';
+        $copy['script_install'] = <<<'SCRIPT'
+#!/bin/sh
+set -eu
+cat > /mnt/server/murmur.ini <<'INI'
+database=/home/container/murmur.sqlite
+logfile=/home/container/murmur.log
+port=25611
+host=0.0.0.0
+users=37
+INI
+SCRIPT;
+    }
     $otherEgg = DB::table('eggs')->insertGetId($copy);
     $secondNode = DB::table('nodes')->insertGetId([
         'uuid' => '33113cc5-78fb-4cd0-881b-326c3888b38b', 'public' => 1,
@@ -145,6 +163,12 @@ SCRIPT,
     $other['node_id'] = $secondNode;
     $other['egg_id'] = $otherEgg;
     $other['allocation_id'] = $otherAllocation;
+    if ($mumble) {
+        $other['startup'] = $copy['startup'];
+        $other['image'] = 'ghcr.io/parkervcp/yolks:voice_mumble';
+        $other['memory'] = 256;
+        $other['disk'] = 128;
+    }
     $otherServer = DB::table('servers')->insertGetId($other);
     DB::table('allocations')->where('id', $otherAllocation)->update(['server_id' => $otherServer]);
 });
