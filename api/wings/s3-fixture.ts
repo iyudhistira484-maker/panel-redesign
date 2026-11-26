@@ -101,9 +101,16 @@ export async function s3Fixture(server: string, id: string) {
     },
     async url() {
       if (!completed) throw new Error("S3 archive incomplete");
-      return getSignedUrl(client, new GetObjectCommand(object), {
-        expiresIn: 45,
-      });
+      return getSignedUrl(
+        client,
+        new GetObjectCommand({
+          ...object,
+          ResponseContentType: "application/gzip",
+        }),
+        {
+          expiresIn: 45,
+        },
+      );
     },
     async verify(url: string, event: FixtureBackupSignal) {
       const response = await fetch(url, {
@@ -113,10 +120,12 @@ export async function s3Fixture(server: string, id: string) {
       if (
         !response.ok ||
         !response.body ||
+        response.headers.get("content-type")?.split(";")[0] !==
+          "application/gzip" ||
         Number(response.headers.get("content-length")) !== size
       ) {
         await response.body?.cancel();
-        throw new Error("Unexpected S3 object size");
+        throw new Error("Unexpected S3 object response");
       }
       const reader = response.body.getReader();
       let received = 0;
