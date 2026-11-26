@@ -23,6 +23,7 @@ export function s3Fixture(
   server: string,
   node: string,
   id: string,
+  test?: { cutAfter?: "allocate" | "complete"; uploadTtl?: 5 },
 ) {
   const accessKeyId = process.env.RELAY_S3_FIXTURE_USER;
   const secretAccessKey = process.env.RELAY_S3_FIXTURE_PASSWORD;
@@ -50,13 +51,14 @@ export function s3Fixture(
     upload_id: string | null;
     size_bytes: number | null;
     checksum: string | null;
+    waiting: number;
   };
   const binding = [id, server, node];
   const receipt = async () =>
     (
       await rows<Receipt>(
         pool,
-        `SELECT r.state,r.upload_id,r.size_bytes,r.checksum FROM s3_fixture_receipts r JOIN servers s ON s.id=r.server_id AND s.node_id=r.node_id WHERE r.id=? AND r.server_id=? AND r.node_id=?`,
+        `SELECT r.state,r.upload_id,r.size_bytes,r.checksum,IF(r.upload_expires_at > CURRENT_TIMESTAMP(3),1,0) AS waiting FROM s3_fixture_receipts r JOIN servers s ON s.id=r.server_id AND s.node_id=r.node_id WHERE r.id=? AND r.server_id=? AND r.node_id=?`,
         binding,
       )
     )[0];
@@ -109,27 +111,31 @@ export function s3Fixture(
       ).UploadId;
       if (!upload || upload.length > 1024)
         throw new Error("Invalid S3 upload identifier");
+      if (test?.cutAfter === "allocate")
+        throw new Error("Fixture interruption after allocation");
+      const ttl = test?.uploadTtl ?? 45;
+      const signingDate = new Date();
+      const url = await getSignedUrl(
+        client,
+        new UploadPartCommand({
+          ...object,
+          UploadId: upload,
+          PartNumber: 1,
+          ContentLength: bytes,
+        }),
+        {
+          expiresIn: ttl,
+          signingDate,
+          signableHeaders: new Set(["content-length"]),
+        },
+      );
       const [saved] = await pool.execute<ResultSetHeader>(
-        "UPDATE s3_fixture_receipts SET state='uploading',upload_id=?,size_bytes=? WHERE id=? AND server_id=? AND node_id=? AND state='allocating'",
-        [upload, bytes, ...binding],
+        "UPDATE s3_fixture_receipts SET state='uploading',upload_id=?,size_bytes=?,upload_expires_at=CURRENT_TIMESTAMP(3)+INTERVAL ? SECOND WHERE id=? AND server_id=? AND node_id=? AND state='allocating'",
+        [upload, bytes, ttl + 2, ...binding],
       );
       if (saved.affectedRows !== 1)
         throw new Error("S3 receipt changed during allocation");
-      return {
-        part_size: 5 * 1024 * 1024,
-        parts: [
-          await getSignedUrl(
-            client,
-            new UploadPartCommand({
-              ...object,
-              UploadId: upload,
-              PartNumber: 1,
-              ContentLength: bytes,
-            }),
-            { expiresIn: 45, signableHeaders: new Set(["content-length"]) },
-          ),
-        ],
-      };
+      return { part_size: 5 * 1024 * 1024, parts: [url] };
     },
     async complete(event: FixtureBackupSignal) {
       const row = await receipt();
@@ -143,10 +149,14 @@ export function s3Fixture(
         !/^[a-f0-9]{40}$/.test(event.checksum ?? "") ||
         event.parts?.length !== 1 ||
         part?.part_number !== 1 ||
-        !/^"?[a-f0-9]{32}"?$/.test(part.etag) ||
-        !(await advance("uploading", "completing"))
+        !/^"?[a-f0-9]{32}"?$/.test(part.etag)
       )
         return false;
+      const [claimed] = await pool.execute<ResultSetHeader>(
+        "UPDATE s3_fixture_receipts SET state='completing',checksum=? WHERE id=? AND server_id=? AND node_id=? AND state='uploading'",
+        [event.checksum ?? null, ...binding],
+      );
+      if (claimed.affectedRows !== 1) return false;
       await client.send(
         new CompleteMultipartUploadCommand({
           ...object,
@@ -155,12 +165,31 @@ export function s3Fixture(
         }),
         options(),
       );
-      await store.verify(await signedGet(), event);
+      if (test?.cutAfter === "complete")
+        throw new Error("Fixture interruption after completion");
+      return store.recoverCompletion();
+    },
+    async recoverCompletion() {
+      const row = await receipt();
+      if (row?.state !== "completing" || !row.size_bytes || !row.checksum)
+        return false;
+      // Observe the finished object only; never replay CompleteMultipartUpload.
+      await store.verify(await signedGet(), {
+        successful: true,
+        size: row.size_bytes,
+        checksum: row.checksum,
+      });
       const [saved] = await pool.execute<ResultSetHeader>(
-        "UPDATE s3_fixture_receipts SET state='ready',checksum=?,upload_id=NULL WHERE id=? AND server_id=? AND node_id=? AND state='completing'",
-        [event.checksum ?? null, ...binding],
+        "UPDATE s3_fixture_receipts SET state='ready',upload_id=NULL,upload_expires_at=NULL WHERE id=? AND server_id=? AND node_id=? AND state='completing'",
+        binding,
       );
       return saved.affectedRows === 1;
+    },
+    async recoverAllocation() {
+      // Operator/test must first establish that the original allocator stopped.
+      if (!(await advance("allocating", "deleting"))) return false;
+      await store.remove();
+      return true;
     },
     async url() {
       if ((await receipt())?.state !== "ready")
@@ -207,32 +236,39 @@ export function s3Fixture(
       if (received !== size || hash.digest("hex") !== event.checksum)
         throw new Error("S3 object integrity mismatch");
     },
-    async pendingUploads() {
+    async uploads() {
       const result = await client.send(
         new ListMultipartUploadsCommand({ Bucket: bucket, Prefix: object.Key }),
         options(),
       );
       if (result.IsTruncated)
         throw new Error("Unexpected multipart list pagination");
-      return (
-        result.Uploads?.filter((upload) => upload.Key === object.Key).length ??
-        0
-      );
+      return (result.Uploads ?? [])
+        .filter((upload) => upload.Key === object.Key)
+        .map((upload) => {
+          if (!upload.UploadId)
+            throw new Error("Missing multipart upload identifier");
+          return upload.UploadId;
+        });
+    },
+    async pendingUploads() {
+      return (await store.uploads()).length;
     },
     async remove() {
       const row = await receipt();
-      if (!row) return;
+      if (!row) return true;
       if (!["reserved", "uploading", "ready", "deleting"].includes(row.state))
         throw new Error("S3 operation requires inspection");
       if (row.state !== "deleting" && !(await advance(row.state, "deleting")))
         throw new Error("S3 receipt changed during deletion");
-      if (row.upload_id) {
+      // Block completion now but leave cleanup pending while signed PUT may work.
+      if (row.waiting) return false;
+      const ids = new Set(await store.uploads());
+      if (row.upload_id) ids.add(row.upload_id);
+      for (const UploadId of ids) {
         try {
           await client.send(
-            new AbortMultipartUploadCommand({
-              ...object,
-              UploadId: row.upload_id,
-            }),
+            new AbortMultipartUploadCommand({ ...object, UploadId }),
             options(),
           );
         } catch (error) {
@@ -240,11 +276,14 @@ export function s3Fixture(
             throw error;
         }
       }
+      if (await store.pendingUploads())
+        throw new Error("S3 multipart cleanup pending");
       await client.send(new DeleteObjectCommand(object), options());
       await pool.execute(
         "DELETE FROM s3_fixture_receipts WHERE id=? AND server_id=? AND node_id=? AND state='deleting'",
         binding,
       );
+      return true;
     },
     dispose() {
       client.destroy();

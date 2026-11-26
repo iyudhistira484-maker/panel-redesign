@@ -9,6 +9,7 @@ import { execFile, spawn } from "node:child_process";
 import { createHmac, createHash, randomBytes, randomUUID } from "node:crypto";
 import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
+import { gzipSync } from "node:zlib";
 import Fastify from "fastify";
 import { createApp } from "../app";
 import { rows, stagingPool } from "../db";
@@ -2130,8 +2131,109 @@ async function main() {
                 ),
                 checkpointBytes,
               );
+              const allocationId = randomUUID();
+              const killedAllocator = s3Fixture(
+                pool,
+                uuid,
+                nodeId,
+                allocationId,
+                { cutAfter: "allocate" },
+              );
+              const allocationRecovery = s3Fixture(
+                pool,
+                uuid,
+                nodeId,
+                allocationId,
+              );
+              try {
+                await killedAllocator.reserve();
+                await assert.rejects(
+                  killedAllocator.urls(4),
+                  /Fixture interruption after allocation/,
+                );
+                killedAllocator.dispose();
+                assert.equal(
+                  (await allocationRecovery.status())?.state,
+                  "allocating",
+                );
+                assert.equal(await allocationRecovery.pendingUploads(), 1);
+                assert.equal(
+                  await allocationRecovery.recoverAllocation(),
+                  true,
+                );
+                assert.equal(await allocationRecovery.pendingUploads(), 0);
+                assert.equal(await allocationRecovery.status(), null);
+              } finally {
+                killedAllocator.dispose();
+                allocationRecovery.dispose();
+              }
+              const completionId = randomUUID();
+              const killedCompleter = s3Fixture(
+                pool,
+                uuid,
+                nodeId,
+                completionId,
+                { cutAfter: "complete" },
+              );
+              const completionRecovery = s3Fixture(
+                pool,
+                uuid,
+                nodeId,
+                completionId,
+              );
+              try {
+                await killedCompleter.reserve();
+                const bytes = gzipSync("S3 durable completion probe");
+                const upload = await killedCompleter.urls(bytes.length);
+                assert.ok(upload);
+                const response = await fetch(upload.parts[0], {
+                  method: "PUT",
+                  body: bytes,
+                  redirect: "error",
+                  signal: AbortSignal.timeout(5000),
+                });
+                assert.equal(response.status, 200);
+                const etag = response.headers.get("etag");
+                await response.body?.cancel();
+                assert.ok(etag);
+                const event = {
+                  successful: true,
+                  size: bytes.length,
+                  checksum_type: "sha1",
+                  checksum: createHash("sha1").update(bytes).digest("hex"),
+                  parts: [{ etag, part_number: 1 }],
+                };
+                await assert.rejects(
+                  killedCompleter.complete(event),
+                  /Fixture interruption after completion/,
+                );
+                killedCompleter.dispose();
+                assert.equal(
+                  (await completionRecovery.status())?.state,
+                  "completing",
+                );
+                await assert.rejects(
+                  completionRecovery.url(),
+                  /archive incomplete/,
+                );
+                assert.equal(await completionRecovery.complete(event), false);
+                assert.equal(
+                  await completionRecovery.recoverCompletion(),
+                  true,
+                );
+                await completionRecovery.verify(
+                  await completionRecovery.url(),
+                  event,
+                );
+                assert.equal(await completionRecovery.remove(), true);
+              } finally {
+                killedCompleter.dispose();
+                completionRecovery.dispose();
+              }
               const interruptedId = randomUUID();
-              const interrupted = s3Fixture(pool, uuid, nodeId, interruptedId);
+              const interrupted = s3Fixture(pool, uuid, nodeId, interruptedId, {
+                uploadTtl: 5,
+              });
               const recovered = s3Fixture(pool, uuid, nodeId, interruptedId);
               try {
                 await interrupted.reserve();
@@ -2146,9 +2248,26 @@ async function main() {
                   signal: AbortSignal.timeout(5000),
                 });
                 assert.equal(part.status, 200);
+                const etag = part.headers.get("etag");
                 await part.body?.cancel();
+                assert.ok(etag);
                 assert.equal(await recovered.pendingUploads(), 1);
-                await recovered.remove();
+                assert.equal(await recovered.remove(), false);
+                assert.equal((await recovered.status())?.state, "deleting");
+                assert.equal(
+                  await recovered.complete({
+                    successful: true,
+                    size: 4,
+                    checksum_type: "sha1",
+                    checksum: createHash("sha1").update("test").digest("hex"),
+                    parts: [{ etag, part_number: 1 }],
+                  }),
+                  false,
+                );
+                await assert.rejects(recovered.url(), /archive incomplete/);
+                await until("abandoned S3 cleanup after presign expiry", () =>
+                  recovered.remove(),
+                );
                 assert.equal(await recovered.status(), null);
                 assert.equal(await recovered.pendingUploads(), 0);
               } finally {
@@ -2169,7 +2288,7 @@ async function main() {
               assert.equal(afterDelete.status, 404);
               await afterDelete.body?.cancel();
               console.log(
-                `::notice::Wings S3 backup bytes=${result.size} checksum_verified=true local_archive_absent=true restore_bytes_verified=true wrong_node_denied=true receipt_persisted=true interrupted_upload_aborted=true deleted_object_absent=true`,
+                `::notice::Wings S3 backup bytes=${result.size} checksum_verified=true local_archive_absent=true restore_bytes_verified=true wrong_node_denied=true receipt_persisted=true interrupted_upload_aborted=true deleted_object_absent=true allocation_recovered=true completion_recovered=true old_completion_blocked=true`,
               );
             } finally {
               try {
