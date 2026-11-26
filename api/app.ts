@@ -1118,7 +1118,11 @@ export async function createApp({
       );
       const items = result.slice(0, 50);
       return {
-        items: items.map((item) => ({ ...item, isOwner: !!item.isOwner })),
+        items: items.map((item) => ({
+          ...item,
+          isOwner: !!item.isOwner,
+          ...(localBackups && item.isOwner ? { localBackups: true } : {}),
+        })),
         next: result.length > 50 ? items[49].id : null,
       };
     },

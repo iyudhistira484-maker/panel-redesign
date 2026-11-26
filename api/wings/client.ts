@@ -48,7 +48,7 @@ export class WingsClient {
     expected: number,
     method = "GET",
     body?: object | string,
-    allowMissing = false,
+    allowMissing: boolean | string = false,
   ): Promise<Response> {
     let response: Response;
     try {
@@ -76,10 +76,26 @@ export class WingsClient {
       throw new WingsUnavailable("transport");
     }
     if (response.status !== expected) {
-      await response.body?.cancel().catch(() => {});
-      throw new WingsUnavailable(
-        allowMissing && response.status === 404 ? "not_found" : "http",
-      );
+      let missing = allowMissing === true && response.status === 404;
+      if (typeof allowMissing === "string" && response.status === 404) {
+        // A server/route 404 is not evidence that the archive is absent.
+        const reader = response.body?.getReader();
+        try {
+          let text = "";
+          for (;;) {
+            const chunk = await reader?.read();
+            if (!chunk || chunk.done) break;
+            text += Buffer.from(chunk.value).toString("utf8");
+            if (text.length > 1024) throw new Error("Oversized error");
+          }
+          missing = JSON.parse(text).error === allowMissing;
+        } catch {
+          missing = false;
+        } finally {
+          await reader?.cancel().catch(() => {});
+        }
+      } else await response.body?.cancel().catch(() => {});
+      throw new WingsUnavailable(missing ? "not_found" : "http");
     }
     return response;
   }
@@ -396,7 +412,7 @@ export class WingsClient {
               204,
               "DELETE",
               undefined,
-              true,
+              "The requested backup was not found on this server.",
             ).catch((err: unknown) => {
               if (err instanceof WingsUnavailable && err.reason === "not_found")
                 return null;

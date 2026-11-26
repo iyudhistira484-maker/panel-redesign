@@ -243,11 +243,9 @@ export function localBackupService(
           });
           if (result.status === 204) return reply.code(204).send();
           if (result.status !== 202)
-            return reply
-              .code(result.status)
-              .send({
-                error: result.status === 404 ? "not_found" : "backup_conflict",
-              });
+            return reply.code(result.status).send({
+              error: result.status === 404 ? "not_found" : "backup_conflict",
+            });
           try {
             await client.fixtureBackup(server, id, "delete");
           } catch {

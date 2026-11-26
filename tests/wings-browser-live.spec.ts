@@ -287,6 +287,15 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   await send("Stop", 202);
   await verify("offline");
 
+  const backups = page.getByRole("region", { name: "Backup lokal" });
+  await backups
+    .getByRole("button", { name: "Muat backup", exact: true })
+    .click();
+  await expect(backups.getByText("Belum ada backup.")).toBeVisible();
+  await expect(
+    backups.getByRole("button", { name: "Buat backup" }),
+  ).toBeEnabled();
+
   // Pause only the first disposable CI daemon after observing a valid state.
   // Refreshing runtime first would hide the action and not test dispatch failure.
   const refresh = page.getByRole("button", { name: "Perbarui status" });

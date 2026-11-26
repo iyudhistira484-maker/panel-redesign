@@ -1,3 +1,4 @@
+import { ServerBackups } from "./server-backups";
 import { ServerFiles } from "./server-files";
 import { ServerAccess } from "./server-access";
 import { ServerActivity } from "./server-activity";
@@ -8,7 +9,12 @@ import { useState } from "react";
 import type { Locale } from "./i18n";
 import { Button } from "./ui";
 
-type ServerSummary = { id: string; name: string; isOwner?: boolean };
+type ServerSummary = {
+  id: string;
+  name: string;
+  isOwner?: boolean;
+  localBackups?: boolean;
+};
 export function StagingServers({ locale }: { locale: Locale }) {
   const en = locale === "en";
   const [opened, setOpened] = useState<string | null>(null);
@@ -125,6 +131,9 @@ export function StagingServers({ locale }: { locale: Locale }) {
                     <>
                       <ServerAccess id={item.id} locale={locale} />
                       <ServerFiles id={item.id} locale={locale} />
+                      {item.localBackups === true && (
+                        <ServerBackups id={item.id} locale={locale} />
+                      )}
                     </>
                   )}
                 </section>
