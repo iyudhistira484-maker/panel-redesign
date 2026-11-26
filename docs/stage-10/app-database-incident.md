@@ -8,3 +8,5 @@ API fixture hanya mengimpor dump yang identitas serta checksum-nya sudah diverif
 - Untuk mencoba kembali pada fixture ini, sediakan instance/database tujuan **lain yang kosong** dan binding staging baru dengan identitas restore terbatas. Lakukan verifikasi ulang dump dan smoke test aplikasi sebelum menganggap target siap. Jangan memalsukan status, mereset baris, atau mengimpor ke database sumber.
 
 Belum ada pemulihan otomatis, rotasi target di UI/API, atau dukungan produksi.
+
+[Foundation 45772402983](https://github.com/iyudhistira484-maker/panel-redesign/actions/runs/45772402983/job/139747907985) mengimpor tabel pertama dan barisnya ke MySQL recovery nyata, lalu menyisipkan kegagalan sebelum tabel kedua. Binding tetap dikunci setelah instance Relay baru dibuka; retry tidak menyentuh saldo yang diubah setelah kegagalan. Tes juga menyimulasikan klaim `restoring` yang tidak pernah mendapat hasil dan memastikan peringatan serta penolakan retry. Ini bukan uji mematikan proses dengan sinyal atau pemulihan otomatis.
