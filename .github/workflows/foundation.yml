@@ -71,6 +71,10 @@ jobs:
       - run: bash scripts/auth-browser-contract.sh
         env:
           RELAY_STAGING_DATABASE_URL: mysql://relay:disposable-ci@127.0.0.1:${{ job.services.mysql.ports[3306] }}/relay_test
+      - name: Prove application database backup and restore
+        run: bash scripts/app-database-recovery-ci.sh
+        env:
+          RELAY_APP_DB_CI_SERVICE: ${{ job.services.mysql.id }}
   wings-bootstrap:
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
