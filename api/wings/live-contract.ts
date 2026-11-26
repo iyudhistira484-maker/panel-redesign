@@ -75,7 +75,11 @@ async function main() {
     );
     assert.ok(session);
     let testClientAddress = "127.0.0.1";
-    const admin = (method: "GET" | "POST", path: string, payload?: object) =>
+    const admin = (
+      method: "GET" | "POST" | "PUT",
+      path: string,
+      payload?: object,
+    ) =>
       app.inject({
         method,
         remoteAddress: testClientAddress,
@@ -267,6 +271,88 @@ async function main() {
       "offline state via admin API",
       async () => (await runtime()).state === "offline",
     );
+    const runtimeProfile = process.env.RELAY_BOOTSTRAP_SCENARIO === "lifecycle";
+    const assertDiagnostic = async () => {
+      const { stdout } = await docker(
+        "docker",
+        [
+          "inspect",
+          "--type",
+          "container",
+          "--format",
+          "{{json .Config.Image}} {{json .HostConfig.PortBindings}}",
+          uuid,
+        ],
+        { timeout: 5000 },
+      );
+      const space = stdout.indexOf(" ");
+      assert.equal(
+        JSON.parse(stdout.slice(0, space)),
+        "relay-wings-contract-diagnostic:ci",
+      );
+      const bindings = JSON.parse(stdout.slice(space + 1));
+      for (const port of [25610, 25620])
+        assert.ok(
+          bindings[`${port}/tcp`]?.some(
+            (binding: { HostIp: string; HostPort: string }) =>
+              binding.HostPort === String(port) &&
+              binding.HostIp === "127.0.0.1",
+          ),
+        );
+      assert.ok(
+        (await consoleSnapshot()).lines.includes(
+          "RELAY_CONTRACT_PROFILE_DIAGNOSTIC",
+        ),
+      );
+    };
+    const retained = "stored before reinstall\n";
+    if (runtimeProfile) {
+      const additional = await add("allocations", {
+        nodeId,
+        ip: "127.0.0.1",
+        port: 25620,
+      });
+      const path = `servers/${uuid}/runtime-profile`;
+      const request = (value: string, allocation = additional) =>
+        admin("PUT", path, {
+          confirm: true,
+          profile: value,
+          additionalAllocationId: allocation,
+        });
+      assert.equal((await request("arbitrary/image:tag")).statusCode, 400);
+      assert.equal((await request("diagnostic", allocationId)).statusCode, 409);
+      assert.equal(
+        (
+          await app.inject({
+            method: "PUT",
+            url: `/api/v1/admin/${path}`,
+            headers,
+            payload: {
+              confirm: true,
+              profile: "diagnostic",
+              additionalAllocationId: additional,
+            },
+          })
+        ).statusCode,
+        401,
+      );
+      const updated = await request("diagnostic");
+      assert.equal(updated.statusCode, 200);
+      assert.equal(updated.json().appliesOnNextStart, true);
+      assert.equal((await power("start")).statusCode, 202);
+      await until(
+        "diagnostic profile running",
+        async () => (await runtime()).state === "running",
+      );
+      await assertDiagnostic();
+      assert.equal((await request("standard")).statusCode, 409);
+      await client.uploadFixtureText(uuid, "retained.txt", retained);
+      assert.equal((await power("stop")).statusCode, 202);
+      await until(
+        "diagnostic profile offline",
+        async () => (await runtime()).state === "offline",
+      );
+    }
     const action = (name: "reinstall" | "delete", confirm = true) =>
       admin("POST", `servers/${uuid}/${name}`, { confirm });
     assert.equal((await action("reinstall", false)).statusCode, 400);
@@ -286,6 +372,26 @@ async function main() {
       [{ total: 2 }],
     );
     assert.equal((await runtime()).state, "offline");
+    if (runtimeProfile) {
+      assert.deepEqual(
+        await client.fixtureDownload(uuid, ["fixture-docs"], "retained.txt"),
+        Buffer.from(retained),
+      );
+      assert.equal((await power("start")).statusCode, 202);
+      await until(
+        "diagnostic profile running after reinstall",
+        async () => (await runtime()).state === "running",
+      );
+      await assertDiagnostic();
+      assert.equal((await power("stop")).statusCode, 202);
+      await until(
+        "diagnostic profile offline after reinstall",
+        async () => (await runtime()).state === "offline",
+      );
+      console.log(
+        "::notice::Admin lifecycle: offline_profile_change=true approved_image_observed=true startup_marker_verified=true secondary_port_bound=true reinstall_callback=true fixture_bytes_preserved=true",
+      );
+    }
     assert.equal((await action("delete", false)).statusCode, 400);
     const deletion = await action("delete");
     assert.equal(deletion.statusCode, 202, deletion.body);

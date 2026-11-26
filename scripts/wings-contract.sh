@@ -104,6 +104,12 @@ ARG HTTP_FIXTURE=0
 RUN if [ "$HTTP_FIXTURE" = 1 ]; then apk add --no-cache busybox-extras && busybox-extras --list | grep -x httpd; fi
 ENTRYPOINT ["/bin/sh", "/home/container/relay-start.sh"]
 DOCKERFILE
+if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == lifecycle ]]; then
+  cat <<'DOCKERFILE' | docker build --tag relay-wings-contract-diagnostic:ci -
+FROM relay-wings-contract-workload:ci
+ENTRYPOINT ["/bin/sh", "-c", "exec /bin/sh -c \"$STARTUP\""]
+DOCKERFILE
+fi
 if [[ "$harness" == api/wings/live-contract.ts ]]; then
   cat <<'DOCKERFILE' | docker build --tag relay-wings-contract-http:ci -
 FROM alpine:3.22.2

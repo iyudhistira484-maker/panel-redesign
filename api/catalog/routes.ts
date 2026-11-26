@@ -594,6 +594,34 @@ export async function registerCatalog(
       (req) => provisioner.reconcile(req.params.id, admin(req)),
     );
 
+    app.put<{
+      Params: { id: string };
+      Body: {
+        confirm: true;
+        profile: "standard" | "diagnostic";
+        additionalAllocationId: string;
+      };
+    }>(
+      "/servers/:id/runtime-profile",
+      {
+        config: limit,
+        schema: {
+          ...byId,
+          body: schema({
+            confirm: { type: "boolean", const: true },
+            profile: { type: "string", enum: ["standard", "diagnostic"] },
+            additionalAllocationId: id,
+          }),
+        },
+      },
+      (req) =>
+        provisioner.configureFixtureRuntime(
+          req.params.id,
+          req.body.profile,
+          req.body.additionalAllocationId,
+          admin(req),
+        ),
+    );
     for (const action of ["reinstall", "delete"] as const) {
       app.post<{ Params: { id: string } }>(
         `/servers/:id/${action}`,

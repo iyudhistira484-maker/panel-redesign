@@ -8,6 +8,7 @@ export function lifecycleFixture(
     name: string;
     eggId: string;
     diskMiB?: number;
+    runtimeProfile?: "standard" | "diagnostic" | null;
   } = {
     uuid: randomUUID(),
     port: 25610,
@@ -17,6 +18,7 @@ export function lifecycleFixture(
 ): ContractWorkload {
   const { uuid, port, name, eggId } = server;
   const ip = "127.0.0.1";
+  const diagnostic = server.runtimeProfile === "diagnostic";
   return {
     uuid,
     installed: onResult,
@@ -26,7 +28,9 @@ export function lifecycleFixture(
         meta: { name, description: "Disposable" },
         suspended: false,
         environment: { SERVER_IP: ip, SERVER_PORT: String(port) },
-        invocation: "sh /home/container/relay-start.sh",
+        invocation: diagnostic
+          ? "sh /home/container/relay-start.sh diagnostic"
+          : "sh /home/container/relay-start.sh",
         skip_egg_scripts: false,
         build: {
           memory_limit: 128,
@@ -37,7 +41,9 @@ export function lifecycleFixture(
           oom_disabled: false,
         },
         container: {
-          image: "~relay-wings-contract-workload:ci",
+          image: diagnostic
+            ? "~relay-wings-contract-diagnostic:ci"
+            : "~relay-wings-contract-workload:ci",
           requires_rebuild: false,
         },
         allocations: {
@@ -63,10 +69,12 @@ export function lifecycleFixture(
       entrypoint: "sh",
       script: `#!/bin/sh
 set -eu
+mkdir -p /mnt/server/fixture-docs
 cat > /mnt/server/relay-start.sh <<'WORKLOAD'
 #!/bin/sh
 set -eu
 trap 'exit 0' TERM INT
+if [ "\${1:-}" = diagnostic ]; then printf '%s\n' RELAY_CONTRACT_PROFILE_DIAGNOSTIC; fi
 printf '%s\n' RELAY_CONTRACT_READY
 while :; do sleep 1 & wait "$!"; done
 WORKLOAD

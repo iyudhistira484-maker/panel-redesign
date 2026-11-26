@@ -1,3 +1,4 @@
+import { lockFreeAllocation } from "../catalog/transfer";
 import { fixturePathSegment } from "./client";
 import {
   upstreamProfiles,
@@ -60,8 +61,9 @@ type ServerRow = {
   phase: Phase | null;
   fixtureMode: FixtureMode | null;
   mumbleMaxUsers: string | null;
+  runtimeProfile: "standard" | "diagnostic" | null;
 };
-const select = `SELECT s.id AS uuid,s.owner_id AS ownerId,s.name,s.fixture_mode AS fixtureMode,s.mumble_max_users AS mumbleMaxUsers,a.port,s.egg_id AS eggId,e.document,n.origin,n.token_id AS tokenId,n.token_cipher AS cipher,n.id AS nodeId,p.phase
+const select = `SELECT s.id AS uuid,s.owner_id AS ownerId,s.name,s.fixture_mode AS fixtureMode,s.mumble_max_users AS mumbleMaxUsers,a.port,s.egg_id AS eggId,e.document,n.origin,n.token_id AS tokenId,n.token_cipher AS cipher,n.id AS nodeId,p.phase,p.runtime_profile AS runtimeProfile
  FROM servers s JOIN nodes n ON n.id=s.node_id JOIN allocations a ON a.id=s.allocation_id JOIN eggs e ON e.id=s.egg_id LEFT JOIN wings_provisions p ON p.server_id=s.id`;
 export class ProvisionError extends Error {
   constructor(
@@ -148,6 +150,7 @@ export function createProvisioner(
     if (s.document.equals(approvedDocuments[0]))
       return lifecycleFixture(installed, {
         ...s,
+        runtimeProfile: s.runtimeProfile ?? "standard",
         diskMiB:
           process.env.RELAY_BOOTSTRAP_SCENARIO === "offhost-restore" &&
           process.env.RELAY_DISPOSABLE_WINGS_CI === "1" &&
@@ -1020,6 +1023,78 @@ export function createProvisioner(
           throw new ProvisionError(502, "power_outcome_unknown");
         }
         return { accepted: true };
+      });
+    },
+    async configureFixtureRuntime(
+      id: string,
+      profile: "standard" | "diagnostic",
+      additionalAllocationId: string,
+      actor: Actor,
+    ) {
+      if (
+        process.env.RELAY_BOOTSTRAP_SCENARIO !== "lifecycle" ||
+        process.env.RELAY_DISPOSABLE_WINGS_CI !== "1" ||
+        process.env.RUNNER_ENVIRONMENT !== "github-hosted" ||
+        process.env.GITHUB_WORKFLOW !== "Foundation"
+      )
+        throw new ProvisionError(404, "fixture_runtime_not_available");
+      return exclusive(id, async () => {
+        const before = await authorized(pool, id, actor);
+        if (!before.document.equals(approvedDocuments[0]))
+          throw new ProvisionError(422, "shell_fixture_required");
+        if (before.phase !== "installed")
+          throw new ProvisionError(409, "server_not_installed");
+        if ((await observe(id)).state !== "offline")
+          throw new ProvisionError(409, "server_must_be_offline");
+        return transaction(pool, async (db) => {
+          const current = await authorized(db, id, actor, true);
+          if (
+            current.phase !== "installed" ||
+            current.nodeId !== before.nodeId ||
+            !current.document.equals(approvedDocuments[0])
+          )
+            throw new ProvisionError(409, "fixture_changed");
+          const extras = await rows<{ allocation_id: string }>(
+            db,
+            "SELECT allocation_id FROM server_secondary_allocations WHERE server_id=? FOR UPDATE",
+            [id],
+          );
+          if (
+            !extras.some(
+              (extra) => extra.allocation_id === additionalAllocationId,
+            )
+          ) {
+            if (
+              extras.length ||
+              !(await lockFreeAllocation(
+                db,
+                current.nodeId,
+                additionalAllocationId,
+              ))
+            )
+              throw new ProvisionError(409, "allocation_unavailable");
+            const [allocation] = await rows<{ ip: string }>(
+              db,
+              "SELECT ip FROM allocations WHERE id=?",
+              [additionalAllocationId],
+            );
+            if (allocation?.ip !== "127.0.0.1")
+              throw new ProvisionError(409, "loopback_allocation_required");
+            await db.execute(
+              "INSERT INTO server_secondary_allocations(allocation_id,server_id,node_id) VALUES (?,?,?)",
+              [additionalAllocationId, id, current.nodeId],
+            );
+          }
+          await db.execute(
+            "UPDATE wings_provisions SET runtime_profile=? WHERE server_id=?",
+            [profile, id],
+          );
+          await db.execute(
+            "INSERT INTO audit_log(actor_id,event,subject_id) VALUES (?,'wings.fixture_runtime_configured',?)",
+            [actor.id, id],
+          );
+          return { profile, additionalAllocationId, appliesOnNextStart: true };
+        });
       });
     },
     async destructive(
