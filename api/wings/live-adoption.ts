@@ -1260,112 +1260,186 @@ async function main() {
             ? (JSON.parse(prior.permissions) as string[])
             : prior.permissions;
         assert.ok(!original.includes("file.sftp"));
-        await pool.execute(
-          "UPDATE server_grants SET permissions=? WHERE server_id=? AND user_id=?",
-          [
-            JSON.stringify([
-              ...new Set([
-                ...original,
-                "file.sftp",
-                "file.read",
-                "file.read-content",
-              ]),
-            ]),
-            uuid,
-            delegate.uuid,
-          ],
-        );
-        const active = spawn(
-          "sftp",
-          [
-            "-q",
-            "-b",
-            "-",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "IdentitiesOnly=yes",
-            "-o",
-            "StrictHostKeyChecking=yes",
-            "-o",
-            "UserKnownHostsFile=known_hosts",
-            "-i",
-            keyPath,
-            "-P",
-            "12022",
-            `${delegate.username}.${uuid.slice(0, 8)}@127.0.0.1`,
-          ],
-          { cwd: sftpWork, stdio: ["pipe", "ignore", "ignore"] },
-        );
-        const finished = new Promise<void>((resolve, reject) => {
-          active.once("close", () => resolve());
-          active.once("error", reject);
-        });
-        // Avoid leaking session details if OpenSSH closes early.
-        active.stdin.on("error", () => {});
-        try {
-          const expected = await client.fixtureDownload(
-            uuid,
-            ["fixture-docs"],
-            "example.txt",
-          );
-          const observeDownload = async (file: string) => {
-            active.stdin.write(`get fixture-docs/example.txt ${file}\n`);
-            await until(`active SFTP read ${file}`, async () =>
-              (await readFile(`${sftpWork}/${file}`)).equals(expected),
-            );
-          };
-          await observeDownload("before-revoke.txt");
-          await pool.execute(
+        const withSftp = JSON.stringify([
+          ...new Set([
+            ...original,
+            "file.sftp",
+            "file.read",
+            "file.read-content",
+          ]),
+        ]);
+        const setGrant = (permissions: string) =>
+          pool.execute(
             "UPDATE server_grants SET permissions=? WHERE server_id=? AND user_id=?",
-            [JSON.stringify(original), uuid, delegate.uuid],
+            [permissions, uuid, delegate.uuid],
           );
-          const revokedAt = performance.now();
-          await assert.rejects(
-            keySftp(),
-            "A revoked grant must deny new SFTP sessions",
+        const expected = await client.fixtureDownload(
+          uuid,
+          ["fixture-docs"],
+          "example.txt",
+        );
+        const proveDisconnect = async (
+          reason: string,
+          invalidate: () => Promise<unknown>,
+          reset: () => Promise<unknown>,
+        ) => {
+          await setGrant(withSftp);
+          const active = spawn(
+            "sftp",
+            [
+              "-q",
+              "-b",
+              "-",
+              "-o",
+              "BatchMode=yes",
+              "-o",
+              "IdentitiesOnly=yes",
+              "-o",
+              "StrictHostKeyChecking=yes",
+              "-o",
+              "UserKnownHostsFile=known_hosts",
+              "-i",
+              keyPath,
+              "-P",
+              "12022",
+              `${delegate.username}.${uuid.slice(0, 8)}@127.0.0.1`,
+            ],
+            { cwd: sftpWork, stdio: ["pipe", "ignore", "ignore"] },
           );
-          // Batch-mode OpenSSH can wait on stdin after the transport has closed.
-          // Probe again after the two-second tick plus callback deadline.
-          await new Promise((resolve) =>
-            setTimeout(
-              resolve,
-              Math.max(0, 4250 - (performance.now() - revokedAt)),
-            ),
-          );
-          if (active.exitCode === null && active.signalCode === null)
-            active.stdin.write(
-              "get fixture-docs/example.txt after-revoke.txt\n",
-            );
-          await until(
-            "Wings closes the already-open SFTP connection",
-            async () => active.exitCode !== null || active.signalCode !== null,
-          );
-          const closeMs = Math.round(performance.now() - revokedAt);
-          assert.ok(
-            closeMs <= 6000,
-            "Revoked SFTP session stayed open after its revalidation window",
-          );
-          assert.notEqual(active.exitCode, 0);
-          await assert.rejects(readFile(`${sftpWork}/after-revoke.txt`), {
-            code: "ENOENT",
+          const finished = new Promise<void>((resolve) => {
+            active.once("close", () => resolve());
+            active.once("error", () => resolve());
           });
-          console.log(
-            `::notice::SFTP revocation new_session_denied=true active_session_closed=true close_ms=${closeMs}`,
+          active.stdin.on("error", () => {});
+          try {
+            active.stdin.write(
+              `get fixture-docs/example.txt before-${reason}.txt\n`,
+            );
+            await until(`active SFTP read before ${reason}`, async () =>
+              (await readFile(`${sftpWork}/before-${reason}.txt`)).equals(
+                expected,
+              ),
+            );
+            await invalidate();
+            const at = performance.now();
+            if (reason === "grant" || reason === "key-removal")
+              await assert.rejects(
+                keySftp(),
+                `New SFTP session admitted during ${reason}`,
+              );
+            await new Promise((resolve) =>
+              setTimeout(resolve, Math.max(0, 4250 - (performance.now() - at))),
+            );
+            if (active.exitCode === null && active.signalCode === null)
+              active.stdin.write(
+                `get fixture-docs/example.txt after-${reason}.txt\n`,
+              );
+            await until(
+              `Wings disconnect after ${reason}`,
+              async () =>
+                active.exitCode !== null || active.signalCode !== null,
+            );
+            assert.ok(
+              performance.now() - at <= 6500,
+              `SFTP session remained open after ${reason}`,
+            );
+            assert.notEqual(active.exitCode, 0);
+            await assert.rejects(readFile(`${sftpWork}/after-${reason}.txt`), {
+              code: "ENOENT",
+            });
+            console.log(
+              `::notice::SFTP invalidation=${reason} active_closed=true client_observed_ms=${Math.round(performance.now() - at)}`,
+            );
+          } finally {
+            active.stdin.end("bye\n");
+            active.kill();
+            await finished;
+            await reset();
+            await setGrant(JSON.stringify(original));
+          }
+        };
+        await proveDisconnect(
+          "grant",
+          () => setGrant(JSON.stringify(original)),
+          async () => {},
+        );
+        const [credential] = await rows<{
+          hash: string;
+          version: number;
+          totp: Buffer | null;
+        }>(
+          pool,
+          "SELECT password_hash AS hash,auth_version AS version,totp_secret AS totp FROM users WHERE id=?",
+          [delegate.uuid],
+        );
+        const restoreCredential = () =>
+          pool.execute(
+            "UPDATE users SET password_hash=?,auth_version=?,totp_secret=? WHERE id=?",
+            [
+              credential.hash,
+              credential.version,
+              credential.totp,
+              delegate.uuid,
+            ],
           );
-          assert.equal(
-            (await removeKey(delegateHeaders, fingerprint)).statusCode,
-            204,
+        await proveDisconnect(
+          "password",
+          () =>
+            pool.execute(
+              "UPDATE users SET password_hash=?,auth_version=auth_version+1 WHERE id=?",
+              ["disabled", delegate.uuid],
+            ),
+          restoreCredential,
+        );
+        await proveDisconnect(
+          "totp",
+          () =>
+            pool.execute(
+              "UPDATE users SET totp_secret=?,auth_version=auth_version+1 WHERE id=?",
+              [Buffer.from("fixture-totp-enabled"), delegate.uuid],
+            ),
+          restoreCredential,
+        );
+        let blocked = false;
+        const changeFirewall = (action: string) =>
+          docker(
+            "sudo",
+            [
+              "iptables",
+              action,
+              "OUTPUT",
+              "-o",
+              "lo",
+              "-d",
+              "127.0.0.1",
+              "-p",
+              "tcp",
+              "--dport",
+              "13200",
+              "-j",
+              "REJECT",
+            ],
+            { timeout: 5000 },
           );
-        } finally {
-          active.stdin.end("bye\n");
-          active.kill();
-          await finished;
-          await pool.execute(
-            "UPDATE server_grants SET permissions=? WHERE server_id=? AND user_id=?",
-            [JSON.stringify(original), uuid, delegate.uuid],
-          );
-        }
+        await proveDisconnect(
+          "callback-outage",
+          async () => {
+            await changeFirewall("-I");
+            blocked = true;
+          },
+          async () => {
+            if (blocked) await changeFirewall("-D");
+          },
+        );
+        await proveDisconnect(
+          "key-removal",
+          async () =>
+            assert.equal(
+              (await removeKey(delegateHeaders, fingerprint)).statusCode,
+              204,
+            ),
+          async () => {},
+        );
         assert.deepEqual(
           (
             await relay.inject({ url: sshKeys, headers: delegateHeaders })
