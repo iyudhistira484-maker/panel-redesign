@@ -1,3 +1,4 @@
+import { AppDatabases } from "./app-databases";
 import { BackupSchedule } from "./backup-schedule";
 import { ServerBackups } from "./server-backups";
 import { ServerFiles } from "./server-files";
@@ -16,6 +17,7 @@ type ServerSummary = {
   isOwner?: boolean;
   localBackups?: boolean;
   s3Backups?: boolean;
+  appDatabases?: boolean;
 };
 export function StagingServers({ locale }: { locale: Locale }) {
   const en = locale === "en";
@@ -133,6 +135,9 @@ export function StagingServers({ locale }: { locale: Locale }) {
                     <>
                       <ServerAccess id={item.id} locale={locale} />
                       <ServerFiles id={item.id} locale={locale} />
+                      {item.appDatabases === true && (
+                        <AppDatabases id={item.id} locale={locale} />
+                      )}
                       {item.localBackups === true && (
                         <>
                           <ServerBackups

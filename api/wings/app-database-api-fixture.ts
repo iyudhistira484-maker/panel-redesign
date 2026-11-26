@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createApp } from "../app";
 import { rows, stagingPool } from "../db";
@@ -32,7 +33,7 @@ async function main() {
   );
   const key = randomBytes(32),
     pepper = randomBytes(32),
-    origin = "https://relay.example.test";
+    origin = "https://127.0.0.1:4443";
   function execute(container: string, command: string, input?: Buffer) {
     return new Promise<Buffer>((resolve, reject) => {
       const child = execFile(
@@ -49,6 +50,7 @@ async function main() {
     });
   }
   const interruptedId = randomUUID();
+  const browserId = randomUUID();
   const id = randomUUID(),
     server = randomUUID(),
     neighbor = randomUUID(),
@@ -57,9 +59,12 @@ async function main() {
   let restores = 0;
   let interruptedAttempts = 0;
   const driver: FixtureAppDatabaseDriver = {
-    bound: (database) => database === id || database === interruptedId,
+    bound: (database) =>
+      database === id || database === interruptedId || database === browserId,
     async snapshot(database) {
-      assert.ok(database === id || database === interruptedId);
+      assert.ok(
+        database === id || database === interruptedId || database === browserId,
+      );
       return execute(
         src,
         "MYSQL_PWD=disposable-app-reader exec mysqldump -ufixture_app_reader --default-character-set=utf8mb4 --single-transaction --no-tablespaces --set-gtid-purged=OFF --skip-lock-tables --skip-triggers --hex-blob relay_app_source",
@@ -82,16 +87,20 @@ async function main() {
         );
         throw new Error("Expected partial import to terminate");
       }
-      assert.equal(database, id);
+      assert.ok(database === id || database === browserId);
+      const schema =
+        database === browserId
+          ? "relay_app_browserrecovery"
+          : "relay_app_ownerrecovery";
       const empty = await execute(
         dst,
-        "MYSQL_PWD=disposable-app-restore exec mysql -ufixture_app_restore -NBr relay_app_ownerrecovery -e 'SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()'",
+        `MYSQL_PWD=disposable-app-restore exec mysql -ufixture_app_restore -NBr ${schema} -e 'SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()'`,
       );
       assert.equal(empty.toString().trim(), "0");
       restores++;
       await execute(
         dst,
-        "MYSQL_PWD=disposable-app-restore exec mysql -ufixture_app_restore --default-character-set=utf8mb4 relay_app_ownerrecovery",
+        `MYSQL_PWD=disposable-app-restore exec mysql -ufixture_app_restore --default-character-set=utf8mb4 ${schema}`,
         dump,
       );
     },
@@ -155,6 +164,14 @@ async function main() {
     await pool.execute(
       "INSERT INTO app_database_bindings(id,server_id,label) VALUES (?,?,'Interrupted ledger MySQL')",
       [interruptedId, server],
+    );
+    await pool.execute(
+      "INSERT INTO app_database_bindings(id,server_id,label) VALUES (?,?,'Browser ledger MySQL')",
+      [browserId, server],
+    );
+    await pool.execute(
+      "INSERT INTO server_grants(server_id,user_id,permissions) VALUES (?,?,JSON_ARRAY('activity.read'))",
+      [server, outsider],
     );
     const auth = {
       cookie: await cookie(owner),
@@ -363,6 +380,47 @@ async function main() {
       );
     } finally {
       await afterRestart.close();
+    }
+    const browserApp = await launch();
+    try {
+      await browserApp.listen({ host: "127.0.0.1", port: 3200 });
+      try {
+        const report = await promisify(execFile)(
+          "./node_modules/.bin/playwright",
+          [
+            "test",
+            "tests/app-database-browser.spec.ts",
+            "--reporter=line,github",
+          ],
+          {
+            timeout: 90000,
+            maxBuffer: 512 * 1024,
+            env: {
+              ...process.env,
+              RELAY_APP_DB_BROWSER: "1",
+              RELAY_APP_DB_BROWSER_SERVER: server,
+              RELAY_APP_DB_BROWSER_DATABASE: browserId,
+              RELAY_APP_DB_BROWSER_OWNER_COOKIE: auth.cookie.split("=")[1],
+              RELAY_APP_DB_BROWSER_SHARE_COOKIE: foreign.cookie.split("=")[1],
+            },
+          },
+        );
+        console.log(report.stdout);
+      } catch (error) {
+        const diagnostics = error as { stdout?: string; stderr?: string };
+        for (const output of [diagnostics.stdout, diagnostics.stderr])
+          if (output)
+            console.log(
+              output
+                .replaceAll(auth.cookie.split("=")[1], "[redacted]")
+                .replaceAll(foreign.cookie.split("=")[1], "[redacted]"),
+            );
+        throw new Error("Application database Chromium contract failed");
+      }
+      assert.equal(restores, 2);
+      assert.equal(interruptedAttempts, 1);
+    } finally {
+      await browserApp.close();
     }
   } finally {
     await pool.end();

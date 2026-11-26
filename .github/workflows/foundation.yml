@@ -104,6 +104,14 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run build
+      - name: Use runner Chromium or install Playwright browser
+        run: |
+          if command -v google-chrome >/dev/null; then
+            echo "RELAY_CHROMIUM_PATH=$(command -v google-chrome)" >> "$GITHUB_ENV"
+          else
+            npx playwright install --with-deps chromium
+          fi
       - name: Recover application database to an independent MySQL instance
         run: bash scripts/app-database-recovery-ci.sh
         env:

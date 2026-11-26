@@ -1152,6 +1152,7 @@ export async function createApp({
         items: items.map((item) => ({
           ...item,
           isOwner: !!item.isOwner,
+          ...(fixtureAppDatabase && item.isOwner ? { appDatabases: true } : {}),
           ...(localBackups && item.isOwner
             ? { localBackups: true, s3Backups: localBackups.s3Enabled }
             : {}),

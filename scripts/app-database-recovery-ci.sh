@@ -10,7 +10,12 @@ for container in "$service" "$recovery"; do
 done
 umask 077
 work=$(mktemp -d)
-trap 'rm -rf -- "$work"' EXIT
+proxy_pid=''
+cleanup() {
+  if [[ -n "$proxy_pid" ]]; then kill "$proxy_pid" 2>/dev/null || true; fi
+  rm -rf -- "$work"
+}
+trap cleanup EXIT
 
 root() {
   local container=$1; shift
@@ -112,11 +117,19 @@ GRANT ALL PRIVILEGES ON relay_app_ownerrecovery.* TO 'fixture_app_restore'@'loca
 SQL
 root "$recovery" <<'SQL'
 CREATE DATABASE relay_app_interrupted CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+CREATE DATABASE relay_app_browserrecovery CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 GRANT ALL PRIVILEGES ON relay_app_interrupted.* TO 'fixture_app_restore'@'localhost';
+GRANT ALL PRIVILEGES ON relay_app_browserrecovery.* TO 'fixture_app_restore'@'localhost';
 SQL
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=127.0.0.1 -addext 'subjectAltName=IP:127.0.0.1' -keyout "$work/browser.key" -out "$work/browser.pem" >/dev/null 2>&1
+node scripts/auth-browser-proxy.mjs "$work/browser.pem" "$work/browser.key" 3200 &
+proxy_pid=$!
 ./node_modules/.bin/tsx api/wings/app-database-api-fixture.ts
 restore -NBr relay_app_ownerrecovery -e "$snapshot" >"$work/owner-restored.rows"
 cmp "$work/current.rows" "$work/owner-restored.rows"
+restore -NBr relay_app_browserrecovery -e "$snapshot" >"$work/browser-restored.rows"
+cmp "$work/current.rows" "$work/browser-restored.rows"
+echo '::notice::Chromium application database UI: independent_target=true restored_snapshot_rows_match=true'
 echo '::notice::Owner application database API: independent_target=true restored_rows_match=true source_unchanged=true'
 reader -NBr relay_app_source -e "$snapshot" >"$work/source-after-restore.rows"
 cmp "$work/current.rows" "$work/source-after-restore.rows"
