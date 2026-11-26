@@ -27,7 +27,7 @@ test("owner backs up and restores an application database over HTTPS and sees th
   const cookie = (value: string) => ({
     name: "__Host-relay_session",
     value,
-    url: origin + "/",
+    url: `${origin}/`,
     secure: true,
     httpOnly: true,
     sameSite: "Strict" as const,
@@ -92,7 +92,8 @@ test("owner backs up and restores an application database over HTTPS and sees th
   await target.getByRole("button", { name: "Buat backup database" }).click();
   const result = await created;
   expect(result.status()).toBe(201);
-  const { id: backup } = await result.json();
+  const backup = await target.locator("li code").textContent();
+  assert.ok(backup);
   assert.match(backup, /^[a-f0-9-]{36}$/);
   await target
     .getByRole("button", { name: "Pulihkan backup database" })
