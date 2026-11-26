@@ -73,8 +73,12 @@ const pages = [
   "errorView",
 ] as const;
 type Page = (typeof pages)[number];
+declare const __RELAY_AUTHENTICATED_ENTRY__: boolean;
+const authenticatedEntry = __RELAY_AUTHENTICATED_ENTRY__;
 function getPage(): Page {
   const p = location.hash.slice(1).split("?", 1)[0] as Page;
+  if (authenticatedEntry)
+    return p === "forgot-password" || p === "reset-password" ? p : "authView";
   return pages.includes(p) ? p : location.hash ? "errorView" : "overview";
 }
 function App() {
@@ -412,7 +416,7 @@ function App() {
           {brand}
           {page === "authView" ? (
             <>
-              <SignIn locale={locale} />
+              <SignIn locale={locale} autoLoadServers={authenticatedEntry} />
               <a className="button ghost" href="#forgot-password">
                 {locale === "id" ? "Lupa kata sandi" : "Forgot password"}
               </a>
@@ -504,6 +508,13 @@ function App() {
           <span className="mono">{t("sample")}</span>
         </div>
       </>
+    );
+  if (authenticatedEntry)
+    return (
+      <main id={contentId} className="main-column">
+        {language}
+        {secondary}
+      </main>
     );
   return (
     <>

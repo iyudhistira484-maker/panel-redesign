@@ -7,7 +7,7 @@ import { ServerActivity } from "./server-activity";
 import { ServerConsole } from "./server-console";
 import { ServerMetrics } from "./server-metrics";
 import { ServerPower } from "./server-power";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Locale } from "./i18n";
 import { Button } from "./ui";
 
@@ -19,7 +19,13 @@ type ServerSummary = {
   s3Backups?: boolean;
   appDatabases?: boolean;
 };
-export function StagingServers({ locale }: { locale: Locale }) {
+export function StagingServers({
+  locale,
+  autoLoad = false,
+}: {
+  locale: Locale;
+  autoLoad?: boolean;
+}) {
   const en = locale === "en";
   const [opened, setOpened] = useState<string | null>(null);
   const [items, setItems] = useState<ServerSummary[]>([]);
@@ -27,7 +33,7 @@ export function StagingServers({ locale }: { locale: Locale }) {
   const [status, setStatus] = useState<
     "idle" | "busy" | "ready" | "expired" | "error"
   >("idle");
-  async function load(after?: string) {
+  const load = useCallback(async (after?: string, signal?: AbortSignal) => {
     setStatus("busy");
     if (!after) {
       setItems([]);
@@ -39,9 +45,12 @@ export function StagingServers({ locale }: { locale: Locale }) {
         {
           credentials: "same-origin",
           cache: "no-store",
-          signal: AbortSignal.timeout(10000),
+          signal: signal
+            ? AbortSignal.any([signal, AbortSignal.timeout(10000)])
+            : AbortSignal.timeout(10000),
         },
       );
+      if (signal?.aborted) return;
       if (response.status === 401) {
         setItems([]);
         setNext(null);
@@ -62,15 +71,23 @@ export function StagingServers({ locale }: { locale: Locale }) {
         (data.next !== null && typeof data.next !== "string")
       )
         throw new Error("Invalid catalog");
+      if (signal?.aborted) return;
       setItems((current) => (after ? [...current, ...data.items] : data.items));
       setNext(data.next);
       setStatus("ready");
     } catch {
+      if (signal?.aborted) return;
       setItems([]);
       setNext(null);
       setStatus("error");
     }
-  }
+  }, []);
+  useEffect(() => {
+    if (!autoLoad) return;
+    const controller = new AbortController();
+    void load(undefined, controller.signal);
+    return () => controller.abort();
+  }, [autoLoad, load]);
   return (
     <section aria-busy={status === "busy"}>
       <h2>{en ? "Staging servers" : "Server staging"}</h2>

@@ -16,3 +16,5 @@ Backend identitas untuk staging tersedia terpisah. Lihat [laporan Tahap 2](docs/
 ### Pratinjau UI di GitHub Codespaces
 
 Buat Codespace dari branch kerja, tunggu `npm ci` selesai, lalu jalankan `npm run dev`. Di tab **Ports**, pastikan port **5173** berstatus **Private**, lalu pilih **Open in Browser**. Pratinjau ini memakai data contoh secara default: tidak memulai database, Wings, atau workload, dan tidak menggunakan kredensial produksi. Pengujian migrasi, rollback, dan recovery tetap dijalankan di GitHub Actions.
+
+Untuk mencoba alur login staging tanpa layar demo, gunakan `RELAY_AUTHENTICATED_ENTRY=1 npm run build` dan sajikan hasil build melalui origin yang sama dengan API staging. Opsi build ini tidak mengubah aturan otorisasi server. Pratinjau Codespaces tanpa backend tetap memakai mode demo.

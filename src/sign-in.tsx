@@ -66,7 +66,13 @@ async function account(signal?: AbortSignal) {
     canEnroll: "twoFactor" in data && data.twoFactor === false,
   };
 }
-export function SignIn({ locale }: { locale: Locale }) {
+export function SignIn({
+  locale,
+  autoLoadServers = false,
+}: {
+  locale: Locale;
+  autoLoadServers?: boolean;
+}) {
   const t = copy[locale],
     id = useId();
   const [phase, setPhase] = useState<
@@ -175,7 +181,7 @@ export function SignIn({ locale }: { locale: Locale }) {
       {phase === "signed" ? (
         <>
           <p>{name}</p>
-          <StagingServers locale={locale} />
+          <StagingServers locale={locale} autoLoad={autoLoadServers} />
           {canEnroll && (
             <TotpEnrollment locale={locale} onBusy={setEnrolling} />
           )}
