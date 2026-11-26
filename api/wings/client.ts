@@ -248,14 +248,20 @@ export class WingsClient {
       throw new WingsUnavailable("payload");
     return data;
   }
-  async fixtureUploadTargetExists(id: string, name: string) {
-    await this.fixtureDirectory(id, ["fixture-docs"]);
-    const entries = await this.#fixtureEntries(id, "/fixture-docs");
+  async fixtureUploadTargetExists(id: string, name: string, moved = false) {
+    const segments = moved ? ["fixture-docs", "moved"] : ["fixture-docs"];
+    await this.fixtureDirectory(id, segments);
+    const entries = await this.#fixtureEntries(id, `/${segments.join("/")}`);
     if (entries.some((entry) => !entry || typeof entry.name !== "string"))
       throw new WingsUnavailable("payload");
     return entries.some((entry) => entry.name === name);
   }
-  async renameUploadedFixture(id: string, source: string, target: string) {
+  async renameUploadedFixture(
+    id: string,
+    source: string,
+    target: string,
+    moved = false,
+  ) {
     if (
       ![source, target].every(
         (name) => fixturePathSegment(name) && name.endsWith(".txt"),
@@ -266,7 +272,10 @@ export class WingsClient {
       `${this.#server(id)}/files/rename`,
       204,
       "PUT",
-      { root: "/fixture-docs", files: [{ from: source, to: target }] },
+      {
+        root: "/fixture-docs",
+        files: [{ from: source, to: moved ? `moved/${target}` : target }],
+      },
     );
     await response.body?.cancel();
   }

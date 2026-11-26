@@ -130,12 +130,10 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   const renameApi = `${fileApi}/rename-fixture`;
   const renamed = "browser-renamed.txt";
   const requestRename = (source: string, target: string) =>
-    page
-      .context()
-      .request.post(renameApi, {
-        headers: editHeaders,
-        data: { source, target },
-      });
+    page.context().request.post(renameApi, {
+      headers: editHeaders,
+      data: { source, target },
+    });
   const copyApi = `${fileApi}/copy-fixture`;
   const copyName = "browser-copy.txt";
   const requestCopy = (source: string, target: string) =>
@@ -340,6 +338,73 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   );
   console.log(
     "::notice::Chromium rename verified destination bytes and removed source without overwrite",
+  );
+  const moveTarget = "moved-fixture.txt";
+  const badDestination = await page
+    .context()
+    .request.post(renameApi, {
+      headers: editHeaders,
+      data: { source: renamed, target: moveTarget, destination: "../" },
+    });
+  expect(badDestination.status()).toBe(400);
+  await page.getByLabel("File teks sumber").selectOption(renamed);
+  await page.getByLabel("Nama file baru").fill(moveTarget);
+  const moveReply = page.waitForResponse(
+    (response) => response.url() === renameApi,
+  );
+  await page
+    .getByRole("button", { name: "Pindahkan file unggahan ke moved" })
+    .click();
+  expect((await moveReply).status()).toBe(200);
+  await expect(
+    page.getByText("Pemindahan ke /fixture-docs/moved terverifikasi."),
+  ).toBeVisible();
+  await expect(
+    files.getByRole("button", { name: renamed, exact: true }),
+  ).toHaveCount(0);
+  expect(
+    (
+      await docker(
+        "docker",
+        [
+          "exec",
+          fixtureDaemon,
+          "cat",
+          `${uploadVolume}/${id}/fixture-docs/moved/${moveTarget}`,
+        ],
+        { encoding: "buffer", timeout: 5000 },
+      )
+    ).stdout,
+  ).toEqual(uploadedBytes);
+  await docker(
+    "docker",
+    [
+      "exec",
+      fixtureDaemon,
+      "test",
+      "!",
+      "-e",
+      `${uploadVolume}/${id}/fixture-docs/${renamed}`,
+    ],
+    { timeout: 5000 },
+  );
+  const moveDb = stagingPool();
+  try {
+    const [receipts] = await moveDb.query(
+      "SELECT CAST(name AS CHAR) AS name, digest FROM client_uploaded_files WHERE server_id=? AND name IN (?,?)",
+      [id, renamed, `moved/${moveTarget}`],
+    );
+    expect(receipts).toEqual([
+      {
+        name: `moved/${moveTarget}`,
+        digest: createHash("sha256").update(uploadedBytes).digest("hex"),
+      },
+    ]);
+  } finally {
+    await moveDb.end();
+  }
+  console.log(
+    "::notice::Chromium fixture move verified destination bytes, source absence and relocated receipt",
   );
   const rejectedUploads = [
     {

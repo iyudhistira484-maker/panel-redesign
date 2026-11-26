@@ -27,9 +27,9 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
   const [copySource, setCopySource] = useState("");
   const [copyTarget, setCopyTarget] = useState("");
   const [copyStatus, setCopyStatus] = useState<
-    "done" | "renamed" | "rejected" | "unknown" | null
+    "done" | "moved" | "renamed" | "rejected" | "unknown" | null
   >(null);
-  async function copyFile(rename = false) {
+  async function copyFile(rename = false, moved = false) {
     if (
       busy ||
       !copySource ||
@@ -49,7 +49,11 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
             "content-type": "application/json",
             "x-relay-request": "1",
           },
-          body: JSON.stringify({ source: copySource, target: copyTarget }),
+          body: JSON.stringify({
+            source: copySource,
+            target: copyTarget,
+            ...(moved ? { destination: "moved" } : {}),
+          }),
           signal: AbortSignal.timeout(30000),
         },
       );
@@ -77,7 +81,9 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
           current &&
           [
             ...current.filter((item) => !rename || item.name !== copySource),
-            { name: copyTarget, size: data.size, directory: false },
+            ...(!moved
+              ? [{ name: copyTarget, size: data.size, directory: false }]
+              : []),
           ].sort((a, b) => a.name.localeCompare(b.name)),
       );
       setCopyTarget("");
@@ -86,7 +92,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
         setPreview(null);
         setDraft(null);
       }
-      setCopyStatus(rename ? "renamed" : "done");
+      setCopyStatus(moved ? "moved" : rename ? "renamed" : "done");
     } catch {
       setCopyStatus("unknown");
     } finally {
@@ -430,23 +436,42 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
           >
             {en ? "Rename uploaded file" : "Ubah nama file unggahan"}
           </Button>
+          {items.some((item) => item.directory && item.name === "moved") && (
+            <Button
+              disabled={
+                busy ||
+                !copySource ||
+                !/^[A-Za-z0-9_][A-Za-z0-9_. -]{0,73}$/.test(copyTarget) ||
+                !copyTarget.endsWith(".txt")
+              }
+              onClick={() => void copyFile(true, true)}
+            >
+              {en
+                ? "Move uploaded file to moved"
+                : "Pindahkan file unggahan ke moved"}
+            </Button>
+          )}
           {copyStatus && (
             <output>
-              {copyStatus === "renamed"
+              {copyStatus === "moved"
                 ? en
-                  ? "Rename verified."
-                  : "Perubahan nama terverifikasi."
-                : copyStatus === "done"
+                  ? "Move verified in /fixture-docs/moved."
+                  : "Pemindahan ke /fixture-docs/moved terverifikasi."
+                : copyStatus === "renamed"
                   ? en
-                    ? "Copy verified."
-                    : "Salinan terverifikasi."
-                  : copyStatus === "rejected"
+                    ? "Rename verified."
+                    : "Perubahan nama terverifikasi."
+                  : copyStatus === "done"
                     ? en
-                      ? "Operation rejected. Check the filename and offline status."
-                      : "Operasi ditolak. Periksa nama file dan status offline."
-                    : en
-                      ? "Operation not confirmed. Check the file list before retrying."
-                      : "Operasi belum terkonfirmasi. Periksa daftar file sebelum mencoba lagi."}
+                      ? "Copy verified."
+                      : "Salinan terverifikasi."
+                    : copyStatus === "rejected"
+                      ? en
+                        ? "Operation rejected. Check the filename and offline status."
+                        : "Operasi ditolak. Periksa nama file dan status offline."
+                      : en
+                        ? "Operation not confirmed. Check the file list before retrying."
+                        : "Operasi belum terkonfirmasi. Periksa daftar file sebelum mencoba lagi."}
             </output>
           )}
         </div>

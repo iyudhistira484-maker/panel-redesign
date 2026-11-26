@@ -649,10 +649,14 @@ export function createProvisioner(
       actor: Actor,
       source: string,
       target: string,
+      moved = false,
     ) {
+      const destination = moved ? ["fixture-docs", "moved"] : ["fixture-docs"];
+      const receiptName = moved ? `moved/${target}` : target;
       return exclusive(id, async () => {
         if (
-          source === target ||
+          (!moved && source === target) ||
+          receiptName.length > 80 ||
           ![source, target].every(
             (name) => fixturePathSegment(name) && name.endsWith(".txt"),
           )
@@ -673,7 +677,7 @@ export function createProvisioner(
         try {
           if ((await client.state(id)) !== "offline")
             throw new ProvisionError(409, "server_not_offline");
-          if (await client.fixtureUploadTargetExists(id, target))
+          if (await client.fixtureUploadTargetExists(id, target, moved))
             throw new ProvisionError(409, "file_exists");
           const [receipt] = await rows<{ digest: string }>(
             pool,
@@ -702,26 +706,30 @@ export function createProvisioner(
               throw new ProvisionError(409, "upload_changed");
             await db.execute(
               "DELETE FROM client_uploaded_files WHERE server_id=? AND (name=? OR name=?)",
-              [id, source, target],
+              [id, source, receiptName],
             );
             await db.execute(
               "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'wings.fixture_file_rename_requested',?)",
               [actor.id, id],
             );
           });
-          await client.renameUploadedFixture(id, source, target);
+          await client.renameUploadedFixture(id, source, target, moved);
           if (
             (await client.fixtureUploadTargetExists(id, source)) ||
-            !(
-              await client.fixtureDownload(id, ["fixture-docs"], target)
-            ).equals(original)
+            !(await client.fixtureDownload(id, destination, target)).equals(
+              original,
+            )
           )
             throw new ProvisionError(502, "file_rename_unverified");
           await pool.execute(
             "INSERT INTO client_uploaded_files (server_id,name,digest) VALUES (?,?,?)",
-            [id, target, receipt.digest],
+            [id, receiptName, receipt.digest],
           );
-          return { name: target, size: original.length };
+          return {
+            name: target,
+            size: original.length,
+            directory: `/${destination.join("/")}`,
+          };
         } catch (error) {
           if (error instanceof WingsUnavailable)
             throw new ProvisionError(502, "file_rename_unverified");

@@ -1570,12 +1570,21 @@ export async function createApp({
   if (provisioner)
     app.post<{
       Params: { id: string };
-      Body: { source: string; target: string };
+      Body: { source: string; target: string; destination?: "moved" };
     }>(
       "/api/v1/servers/:id/files/rename-fixture",
       {
         config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
-        schema: { body: object({ source: text(1, 80), target: text(1, 80) }) },
+        schema: {
+          body: object(
+            {
+              source: text(1, 80),
+              target: text(1, 80),
+              destination: { type: "string", const: "moved" },
+            },
+            ["source", "target"],
+          ),
+        },
       },
       async (req, reply) => {
         reply.header("cache-control", "no-store");
@@ -1596,6 +1605,7 @@ export async function createApp({
                 principal,
                 req.body.source,
                 req.body.target,
+                req.body.destination === "moved",
               ),
             );
         } catch (error) {
