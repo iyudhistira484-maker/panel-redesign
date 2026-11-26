@@ -24,6 +24,68 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
     "uploaded" | "conflict" | "invalid" | "unknown" | null
   >(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const [copySource, setCopySource] = useState("");
+  const [copyTarget, setCopyTarget] = useState("");
+  const [copyStatus, setCopyStatus] = useState<
+    "done" | "rejected" | "unknown" | null
+  >(null);
+  async function copyFile() {
+    if (
+      busy ||
+      !copySource ||
+      !/^[A-Za-z0-9_][A-Za-z0-9_. -]{0,79}$/.test(copyTarget) ||
+      !copyTarget.endsWith(".txt")
+    )
+      return;
+    setBusy(true);
+    setCopyStatus(null);
+    try {
+      const reply = await fetch(
+        `/api/v1/servers/${encodeURIComponent(id)}/files/copy-fixture`,
+        {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "content-type": "application/json",
+            "x-relay-request": "1",
+          },
+          body: JSON.stringify({ source: copySource, target: copyTarget }),
+          signal: AbortSignal.timeout(30000),
+        },
+      );
+      if (
+        reply.status === 400 ||
+        reply.status === 409 ||
+        reply.status === 422
+      ) {
+        setCopyStatus("rejected");
+        return;
+      }
+      if (reply.status !== 201) throw new Error("Copy unverified");
+      const data = (await reply.json()) as { name?: string; size: number };
+      if (
+        data.name !== copyTarget ||
+        !Number.isSafeInteger(data.size) ||
+        data.size < 0 ||
+        data.size > 16384
+      )
+        throw new Error("Copy unverified");
+      setItems(
+        (current) =>
+          current &&
+          [
+            ...current,
+            { name: copyTarget, size: data.size, directory: false },
+          ].sort((a, b) => a.name.localeCompare(b.name)),
+      );
+      setCopyTarget("");
+      setCopyStatus("done");
+    } catch {
+      setCopyStatus("unknown");
+    } finally {
+      setBusy(false);
+    }
+  }
   async function upload() {
     if (!uploadFile || busy) return;
     setUploadStatus(null);
@@ -292,6 +354,76 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
                     : "Unggahan belum terkonfirmasi. Periksa daftar file sebelum mencoba lagi.",
                 }[uploadStatus]
               }
+            </output>
+          )}
+        </div>
+      )}
+      {path.join("/") === "fixture-docs" && items && (
+        <div>
+          <label>
+            {en ? "File to copy" : "File yang disalin"}{" "}
+            <select
+              value={copySource}
+              disabled={busy}
+              onChange={(e) => {
+                setCopySource(e.currentTarget.value);
+                setCopyStatus(null);
+              }}
+            >
+              <option value="">
+                {en ? "Choose a text file" : "Pilih file teks"}
+              </option>
+              {items
+                .filter(
+                  (item) =>
+                    !item.directory &&
+                    item.name.endsWith(".txt") &&
+                    item.size <= 16384,
+                )
+                .map((item) => (
+                  <option key={item.name} value={item.name}>
+                    {item.name}
+                  </option>
+                ))}
+            </select>
+          </label>{" "}
+          <label>
+            {en ? "Copy filename" : "Nama file salinan"}{" "}
+            <input
+              value={copyTarget}
+              maxLength={80}
+              disabled={busy}
+              onChange={(e) => {
+                setCopyTarget(e.currentTarget.value);
+                setCopyStatus(null);
+              }}
+            />
+          </label>{" "}
+          <Button
+            disabled={
+              busy ||
+              !copySource ||
+              copySource === copyTarget ||
+              !/^[A-Za-z0-9_][A-Za-z0-9_. -]{0,79}$/.test(copyTarget) ||
+              !copyTarget.endsWith(".txt")
+            }
+            onClick={() => void copyFile()}
+          >
+            {en ? "Copy text file" : "Salin file teks"}
+          </Button>
+          {copyStatus && (
+            <output>
+              {copyStatus === "done"
+                ? en
+                  ? "Copy verified."
+                  : "Salinan terverifikasi."
+                : copyStatus === "rejected"
+                  ? en
+                    ? "Copy rejected. Check the filename and offline status."
+                    : "Salinan ditolak. Periksa nama file dan status offline."
+                  : en
+                    ? "Copy not confirmed. Check the file list before retrying."
+                    : "Salinan belum terkonfirmasi. Periksa daftar file sebelum mencoba lagi."}
             </output>
           )}
         </div>

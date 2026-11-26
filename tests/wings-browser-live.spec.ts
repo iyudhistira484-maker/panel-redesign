@@ -130,12 +130,10 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   const copyApi = `${fileApi}/copy-fixture`;
   const copyName = "browser-copy.txt";
   const requestCopy = (source: string, target: string) =>
-    page
-      .context()
-      .request.post(copyApi, {
-        headers: editHeaders,
-        data: { source, target },
-      });
+    page.context().request.post(copyApi, {
+      headers: editHeaders,
+      data: { source, target },
+    });
   const uploadApi = `${fileApi}/upload-fixture`;
   const uploadedBytes = Buffer.from("Browser upload: å\r\n");
   const uploadName = "browser-upload.txt";
@@ -255,12 +253,15 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       })
     ).status(),
   ).toBe(409);
-  const copied = await requestCopy(uploadName, copyName);
-  expect(copied.status()).toBe(201);
-  expect(await copied.json()).toEqual({
-    name: copyName,
-    size: uploadedBytes.length,
-  });
+  await page.getByLabel("File yang disalin").selectOption(uploadName);
+  await page.getByLabel("Nama file salinan").fill(copyName);
+  const copied = page.waitForResponse((response) => response.url() === copyApi);
+  await page.getByRole("button", { name: "Salin file teks" }).click();
+  expect((await copied).status()).toBe(201);
+  await expect(page.getByText("Salinan terverifikasi.")).toBeVisible();
+  await expect(
+    files.getByRole("button", { name: copyName, exact: true }),
+  ).toBeVisible();
   expect((await requestCopy(uploadName, copyName)).status()).toBe(409);
   expect(
     (await requestCopy("../relay-start.sh", "invalid-copy.txt")).status(),
