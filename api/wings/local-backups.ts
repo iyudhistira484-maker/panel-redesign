@@ -192,6 +192,139 @@ export function localBackupService(
       throw new Error("Backup checksum mismatch");
     return data;
   };
+  type Schedule = {
+    server_id: string;
+    owner_id: string;
+    node_id: string;
+    adapter: Backup["adapter"];
+    interval_minutes: number;
+    keep_count: number;
+    next_run_at: Date;
+    last_result: string | null;
+  };
+  async function dispatchCreate(
+    record: Target,
+    id: string,
+    adapter: Backup["adapter"],
+  ) {
+    if (adapter === "s3")
+      await withS3(record, id, async (store) => {
+        await store.initialize();
+        await client.fixtureS3Backup(record.id, id);
+      });
+    else await client.fixtureBackup(record.id, id, "create");
+  }
+  async function scheduledTick() {
+    const due = await rows<Schedule>(
+      pool,
+      "SELECT * FROM backup_schedules WHERE next_run_at<=CURRENT_TIMESTAMP(3) ORDER BY next_run_at LIMIT 8",
+    );
+    for (const entry of due) {
+      if (entry.adapter === "s3" && !s3Enabled) continue;
+      const record = await target(pool, entry.server_id, entry.owner_id);
+      if (!record || record.nodeId !== entry.node_id) continue;
+      let offline = false;
+      try {
+        offline = (await client.state(record.id)) === "offline";
+      } catch {
+        /* Treat unavailable nodes as ineligible. */
+      }
+      const id = randomUUID();
+      const claim = await transaction(pool, async (db) => {
+        const owner = await target(db, record.id, entry.owner_id, true);
+        if (!owner || owner.nodeId !== entry.node_id) return false;
+        const [slot] = await rows<Schedule>(
+          db,
+          "SELECT * FROM backup_schedules WHERE server_id=? AND node_id=? AND owner_id=? AND next_run_at<=CURRENT_TIMESTAMP(3) FOR UPDATE",
+          [record.id, record.nodeId, record.owner],
+        );
+        if (!slot || slot.adapter !== entry.adapter) return false;
+        const backups = await rows<{ state: string }>(
+          db,
+          "SELECT state FROM local_server_backups WHERE server_id=? AND node_id=?",
+          [record.id, record.nodeId],
+        );
+        const reason = !offline
+          ? "not_offline"
+          : backups.some((row) =>
+                ["creating", "restoring", "deleting"].includes(row.state),
+              )
+            ? "busy"
+            : backups.length >= MAX_RECEIPTS
+              ? "quota"
+              : "reserved";
+        await db.execute(
+          "UPDATE backup_schedules SET next_run_at=CURRENT_TIMESTAMP(3)+INTERVAL interval_minutes MINUTE,last_result=? WHERE server_id=?",
+          [reason, record.id],
+        );
+        if (reason !== "reserved") return false;
+        await db.execute(
+          "INSERT INTO local_server_backups(id,server_id,node_id,adapter,state,operation_started_at,schedule_slot) VALUES (?,?,?,?,'creating',CURRENT_TIMESTAMP(3),?)",
+          [id, record.id, record.nodeId, slot.adapter, slot.next_run_at],
+        );
+        if (slot.adapter === "s3")
+          await db.execute(
+            "INSERT INTO s3_fixture_receipts(id,server_id,node_id) VALUES (?,?,?)",
+            [id, record.id, record.nodeId],
+          );
+        return true;
+      });
+      if (claim) {
+        try {
+          await dispatchCreate(record, id, entry.adapter);
+        } catch {
+          /* Leave the durable receipt pending; never replay an uncertain dispatch. */
+        }
+      }
+    }
+    const schedules = await rows<Schedule>(
+      pool,
+      "SELECT q.* FROM backup_schedules q WHERE (SELECT COUNT(*) FROM local_server_backups b WHERE b.server_id=q.server_id AND b.node_id=q.node_id AND b.schedule_slot IS NOT NULL AND b.state='ready')>q.keep_count ORDER BY q.next_run_at LIMIT 8",
+    );
+    for (const entry of schedules) {
+      if (entry.adapter === "s3" && !s3Enabled) continue;
+      const victim = await transaction(pool, async (db) => {
+        const record = await target(db, entry.server_id, entry.owner_id, true);
+        if (!record || record.nodeId !== entry.node_id) return null;
+        const [policy] = await rows<Schedule>(
+          db,
+          "SELECT * FROM backup_schedules WHERE server_id=? AND node_id=? AND owner_id=? FOR UPDATE",
+          [record.id, record.nodeId, record.owner],
+        );
+        if (!policy) return null;
+        const candidates = await rows<Backup>(
+          db,
+          `SELECT ${columns} FROM local_server_backups b WHERE server_id=? AND node_id=? AND schedule_slot IS NOT NULL AND state='ready' ORDER BY schedule_slot DESC,id`,
+          [record.id, record.nodeId],
+        );
+        // Keep the newest N successful scheduled backups, plus any protected older copies.
+        const backup = candidates
+          .slice(policy.keep_count)
+          .reverse()
+          .find((row) => !row.locked && (row.adapter !== "s3" || s3Enabled));
+        if (!backup) return null;
+        await db.execute(
+          "UPDATE local_server_backups SET state='deleting' WHERE id=? AND state='ready' AND locked=0",
+          [backup.id],
+        );
+        return { record, backup };
+      });
+      if (!victim) continue;
+      const { record, backup } = victim;
+      try {
+        if (backup.adapter === "s3") {
+          if (!(await withS3(record, backup.id, (store) => store.remove())))
+            continue;
+        } else await client.fixtureBackup(record.id, backup.id, "delete");
+        await pool.execute(
+          "DELETE FROM local_server_backups WHERE id=? AND server_id=? AND node_id=? AND state='deleting'",
+          [backup.id, record.id, record.nodeId],
+        );
+      } catch {
+        /* A failed deletion remains visible for an explicit retry. */
+      }
+    }
+  }
   function register(
     app: FastifyInstance,
     sessionUser: (req: FastifyRequest) => Promise<string | null>,
@@ -199,6 +332,90 @@ export function localBackupService(
     type Params = { id: string; backup?: string };
     const root = "/api/v1/servers/:id/backups";
     const config = { rateLimit: { max: 12, timeWindow: "1 minute" } };
+    let worker: ReturnType<typeof setInterval> | undefined;
+    let active: Promise<void> | undefined;
+    app.addHook("onReady", async () => {
+      worker = setInterval(() => {
+        if (!active)
+          active = scheduledTick()
+            .catch(() => {
+              app.log.warn("Staging backup scheduler tick failed");
+            })
+            .finally(() => {
+              active = undefined;
+            });
+      }, 2000);
+      worker.unref();
+    });
+    app.addHook("onClose", async () => {
+      clearInterval(worker);
+      await active;
+    });
+    for (const method of ["GET", "PUT", "DELETE"] as const)
+      app.route<{ Params: Params }>({
+        method,
+        url: `/api/v1/servers/:id/backup-schedule`,
+        config,
+        bodyLimit: 1024,
+        handler: async (req, reply) => {
+          reply.header("cache-control", "no-store");
+          const owner = await sessionUser(req);
+          if (!owner) return reply.code(401).send({ error: "unauthenticated" });
+          const server = req.params.id;
+          if (!UUID_V4.test(server))
+            return reply.code(404).send({ error: "not_found" });
+          const body = req.body as
+            | { adapter?: unknown; intervalMinutes?: unknown; keep?: unknown }
+            | undefined;
+          if (
+            method === "PUT" &&
+            (!body ||
+              typeof body !== "object" ||
+              Object.keys(body).sort().join(",") !==
+                "adapter,intervalMinutes,keep" ||
+              (body.adapter !== "wings" &&
+                (body.adapter !== "s3" || !s3Enabled)) ||
+              typeof body.intervalMinutes !== "number" ||
+              !Number.isInteger(body.intervalMinutes) ||
+              body.intervalMinutes < 15 ||
+              body.intervalMinutes > 1440 ||
+              (body.keep !== 1 && body.keep !== 2))
+          )
+            return reply.code(400).send({ error: "invalid_schedule" });
+          const result = await transaction(pool, async (db) => {
+            const record = await target(db, server, owner, method !== "GET");
+            if (!record) return null;
+            if (method === "DELETE")
+              await db.execute(
+                "DELETE FROM backup_schedules WHERE server_id=? AND node_id=? AND owner_id=?",
+                [server, record.nodeId, owner],
+              );
+            if (method === "PUT" && body)
+              await db.execute(
+                "INSERT INTO backup_schedules(server_id,node_id,owner_id,adapter,interval_minutes,keep_count,next_run_at) VALUES (?,?,?,?,?,?,CURRENT_TIMESTAMP(3)+INTERVAL ? MINUTE) ON DUPLICATE KEY UPDATE node_id=VALUES(node_id),owner_id=VALUES(owner_id),adapter=VALUES(adapter),interval_minutes=VALUES(interval_minutes),keep_count=VALUES(keep_count),next_run_at=VALUES(next_run_at),last_result=NULL",
+                [
+                  server,
+                  record.nodeId,
+                  owner,
+                  String(body.adapter),
+                  Number(body.intervalMinutes),
+                  Number(body.keep),
+                  Number(body.intervalMinutes),
+                ],
+              );
+            const [schedule] = await rows(
+              db,
+              "SELECT adapter,interval_minutes AS intervalMinutes,keep_count AS keep,next_run_at AS nextRunAt,last_result AS lastResult FROM backup_schedules WHERE server_id=? AND node_id=? AND owner_id=?",
+              [server, record.nodeId, owner],
+            );
+            return { schedule: schedule ?? null };
+          });
+          if (!result) return reply.code(404).send({ error: "not_found" });
+          return method === "DELETE"
+            ? reply.code(204).send()
+            : reply.send(result);
+        },
+      });
     app.get<{ Params: Params }>(root, { config }, async (req, reply) => {
       reply.header("cache-control", "no-store");
       const owner = await sessionUser(req);

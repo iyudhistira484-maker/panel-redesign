@@ -2677,6 +2677,133 @@ async function main() {
               );
             }
           }
+          const schedulePath = `/api/v1/servers/${uuid}/backup-schedule`;
+          const schedulerPeer = await relayFor(node);
+          await schedulerPeer.ready();
+          const scheduleAdapter = process.env.RELAY_S3_FIXTURE_USER
+            ? "s3"
+            : "wings";
+          const scheduleRequest = (
+            method: "PUT" | "GET" | "DELETE",
+            session: Record<string, string>,
+            payload?: object,
+          ) =>
+            relay.inject({
+              method,
+              url: schedulePath,
+              headers: { ...headers, ...session },
+              payload,
+              remoteAddress: "127.0.0.5",
+            });
+          const scheduledRows = () =>
+            rows<{ id: string; state: string; locked: number; slot: string }>(
+              pool,
+              "SELECT id,state,locked,schedule_slot AS slot FROM local_server_backups WHERE server_id=? AND schedule_slot IS NOT NULL ORDER BY schedule_slot",
+              [uuid],
+            );
+          try {
+            const policy = {
+              adapter: scheduleAdapter,
+              intervalMinutes: 15,
+              keep: 1,
+            };
+            assert.equal(
+              (await scheduleRequest("PUT", collaborator, policy)).statusCode,
+              404,
+            );
+            assert.equal(
+              (
+                await scheduleRequest("PUT", ownerSession, {
+                  ...policy,
+                  intervalMinutes: 1,
+                })
+              ).statusCode,
+              400,
+            );
+            const configured = await scheduleRequest(
+              "PUT",
+              ownerSession,
+              policy,
+            );
+            assert.equal(configured.statusCode, 200);
+            assert.equal(configured.json().schedule.keep, 1);
+            const due = async () => {
+              await pool.execute(
+                "UPDATE backup_schedules SET next_run_at=CURRENT_TIMESTAMP(3)-INTERVAL 1 SECOND WHERE server_id=?",
+                [uuid],
+              );
+            };
+            await due();
+            await until(
+              "one scheduled backup across competing workers",
+              async () => {
+                const items = await scheduledRows();
+                return items.length === 1 && items[0].state === "ready";
+              },
+            );
+            const [first] = await scheduledRows();
+            const lock = await relay.inject({
+              method: "POST",
+              url: `${apiPath}/${first.id}/lock`,
+              headers: { ...headers, ...ownerSession },
+              remoteAddress: "127.0.0.5",
+            });
+            assert.equal(lock.statusCode, 204);
+            await due();
+            await until(
+              "second scheduled backup retained alongside locked one",
+              async () => {
+                const items = await scheduledRows();
+                return (
+                  items.length === 2 &&
+                  items.every((row) => row.state === "ready")
+                );
+              },
+            );
+            const [, secondScheduled] = await scheduledRows();
+            await due();
+            await until(
+              "retention skips locked oldest and removes next oldest",
+              async () => {
+                const items = await scheduledRows();
+                return (
+                  items.length === 2 &&
+                  items[0].id === first.id &&
+                  items[0].locked === 1 &&
+                  items[1].id !== secondScheduled.id &&
+                  items.every((row) => row.state === "ready")
+                );
+              },
+            );
+            const missing = await relay.inject({
+              url: `${apiPath}/${secondScheduled.id}/download`,
+              headers: ownerSession,
+              remoteAddress: "127.0.0.5",
+            });
+            assert.equal(missing.statusCode, 404);
+            console.log(
+              "::notice::Scheduled backup staging: competing_workers=true one_receipt_per_slot=true locked_backup_preserved=true retention_removed_unlocked=true",
+            );
+          } finally {
+            await scheduleRequest("DELETE", ownerSession);
+            await schedulerPeer.close();
+            for (const row of await scheduledRows()) {
+              if (row.locked)
+                await relay.inject({
+                  method: "POST",
+                  url: `${apiPath}/${row.id}/unlock`,
+                  headers: { ...headers, ...ownerSession },
+                  remoteAddress: "127.0.0.5",
+                });
+              const deleted = await relay.inject({
+                method: "DELETE",
+                url: `${apiPath}/${row.id}`,
+                headers: { ...headers, ...ownerSession },
+                remoteAddress: "127.0.0.5",
+              });
+              assert.equal(deleted.statusCode, 204);
+            }
+          }
           let lostCreateId: string | undefined;
           try {
             await writeFile(config, legacyRemote);
