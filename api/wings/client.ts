@@ -416,6 +416,24 @@ export class WingsClient {
       throw error;
     }
   }
+  async chmodFixture(id: string, name: string, mode: "600" | "644") {
+    if (
+      !fixturePathSegment(name) ||
+      !name.endsWith(".txt") ||
+      !["600", "644"].includes(mode)
+    )
+      throw new WingsUnavailable("payload");
+    await (
+      await this.#send(`${this.#server(id)}/files/chmod`, 204, "POST", {
+        root: "/fixture-docs",
+        files: [{ file: name, mode }],
+      })
+    ).body?.cancel();
+    const current = (
+      await this.fixtureDirectoryMetadata(id, ["fixture-docs"])
+    ).find((item) => item.name === name && !item.directory);
+    if (current?.mode_bits !== mode) throw new WingsUnavailable("payload");
+  }
   async renameUploadedFixture(
     id: string,
     source: string,

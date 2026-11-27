@@ -144,7 +144,13 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   const uploadApi = `${fileApi}/upload-fixture`;
   const uploadedBytes = Buffer.from("Browser upload: å\r\n");
   const uploadName = "browser-upload.txt";
+  const chmodApi = `${fileApi}/chmod-fixture`;
+  const chmod = (name: string, mode: string) =>
+    page
+      .context()
+      .request.post(chmodApi, { headers: editHeaders, data: { name, mode } });
   await open("collaborator@example.test");
+  expect((await chmod(uploadName, "600")).status()).toBe(404);
   expect((await requestRename("example.txt", renamed)).status()).toBe(404);
   expect((await requestCopy("example.txt", copyName)).status()).toBe(404);
   expect(await page.getByLabel("File teks untuk diunggah").count()).toBe(0);
@@ -266,7 +272,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   const copied = page.waitForResponse((response) => response.url() === copyApi);
   await page.getByRole("button", { name: "Salin file teks" }).click();
   expect((await copied).status()).toBe(201);
-  await expect(page.getByText("Salinan terverifikasi.")).toBeVisible();
+  await expect(page.getByText("Operasi terverifikasi.")).toBeVisible();
   await expect(
     files.getByRole("button", { name: copyName, exact: true }),
   ).toBeVisible();
@@ -303,7 +309,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   );
   await page.getByRole("button", { name: "Ubah nama file unggahan" }).click();
   expect((await renameReply).status()).toBe(200);
-  await expect(page.getByText("Perubahan nama terverifikasi.")).toBeVisible();
+  await expect(page.getByText("Operasi terverifikasi.")).toBeVisible();
   await expect(
     files.getByRole("button", { name: copyName, exact: true }),
   ).toHaveCount(0);
@@ -356,7 +362,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     .getByRole("button", { name: "Pindahkan file", exact: true })
     .click();
   expect((await moveReply).status()).toBe(200);
-  await expect(page.getByText("Pemindahan terverifikasi.")).toBeVisible();
+  await expect(page.getByText("Operasi terverifikasi.")).toBeVisible();
   await expect(
     files.getByRole("button", { name: renamed, exact: true }),
   ).toHaveCount(0);
@@ -470,6 +476,36 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     "::notice::Chromium fixture move verified destination bytes, source absence and relocated receipt",
   );
   await page.getByLabel("File teks sumber").selectOption(uploadName);
+  expect((await chmod(uploadName, "777")).status()).toBe(400);
+  expect((await chmod("../browser-upload.txt", "600")).status()).toBe(400);
+  expect((await chmod("example.txt", "600")).status()).toBe(404);
+  for (const mode of ["600", "644"]) {
+    const changed = page.waitForResponse(
+      (response) => response.url() === chmodApi,
+    );
+    await page.getByRole("button", { name: mode, exact: true }).click();
+    expect(await (await changed).json()).toMatchObject({
+      name: uploadName,
+      mode,
+    });
+    await expect(
+      page.getByText("Operasi terverifikasi.", { exact: true }),
+    ).toBeVisible();
+    const actual = await docker(
+      "docker",
+      [
+        "exec",
+        fixtureDaemon,
+        "stat",
+        "-c",
+        "%a",
+        `${uploadVolume}/${id}/fixture-docs/${uploadName}`,
+      ],
+      { timeout: 5000 },
+    );
+    expect(actual.stdout.trim()).toBe(mode);
+  }
+  expect(await readUploaded()).toEqual(uploadedBytes);
   const gzipDownload = page.waitForEvent("download");
   const gzipResponse = page.waitForResponse((response) =>
     new URL(response.url()).pathname.endsWith("/gzip-fixture"),
@@ -798,6 +834,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
 
   await send("Start", 202);
   await verify("running");
+  expect((await chmod(uploadName, "600")).status()).toBe(409);
   const onlineUpload = await page.context().request.post(uploadApi, {
     headers: editHeaders,
     data: {

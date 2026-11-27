@@ -32,7 +32,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
     ["moved", "review"].includes(path[1]);
   const [copyTarget, setCopyTarget] = useState("");
   const [copyStatus, setCopyStatus] = useState<
-    "done" | "moved" | "renamed" | "rejected" | "unknown" | null
+    "done" | "verified" | "moved" | "renamed" | "rejected" | "unknown" | null
   >(null);
   const [archive, setArchive] = useState<File | null>(null);
   const [archiveStatus, setArchiveStatus] = useState<
@@ -160,9 +160,9 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
       setBusy(false);
     }
   }
-  async function copyFile(rename = false, moved = false, back = "") {
+  async function copyFile(rename = false, moved = false, back = "", mode = "") {
     const source = back || copySource,
-      target = back || copyTarget;
+      target = mode ? source : back || copyTarget;
     if (
       busy ||
       !source ||
@@ -174,7 +174,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
     setCopyStatus(null);
     try {
       const reply = await fetch(
-        `/api/v1/servers/${encodeURIComponent(id)}/files/${rename ? "rename" : "copy"}-fixture`,
+        `/api/v1/servers/${encodeURIComponent(id)}/files/${mode ? "chmod" : rename ? "rename" : "copy"}-fixture`,
         {
           method: "POST",
           credentials: "same-origin",
@@ -182,16 +182,20 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
             "content-type": "application/json",
             "x-relay-request": "1",
           },
-          body: JSON.stringify({
-            source,
-            target,
-            ...(moved || back
-              ? {
-                  destination: moved ? moveFolder : "parent",
-                  ...(back ? { sourceFolder: path[1] } : {}),
-                }
-              : {}),
-          }),
+          body: JSON.stringify(
+            mode
+              ? { name: source, mode }
+              : {
+                  source,
+                  target,
+                  ...(moved || back
+                    ? {
+                        destination: moved ? moveFolder : "parent",
+                        ...(back ? { sourceFolder: path[1] } : {}),
+                      }
+                    : {}),
+                },
+          ),
           signal: AbortSignal.timeout(30000),
         },
       );
@@ -204,9 +208,18 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
         setCopyStatus("rejected");
         return;
       }
-      if (reply.status !== (rename ? 200 : 201))
+      if (reply.status !== (mode || rename ? 200 : 201))
         throw new Error("Copy unverified");
-      const data = (await reply.json()) as { name?: string; size: number };
+      const data = (await reply.json()) as {
+        name?: string;
+        size: number;
+        mode?: string;
+      };
+      if (mode) {
+        if (data.name !== source || data.mode !== mode) throw new Error();
+        setCopyStatus("verified");
+        return;
+      }
       if (
         data.name !== target ||
         !Number.isSafeInteger(data.size) ||
@@ -602,27 +615,27 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
           >
             {en ? "Move file" : "Pindahkan file"}
           </Button>
+          <span>
+            chmod{" "}
+            {["600", "644"].map((mode) => (
+              <Button
+                key={mode}
+                disabled={busy || !copySource}
+                onClick={() => void copyFile(false, false, "", mode)}
+              >
+                {mode}
+              </Button>
+            ))}
+          </span>
           {copyStatus && (
             <output>
-              {copyStatus === "moved"
+              {copyStatus === "rejected" || copyStatus === "unknown"
                 ? en
-                  ? "Move verified."
-                  : "Pemindahan terverifikasi."
-                : copyStatus === "renamed"
-                  ? en
-                    ? "Rename verified."
-                    : "Perubahan nama terverifikasi."
-                  : copyStatus === "done"
-                    ? en
-                      ? "Copy verified."
-                      : "Salinan terverifikasi."
-                    : copyStatus === "rejected"
-                      ? en
-                        ? "Operation rejected. Check the filename and offline status."
-                        : "Operasi ditolak. Periksa nama file dan status offline."
-                      : en
-                        ? "Operation not confirmed. Check the file list before retrying."
-                        : "Operasi belum terkonfirmasi. Periksa daftar file sebelum mencoba lagi."}
+                  ? "Operation not confirmed."
+                  : "Operasi belum terkonfirmasi."
+                : en
+                  ? "Operation verified."
+                  : "Operasi terverifikasi."}
             </output>
           )}
         </div>
@@ -631,8 +644,8 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
         <div>
           <p>
             {en
-              ? "Gzip supports one and ZIP up to four UTF-8 text files (16 KiB each). Extraction requires an offline server and creates a new folder."
-              : "Gzip mendukung satu dan ZIP hingga empat file teks UTF-8 (masing-masing 16 KiB). Ekstraksi membutuhkan server offline dan membuat folder baru."}
+              ? "Offline extraction: gzip (1 file), ZIP (up to 4), UTF-8, 16 KiB each."
+              : "Ekstraksi offline: gzip (1 file), ZIP (hingga 4), UTF-8, 16 KiB per file."}
           </p>
           <Button
             disabled={busy || !copySource}
