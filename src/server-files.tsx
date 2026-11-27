@@ -2,7 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import type { Locale } from "./i18n";
 import { Button } from "./ui";
 
-type Entry = { name: string; directory: boolean; size: number };
+type Entry = {
+  name: string;
+  directory: boolean;
+  size: number;
+  movable?: boolean;
+};
 export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
   const en = locale === "en";
   const [path, setPath] = useState<string[]>([]);
@@ -26,10 +31,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [copySource, setCopySource] = useState("");
   const [moveFolder, setMoveFolder] = useState("moved");
-  const inMoveFolder =
-    path[0] === "fixture-docs" &&
-    path.length === 2 &&
-    ["moved", "review"].includes(path[1]);
+  const [inMoveFolder, setInMoveFolder] = useState(false);
   const [copyTarget, setCopyTarget] = useState("");
   const [copyStatus, setCopyStatus] = useState<
     "done" | "verified" | "moved" | "renamed" | "rejected" | "unknown" | null
@@ -161,20 +163,23 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
     }
   }
   async function copyFile(rename = false, moved = false, back = "", mode = "") {
+    const folder = mode === "folder";
     const source = back || copySource,
-      target = mode ? source : back || copyTarget;
+      target = mode && !folder ? source : back || copyTarget;
     if (
       busy ||
-      !source ||
-      !/^[A-Za-z0-9_][A-Za-z0-9_. -]{0,79}$/.test(target) ||
-      !target.endsWith(".txt")
+      (folder
+        ? !/^[a-z][a-z0-9_-]{0,47}$/.test(target)
+        : !source ||
+          !/^[A-Za-z0-9_][A-Za-z0-9_. -]{0,79}$/.test(target) ||
+          !target.endsWith(".txt"))
     )
       return;
     setBusy(true);
     setCopyStatus(null);
     try {
       const reply = await fetch(
-        `/api/v1/servers/${encodeURIComponent(id)}/files/${mode ? "chmod" : rename ? "rename" : "copy"}-fixture`,
+        `/api/v1/servers/${encodeURIComponent(id)}/files/${folder ? "create-folder" : mode ? "chmod" : rename ? "rename" : "copy"}-fixture`,
         {
           method: "POST",
           credentials: "same-origin",
@@ -183,18 +188,20 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
             "x-relay-request": "1",
           },
           body: JSON.stringify(
-            mode
-              ? { name: source, mode }
-              : {
-                  source,
-                  target,
-                  ...(moved || back
-                    ? {
-                        destination: moved ? moveFolder : "parent",
-                        ...(back ? { sourceFolder: path[1] } : {}),
-                      }
-                    : {}),
-                },
+            folder
+              ? { name: target }
+              : mode
+                ? { name: source, mode }
+                : {
+                    source,
+                    target,
+                    ...(moved || back
+                      ? {
+                          destination: moved ? moveFolder : "parent",
+                          ...(back ? { sourceFolder: path[1] } : {}),
+                        }
+                      : {}),
+                  },
           ),
           signal: AbortSignal.timeout(30000),
         },
@@ -208,13 +215,28 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
         setCopyStatus("rejected");
         return;
       }
-      if (reply.status !== (mode || rename ? 200 : 201))
+      if (reply.status !== (!folder && (mode || rename) ? 200 : 201))
         throw new Error("Copy unverified");
       const data = (await reply.json()) as {
         name?: string;
         size: number;
         mode?: string;
+        movable?: boolean;
       };
+      if (folder) {
+        if (data.name !== target || !data.movable) throw new Error();
+        setItems(
+          (current) =>
+            current && [
+              ...current,
+              { name: target, size: 0, directory: true, movable: true },
+            ],
+        );
+        setMoveFolder(target);
+        setCopyTarget("");
+        setCopyStatus("verified");
+        return;
+      }
       if (mode) {
         if (data.name !== source || data.mode !== mode) throw new Error();
         setCopyStatus("verified");
@@ -515,8 +537,8 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
                     : "File sudah ada atau server tidak offline.",
                   invalid: en ? "Invalid text file." : "File teks tidak valid.",
                   unknown: en
-                    ? "Upload not confirmed. Check the file list before retrying."
-                    : "Unggahan belum terkonfirmasi. Periksa daftar file sebelum mencoba lagi.",
+                    ? "Check before retrying."
+                    : "Periksa sebelum mencoba lagi.",
                 }[uploadStatus]
               }
             </output>
@@ -553,7 +575,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
             </select>
           </label>{" "}
           <label>
-            {en ? "New filename" : "Nama file baru"}{" "}
+            {en ? "New name" : "Nama baru"}{" "}
             <input
               value={copyTarget}
               maxLength={80}
@@ -595,11 +617,9 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
               onChange={(event) => setMoveFolder(event.currentTarget.value)}
               disabled={busy}
             >
-              {["moved", "review"]
-                .filter((name) =>
-                  items.some((item) => item.directory && item.name === name),
-                )
-                .map((name) => (
+              {items
+                .filter((item) => item.movable)
+                .map(({ name }) => (
                   <option key={name}>{name}</option>
                 ))}
             </select>
@@ -609,11 +629,17 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
               busy ||
               !copySource ||
               !copyTarget ||
-              !items.some((item) => item.directory && item.name === moveFolder)
+              !items.some((item) => item.movable && item.name === moveFolder)
             }
             onClick={() => void copyFile(true, true)}
           >
             {en ? "Move file" : "Pindahkan file"}
+          </Button>
+          <Button
+            disabled={busy || !copyTarget}
+            onClick={() => void copyFile(false, false, "", "folder")}
+          >
+            {en ? "Create folder" : "Buat folder"}
           </Button>
           <span>
             chmod{" "}
@@ -644,8 +670,8 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
         <div>
           <p>
             {en
-              ? "Offline extraction: gzip (1 file), ZIP (up to 4), UTF-8, 16 KiB each."
-              : "Ekstraksi offline: gzip (1 file), ZIP (hingga 4), UTF-8, 16 KiB per file."}
+              ? "Offline: gzip (1), ZIP (up to 4), 16 KiB each."
+              : "Offline: gzip (1), ZIP (hingga 4), 16 KiB per file."}
           </p>
           <Button
             disabled={busy || !copySource}
@@ -722,8 +748,8 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
                     : "Aman dicoba ulang."
                   : archiveStatus.kind === "pending"
                     ? en
-                      ? "Wait and check again."
-                      : "Tunggu lalu periksa lagi."
+                      ? "Check again later."
+                      : "Periksa lagi nanti."
                     : archiveStatus.kind === "none"
                       ? en
                         ? "No ZIP operation."
@@ -737,8 +763,8 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
                             ? "Extraction requires an offline server."
                             : "Ekstraksi membutuhkan server offline."
                           : en
-                            ? "Extraction not confirmed. Check the file list before retrying."
-                            : "Ekstraksi belum terkonfirmasi. Periksa daftar file sebelum mencoba lagi."}
+                            ? "Check before retrying."
+                            : "Periksa sebelum mencoba lagi."}
             </output>
           )}
         </div>
@@ -764,11 +790,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
         </p>
       )}
       {items?.length === 0 && (
-        <output>
-          {en
-            ? "No visible entries."
-            : "Tidak ada entri yang dapat ditampilkan."}
-        </output>
+        <output>{en ? "Empty folder." : "Folder kosong."}</output>
       )}
       {!!items?.length && (
         <ul aria-label={en ? "Folder entries" : "Isi folder"}>
@@ -777,7 +799,10 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
               {item.directory && path.length < 4 ? (
                 <Button
                   disabled={busy}
-                  onClick={() => void load([...path, item.name])}
+                  onClick={() => {
+                    setInMoveFolder(!!item.movable);
+                    void load([...path, item.name]);
+                  }}
                 >
                   {item.name}
                 </Button>
@@ -811,7 +836,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
           ))}
         </ul>
       )}
-      {inMoveFolder && copyStatus && (
+      {path.length === 2 && inMoveFolder && copyStatus && (
         <output>
           {copyStatus === "renamed"
             ? en
@@ -841,7 +866,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
           >
             {en ? "Download text file" : "Unduh file teks"}
           </Button>
-          {inMoveFolder && (
+          {path.length === 2 && inMoveFolder && (
             <Button
               disabled={busy}
               onClick={() => void copyFile(true, false, preview.name)}

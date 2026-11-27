@@ -1854,13 +1854,47 @@ export async function createApp({
       },
     );
   if (provisioner)
+    app.post<{ Params: { id: string }; Body: { name: string } }>(
+      "/api/v1/servers/:id/files/create-folder-fixture",
+      {
+        config: { rateLimit: { max: 8, timeWindow: "1 minute" } },
+        schema: { body: object({ name: text(1, 48) }) },
+      },
+      async (req, reply) => {
+        reply.header("cache-control", "no-store");
+        const principal = await actor(
+          req.cookies[sessionCookie],
+          req.headers.authorization,
+        );
+        if (!principal || principal.channel !== "session")
+          return reply.code(401).send({ error: "unauthenticated" });
+        if (!UUID_V4.test(req.params.id))
+          return reply.code(404).send({ error: "server_not_found" });
+        try {
+          return reply
+            .code(201)
+            .send(
+              await provisioner.createFolder(
+                req.params.id,
+                principal,
+                req.body.name,
+              ),
+            );
+        } catch (error) {
+          if (error instanceof ProvisionError)
+            return reply.code(error.status).send({ error: error.code });
+          throw error;
+        }
+      },
+    );
+  if (provisioner)
     app.post<{
       Params: { id: string };
       Body: {
         source: string;
         target: string;
-        destination?: "moved" | "review" | "parent";
-        sourceFolder?: "moved" | "review";
+        destination?: string;
+        sourceFolder?: string;
       };
     }>(
       "/api/v1/servers/:id/files/rename-fixture",
@@ -1871,11 +1905,8 @@ export async function createApp({
             {
               source: text(1, 80),
               target: text(1, 80),
-              destination: {
-                type: "string",
-                enum: ["moved", "review", "parent"],
-              },
-              sourceFolder: { type: "string", enum: ["moved", "review"] },
+              destination: text(1, 48, "^[a-z][a-z0-9_-]*$"),
+              sourceFolder: text(1, 48, "^[a-z][a-z0-9_-]*$"),
             },
             ["source", "target"],
           ),

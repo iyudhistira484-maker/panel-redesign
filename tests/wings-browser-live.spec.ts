@@ -268,7 +268,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     ).status(),
   ).toBe(409);
   await page.getByLabel("File teks sumber").selectOption(uploadName);
-  await page.getByLabel("Nama file baru").fill(copyName);
+  await page.getByLabel("Nama baru").fill(copyName);
   const copied = page.waitForResponse((response) => response.url() === copyApi);
   await page.getByRole("button", { name: "Salin file teks" }).click();
   expect((await copied).status()).toBe(201);
@@ -303,7 +303,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     400,
   );
   await page.getByLabel("File teks sumber").selectOption(copyName);
-  await page.getByLabel("Nama file baru").fill(renamed);
+  await page.getByLabel("Nama baru").fill(renamed);
   const renameReply = page.waitForResponse(
     (response) => response.url() === renameApi,
   );
@@ -345,15 +345,37 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   console.log(
     "::notice::Chromium rename verified destination bytes and removed source without overwrite",
   );
-  const moveFolder = "review";
+  const moveFolder = "browser-created";
+  const folderApi = `${fileApi}/create-folder-fixture`;
+  await page.getByLabel("Nama baru").fill(moveFolder);
+  const created = page.waitForResponse(
+    (response) => response.url() === folderApi,
+  );
+  await page.getByRole("button", { name: "Buat folder", exact: true }).click();
+  expect((await created).status()).toBe(201);
+  await expect(
+    page.getByRole("button", { name: moveFolder, exact: true }),
+  ).toBeVisible();
   const moveTarget = "moved-fixture.txt";
   const badDestination = await page.context().request.post(renameApi, {
     headers: editHeaders,
     data: { source: renamed, target: moveTarget, destination: "../" },
   });
   expect(badDestination.status()).toBe(400);
+  expect(
+    (
+      await page.context().request.post(renameApi, {
+        headers: editHeaders,
+        data: {
+          source: renamed,
+          target: moveTarget,
+          destination: "unregistered",
+        },
+      })
+    ).status(),
+  ).toBe(400);
   await page.getByLabel("File teks sumber").selectOption(renamed);
-  await page.getByLabel("Nama file baru").fill(moveTarget);
+  await page.getByLabel("Nama baru").fill(moveTarget);
   await page.getByLabel("Folder tujuan").selectOption(moveFolder);
   const moveReply = page.waitForResponse(
     (response) => response.url() === renameApi,

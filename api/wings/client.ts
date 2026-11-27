@@ -2,10 +2,13 @@ export const fixtureFolderName = (name: string) =>
   /^[a-z][a-z0-9_-]{0,47}(?![\s\S])/.test(name) &&
   !name.startsWith("zip-pending-") &&
   !name.startsWith("extract-") &&
+  name !== "parent" &&
   name !== "moved" &&
   name !== "review";
 import { fixtureTarLimit } from "./fixture-tar";
-export type FixtureSubfolder = "moved" | "review";
+export type FixtureSubfolder = string;
+export const fixtureMoveFolder = (name: string) =>
+  name === "moved" || name === "review" || fixtureFolderName(name);
 export const fixturePathSegment = (value: string) =>
   /^[A-Za-z0-9_][A-Za-z0-9_. -]{0,79}$/.test(value) && !/[\r\n]/.test(value);
 import { createHash } from "node:crypto";
@@ -261,6 +264,8 @@ export class WingsClient {
     name: string,
     moved?: FixtureSubfolder,
   ) {
+    if (moved && !fixtureMoveFolder(moved))
+      throw new WingsUnavailable("payload");
     const segments = moved ? ["fixture-docs", moved] : ["fixture-docs"];
     await this.fixtureDirectory(id, segments);
     const entries = await this.#fixtureEntries(id, `/${segments.join("/")}`);
@@ -560,6 +565,11 @@ export class WingsClient {
     moved?: FixtureSubfolder,
     fromMoved?: FixtureSubfolder,
   ) {
+    if (
+      (moved && !fixtureMoveFolder(moved)) ||
+      (fromMoved && !fixtureMoveFolder(fromMoved))
+    )
+      throw new WingsUnavailable("payload");
     if (
       ![source, target].every(
         (name) => fixturePathSegment(name) && name.endsWith(".txt"),

@@ -6,6 +6,7 @@ import { lockFreeAllocation } from "../catalog/transfer";
 import {
   type FixtureSubfolder,
   fixtureFolderName,
+  fixtureMoveFolder,
   fixturePathSegment,
 } from "./client";
 import {
@@ -508,6 +509,66 @@ export function createProvisioner(
     });
   }
 
+  async function managedFolder(db: Executor, id: string, name: string) {
+    if (!fixtureMoveFolder(name)) return false;
+    if (name === "moved" || name === "review") return true;
+    const [record] = await rows(
+      db,
+      "SELECT name FROM fixture_folders WHERE server_id=? AND name=?",
+      [id, name],
+    );
+    return !!record;
+  }
+  async function createFolder(
+    id: string,
+    actor: Actor,
+    name: string,
+    compat = false,
+  ) {
+    return exclusive(id, async () => {
+      if (!fixtureFolderName(name))
+        throw new ProvisionError(400, "invalid_fixture_folder");
+      const authorize = async () => {
+        if (compat) {
+          if (!(await ownerFileScope(id, actor, "create-folder")))
+            throw new ProvisionError(403, "create_folder_scope_required");
+        } else {
+          const server = await load(pool, id);
+          if (
+            !server ||
+            actor.channel !== "session" ||
+            server.ownerId !== actor.id ||
+            !eligible(server) ||
+            server.phase !== "installed"
+          )
+            throw new ProvisionError(404, "server_not_found");
+        }
+      };
+      await authorize();
+      try {
+        if ((await client.state(id)) !== "offline")
+          throw new ProvisionError(409, "server_not_offline");
+        if (await client.fixtureUploadTargetExists(id, name))
+          throw new ProvisionError(409, "folder_exists");
+        await authorize();
+        await pool.execute(
+          "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'wings.fixture_folder_create_requested',?)",
+          [actor.id, id],
+        );
+        await client.createFixtureFolder(id, name);
+        await pool.execute(
+          "INSERT IGNORE INTO fixture_folders (server_id,name) VALUES (?,?)",
+          [id, name],
+        );
+        return { name, directory: true, size: 0, movable: true };
+      } catch (error) {
+        if (error instanceof WingsUnavailable)
+          throw new ProvisionError(502, "folder_create_unverified");
+        throw error;
+      }
+    });
+  }
+
   async function renameFixture(
     id: string,
     actor: Actor,
@@ -547,6 +608,9 @@ export function createProvisioner(
           throw new ProvisionError(404, "server_not_found");
       };
       await authorize(pool);
+      for (const folder of [moved, fromMoved])
+        if (folder && !(await managedFolder(pool, id, folder)))
+          throw new ProvisionError(400, "invalid_move_folder");
       try {
         if ((await client.state(id)) !== "offline")
           throw new ProvisionError(409, "server_not_offline");
@@ -858,8 +922,24 @@ export function createProvisioner(
       )
         throw new ProvisionError(400, "invalid_directory");
       try {
-        if (preview === undefined)
-          return await client.fixtureDirectory(id, segments);
+        if (preview === undefined) {
+          const items = await client.fixtureDirectory(id, segments);
+          if (path !== "/fixture-docs") return items;
+          const folders = await rows<{ name: string }>(
+            pool,
+            "SELECT CAST(name AS CHAR) AS name FROM fixture_folders WHERE server_id=?",
+            [id],
+          );
+          const movable = new Set([
+            "moved",
+            "review",
+            ...folders.map((folder) => folder.name),
+          ]);
+          return items.map((item) => ({
+            ...item,
+            movable: item.directory && movable.has(item.name),
+          }));
+        }
         if (!fixturePathSegment(preview) || !preview.endsWith(".txt"))
           throw new ProvisionError(400, "invalid_text_file");
         const result = await client.fixtureText(id, segments, preview);
@@ -1033,34 +1113,11 @@ export function createProvisioner(
     },
     chmodFixture,
     renameFixture,
+    createFolder,
     editFixtureText,
     compatFiles: {
       async createFolder(id: string, actor: Actor, name: string) {
-        return exclusive(id, async () => {
-          if (!fixtureFolderName(name))
-            throw new ProvisionError(400, "invalid_fixture_folder");
-          const authorize = async () => {
-            if (!(await ownerFileScope(id, actor, "create-folder")))
-              throw new ProvisionError(403, "create_folder_scope_required");
-          };
-          await authorize();
-          try {
-            if ((await client.state(id)) !== "offline")
-              throw new ProvisionError(409, "server_not_offline");
-            if (await client.fixtureUploadTargetExists(id, name))
-              throw new ProvisionError(409, "folder_exists");
-            await authorize();
-            await pool.execute(
-              "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'wings.compat_fixture_folder_create_requested',?)",
-              [actor.id, id],
-            );
-            await client.createFixtureFolder(id, name);
-          } catch (error) {
-            if (error instanceof WingsUnavailable)
-              throw new ProvisionError(502, "folder_create_unverified");
-            throw error;
-          }
-        });
+        await createFolder(id, actor, name, true);
       },
 
       async copy(id: string, actor: Actor, source: string) {
