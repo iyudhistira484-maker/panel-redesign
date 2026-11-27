@@ -965,6 +965,25 @@ export function createProvisioner(
               : {}),
           }));
         }
+        if (
+          download &&
+          path === "/fixture-docs" &&
+          fixturePathSegment(preview) &&
+          preview.endsWith(".bin")
+        ) {
+          const [receipt] = await rows<{ digest: string }>(
+            pool,
+            "SELECT digest FROM client_uploaded_files WHERE server_id=? AND name=?",
+            [id, preview],
+          );
+          if (!receipt) throw new ProvisionError(404, "upload_not_found");
+          const bytes = await client.fixtureDownload(id, segments, preview);
+          if (
+            createHash("sha256").update(bytes).digest("hex") !== receipt.digest
+          )
+            throw new ProvisionError(409, "uploaded_file_changed");
+          return bytes;
+        }
         if (!fixturePathSegment(preview) || !preview.endsWith(".txt"))
           throw new ProvisionError(400, "invalid_text_file");
         const result = await client.fixtureText(id, segments, preview);
@@ -1423,18 +1442,21 @@ export function createProvisioner(
           );
         };
         return exclusive(id, async () => {
+          const binary = actor.channel === "session" && name.endsWith(".bin");
           if (
             !fixturePathSegment(name) ||
-            !name.endsWith(".txt") ||
+            (!binary && !name.endsWith(".txt")) ||
             bytes.length > 16384
           )
             throw new ProvisionError(400, "invalid_upload");
-          let text: string;
+          let content: string | ArrayBuffer;
           try {
-            text = new TextDecoder("utf-8", {
-              fatal: true,
-              ignoreBOM: true,
-            }).decode(bytes);
+            content = binary
+              ? Uint8Array.from(bytes).buffer
+              : new TextDecoder("utf-8", {
+                  fatal: true,
+                  ignoreBOM: true,
+                }).decode(bytes);
           } catch {
             throw new ProvisionError(400, "invalid_upload");
           }
@@ -1454,7 +1476,7 @@ export function createProvisioner(
             "DELETE FROM client_uploaded_files WHERE server_id=? AND name=?",
             [id, name],
           );
-          await client.uploadFixtureText(id, name, text);
+          await client.uploadFixtureText(id, name, content);
           if (
             !(await client.fixtureDownload(id, ["fixture-docs"], name)).equals(
               bytes,

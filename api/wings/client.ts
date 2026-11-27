@@ -74,12 +74,14 @@ export class WingsClient {
           accept: "application/json",
           ...(typeof body === "string"
             ? { "content-type": "text/plain; charset=utf-8" }
-            : body
-              ? { "content-type": "application/json" }
-              : {}),
+            : body instanceof ArrayBuffer
+              ? { "content-type": "application/octet-stream" }
+              : body
+                ? { "content-type": "application/json" }
+                : {}),
         },
         body:
-          typeof body === "string"
+          typeof body === "string" || body instanceof ArrayBuffer
             ? body
             : body
               ? JSON.stringify(body)
@@ -612,7 +614,11 @@ export class WingsClient {
     );
     await response.body?.cancel();
   }
-  async uploadFixtureText(id: string, name: string, text: string) {
+  async uploadFixtureText(
+    id: string,
+    name: string,
+    text: string | ArrayBuffer,
+  ) {
     const response = await this.#send(
       `${this.#server(id)}/files/write?file=${encodeURIComponent(`/fixture-docs/${name}`)}`,
       204,

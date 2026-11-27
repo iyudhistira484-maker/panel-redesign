@@ -283,7 +283,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
     setUploadStatus(null);
     if (
       !/^[A-Za-z0-9_][A-Za-z0-9_. -]{0,79}$/.test(uploadFile.name) ||
-      !uploadFile.name.endsWith(".txt") ||
+      !/\.(txt|bin)$/.test(uploadFile.name) ||
       uploadFile.size > 16384
     ) {
       setUploadStatus("invalid");
@@ -316,10 +316,9 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
         setUploadStatus("invalid");
         return;
       }
-      if (response.status !== 201) throw new Error("Upload unverified");
+      if (response.status !== 201) throw new Error();
       const created = (await response.json()) as { name?: string };
-      if (created.name !== uploadFile.name)
-        throw new Error("Upload unverified");
+      if (created.name !== uploadFile.name) throw new Error();
       setItems(
         (current) =>
           current &&
@@ -448,11 +447,10 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
         !response.ok ||
         !response.headers.get("content-disposition")?.startsWith("attachment;")
       )
-        throw new Error("Download unavailable");
+        throw new Error();
       const blob = await response.blob();
       if (controller.signal.aborted) return;
-      if (blob.size > (gzip ? 16512 : 16384))
-        throw new Error("Invalid attachment");
+      if (blob.size > (gzip ? 16512 : 16384)) throw new Error();
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -514,11 +512,11 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
       {path.length === 1 && path[0] === "fixture-docs" && (
         <div>
           <label>
-            {en ? "Text file to upload" : "File teks untuk diunggah"}{" "}
+            {en ? "File to upload" : "File untuk diunggah"}{" "}
             <input
               ref={fileInput}
               type="file"
-              accept=".txt"
+              accept=".txt,.bin"
               disabled={busy}
               onChange={(event) => {
                 setUploadFile(event.currentTarget.files?.[0] ?? null);
@@ -540,9 +538,9 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
                 {
                   uploaded: en ? "Upload verified." : "Unggahan terverifikasi.",
                   conflict: en
-                    ? "File already exists or server is not offline."
-                    : "File sudah ada atau server tidak offline.",
-                  invalid: en ? "Invalid text file." : "File teks tidak valid.",
+                    ? "File exists or server is online."
+                    : "File sudah ada atau server online.",
+                  invalid: en ? "Invalid file." : "File tidak valid.",
                   unknown: en
                     ? "Check before retrying."
                     : "Periksa sebelum mencoba lagi.",
@@ -816,7 +814,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
                 </span>
               )}
               {!item.directory &&
-                item.name.endsWith(".txt") &&
+                /\.(txt|bin)$/.test(item.name) &&
                 item.size <= 16384 && (
                   <Button
                     disabled={busy}

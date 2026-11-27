@@ -153,7 +153,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   expect((await chmod(uploadName, "600")).status()).toBe(404);
   expect((await requestRename("example.txt", renamed)).status()).toBe(404);
   expect((await requestCopy("example.txt", copyName)).status()).toBe(404);
-  expect(await page.getByLabel("File teks untuk diunggah").count()).toBe(0);
+  expect(await page.getByLabel("File untuk diunggah").count()).toBe(0);
   expect(
     (
       await page.context().request.post(uploadApi, {
@@ -226,7 +226,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   ).toBe(404);
   await files.getByRole("button", { name: "fixture-docs" }).click();
   await expect(files).toContainText("example.txt");
-  const input = page.getByLabel("File teks untuk diunggah");
+  const input = page.getByLabel("File untuk diunggah");
   await input.setInputFiles({
     name: uploadName,
     mimeType: "text/plain",
@@ -727,6 +727,52 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   console.log(
     "::notice::Wings gzip round-trip verified exact bytes in a new folder; corrupt input created nothing",
   );
+  const binaryName = "browser-data.bin";
+  const binaryBytes = Buffer.from(
+    Array.from({ length: 16384 }, (_, i) => i % 256),
+  );
+  await input.setInputFiles({
+    name: binaryName,
+    mimeType: "application/octet-stream",
+    buffer: binaryBytes,
+  });
+  const binaryUpload = page.waitForResponse(
+    (response) => response.url() === uploadApi,
+  );
+  await page.getByRole("button", { name: "Unggah file baru" }).click();
+  expect((await binaryUpload).status()).toBe(201);
+  const binaryDownload = page.waitForEvent("download");
+  await files
+    .getByRole("button", { name: `Unduh ${binaryName}`, exact: true })
+    .click();
+  const binaryArtifact = await binaryDownload;
+  expect(binaryArtifact.suggestedFilename()).toBe(binaryName);
+  const binaryPath = await binaryArtifact.path();
+  assert.ok(binaryPath);
+  expect(await readFile(binaryPath)).toEqual(binaryBytes);
+  const storedBinary = await docker(
+    "docker",
+    [
+      "exec",
+      fixtureDaemon,
+      "cat",
+      `${uploadVolume}/${id}/fixture-docs/${binaryName}`,
+    ],
+    { encoding: "buffer", timeout: 5000 },
+  );
+  expect(storedBinary.stdout).toEqual(binaryBytes);
+  const binaryDb = stagingPool();
+  try {
+    const [receipts] = await binaryDb.query(
+      "SELECT digest FROM client_uploaded_files WHERE server_id=? AND name=?",
+      [id, binaryName],
+    );
+    expect(receipts).toEqual([
+      { digest: createHash("sha256").update(binaryBytes).digest("hex") },
+    ]);
+  } finally {
+    await binaryDb.end();
+  }
   const rejectedUploads = [
     {
       name: "../upload-traversal.txt",
