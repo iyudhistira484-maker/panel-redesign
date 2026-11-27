@@ -287,15 +287,19 @@ export async function createApp({
       ) &&
       // Legacy SDK requests carry an explicit bearer, never a browser session.
       !(
-        req.method === "POST" &&
-        (req.routeOptions.url === "/api/client/servers/:identifier/power" ||
-          req.routeOptions.url === "/api/client/servers/:identifier/command" ||
-          req.routeOptions.url ===
-            "/api/client/servers/:identifier/files/write" ||
-          req.routeOptions.url ===
-            "/api/client/servers/:identifier/files/delete" ||
-          req.routeOptions.url ===
-            "/api/client/servers/:identifier/files/chmod") &&
+        ((req.method === "POST" &&
+          (req.routeOptions.url === "/api/client/servers/:identifier/power" ||
+            req.routeOptions.url ===
+              "/api/client/servers/:identifier/command" ||
+            req.routeOptions.url ===
+              "/api/client/servers/:identifier/files/write" ||
+            req.routeOptions.url ===
+              "/api/client/servers/:identifier/files/delete" ||
+            req.routeOptions.url ===
+              "/api/client/servers/:identifier/files/chmod")) ||
+          (req.method === "PUT" &&
+            req.routeOptions.url ===
+              "/api/client/servers/:identifier/files/rename")) &&
         req.headers.origin === undefined &&
         req.headers.cookie === undefined &&
         /^Bearer rly_[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{22}$/.test(
@@ -1016,6 +1020,7 @@ export async function createApp({
       clientUploadFile?: boolean;
       clientDeleteFile?: boolean;
       clientChmodFile?: boolean;
+      clientRenameFile?: boolean;
     };
   }>(
     "/api/v1/account/keys",
@@ -1035,6 +1040,7 @@ export async function createApp({
             clientUploadFile: { type: "boolean" },
             clientDeleteFile: { type: "boolean" },
             clientChmodFile: { type: "boolean" },
+            clientRenameFile: { type: "boolean" },
           },
           ["label", "key"],
         ),
@@ -1055,7 +1061,7 @@ export async function createApp({
         const digest = crypt.digest("api-key", `${req.body.key}.${suffix}`);
         try {
           await db.execute(
-            "INSERT INTO api_keys (id,user_id,digest,label,expires_at,client_power,client_console,client_stream,client_list_files,client_download,client_edit_file,client_upload_file,client_delete_file,client_chmod_file) VALUES (?,?,?,?,TIMESTAMPADD(DAY,90,UTC_TIMESTAMP(3)),?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO api_keys (id,user_id,digest,label,expires_at,client_power,client_console,client_stream,client_list_files,client_download,client_edit_file,client_upload_file,client_delete_file,client_chmod_file,client_rename_file) VALUES (?,?,?,?,TIMESTAMPADD(DAY,90,UTC_TIMESTAMP(3)),?,?,?,?,?,?,?,?,?,?)",
             [
               id,
               u.id,
@@ -1070,6 +1076,7 @@ export async function createApp({
               req.body.clientUploadFile === true,
               req.body.clientDeleteFile === true,
               req.body.clientChmodFile === true,
+              req.body.clientRenameFile === true,
             ],
           );
         } catch (e) {

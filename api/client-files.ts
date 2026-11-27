@@ -2,7 +2,11 @@ import { createHash, randomBytes } from "node:crypto";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { ProvisionError } from "./wings/provision";
 import type { Actor } from "./policy";
-import { fixturePathSegment, WingsUnavailable } from "./wings/client";
+import {
+  type FixtureSubfolder,
+  fixturePathSegment,
+  WingsUnavailable,
+} from "./wings/client";
 
 type Entry = {
   name: string;
@@ -15,6 +19,14 @@ type Entry = {
   modified_at: unknown;
 };
 export type FileBinding = {
+  rename(
+    id: string,
+    actor: Actor,
+    source: string,
+    target: string,
+    destination?: FixtureSubfolder,
+    origin?: FixtureSubfolder,
+  ): Promise<unknown>;
   chmod(
     id: string,
     actor: Actor,
@@ -352,6 +364,71 @@ export function registerClientFiles(
       if (mode !== "600" && mode !== "644") return failure(reply, 400);
       try {
         await binding.chmod(server.id, actor, entry.file, mode);
+        return reply.code(204).send();
+      } catch (error) {
+        return textError(error, reply);
+      }
+    },
+  );
+  const renamePath = (
+    value: unknown,
+  ): { name: string; folder?: FixtureSubfolder } | null => {
+    if (typeof value !== "string") return null;
+    const parts = value.split("/");
+    const name = parts.pop();
+    const folder = parts.pop();
+    if (
+      parts.length ||
+      !name ||
+      !fixturePathSegment(name) ||
+      !name.endsWith(".txt") ||
+      (folder !== undefined && folder !== "moved" && folder !== "review")
+    )
+      return null;
+    return { name, folder };
+  };
+  app.put<{
+    Params: { identifier: string };
+    Body: { root?: unknown; files?: unknown };
+  }>(
+    "/api/client/servers/:identifier/files/rename",
+    {
+      bodyLimit: 1024,
+      config: { rateLimit: { max: 12, timeWindow: "1 minute" } },
+    },
+    async (req, reply) => {
+      const actor = await authenticate(req.headers.authorization ?? "");
+      if (!actor) return failure(reply, 401);
+      const server = await resolve(req.params.identifier, actor.id);
+      if (!server) return failure(reply, 404);
+      if (!binding) return failure(reply, 503);
+      const { root, files } = req.body ?? {};
+      if (
+        root !== "/fixture-docs" ||
+        Object.keys(req.body ?? {}).length !== 2 ||
+        !Array.isArray(files) ||
+        files.length !== 1
+      )
+        return failure(reply, 400);
+      const entry = files[0];
+      if (
+        !entry ||
+        typeof entry !== "object" ||
+        Object.keys(entry).length !== 2
+      )
+        return failure(reply, 400);
+      const from = renamePath(entry.from),
+        to = renamePath(entry.to);
+      if (!from || !to) return failure(reply, 400);
+      try {
+        await binding.rename(
+          server.id,
+          actor,
+          from.name,
+          to.name,
+          to.folder,
+          from.folder,
+        );
         return reply.code(204).send();
       } catch (error) {
         return textError(error, reply);

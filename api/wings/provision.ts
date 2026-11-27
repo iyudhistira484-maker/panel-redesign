@@ -372,9 +372,11 @@ export function createProvisioner(
   async function ownerFileScope(
     id: string,
     actor: Actor,
-    scope: "upload" | "delete" | "chmod",
+    scope: "upload" | "delete" | "chmod" | "rename",
+    db: Executor = pool,
+    lock = false,
   ) {
-    const server = await load(pool, id);
+    const server = await load(db, id, lock);
     if (
       !server ||
       server.ownerId !== actor.id ||
@@ -388,8 +390,8 @@ export function createProvisioner(
     return (
       (
         await rows(
-          pool,
-          `SELECT id FROM api_keys WHERE id=? AND user_id=? AND ${{ upload: "client_upload_file", delete: "client_delete_file", chmod: "client_chmod_file" }[scope]}=TRUE AND expires_at>UTC_TIMESTAMP(3)`,
+          db,
+          `SELECT id FROM api_keys WHERE id=? AND user_id=? AND ${{ upload: "client_upload_file", delete: "client_delete_file", chmod: "client_chmod_file", rename: "client_rename_file" }[scope]}=TRUE AND expires_at>UTC_TIMESTAMP(3)`,
           [actor.keyId, actor.id],
         )
       ).length === 1
@@ -476,6 +478,114 @@ export function createProvisioner(
       } catch (error) {
         if (error instanceof WingsUnavailable)
           throw new ProvisionError(502, "file_chmod_unverified");
+        throw error;
+      }
+    });
+  }
+
+  async function renameFixture(
+    id: string,
+    actor: Actor,
+    source: string,
+    target: string,
+    moved?: FixtureSubfolder,
+    fromMoved?: FixtureSubfolder,
+    compat = false,
+  ) {
+    const destination = moved ? ["fixture-docs", moved] : ["fixture-docs"];
+    const sourceName = fromMoved ? `${fromMoved}/${source}` : source;
+    const receiptName = moved ? `${moved}/${target}` : target;
+    return exclusive(id, async () => {
+      if (
+        (fromMoved === moved && source === target) ||
+        sourceName.length > 80 ||
+        receiptName.length > 80 ||
+        ![source, target].every(
+          (name) => fixturePathSegment(name) && name.endsWith(".txt"),
+        )
+      )
+        throw new ProvisionError(400, "invalid_rename");
+      const authorize = async (db: Executor, lock = false) => {
+        if (compat) {
+          if (!(await ownerFileScope(id, actor, "rename", db, lock)))
+            throw new ProvisionError(403, "rename_scope_required");
+          return;
+        }
+        const server = await load(db, id, lock);
+        if (
+          !server ||
+          actor.channel !== "session" ||
+          server.ownerId !== actor.id ||
+          !eligible(server) ||
+          server.phase !== "installed"
+        )
+          throw new ProvisionError(404, "server_not_found");
+      };
+      await authorize(pool);
+      try {
+        if ((await client.state(id)) !== "offline")
+          throw new ProvisionError(409, "server_not_offline");
+        if (await client.fixtureUploadTargetExists(id, target, moved))
+          throw new ProvisionError(409, "file_exists");
+        const [receipt] = await rows<{ digest: string }>(
+          pool,
+          "SELECT digest FROM client_uploaded_files WHERE server_id=? AND name=?",
+          [id, sourceName],
+        );
+        if (!receipt) throw new ProvisionError(404, "upload_not_found");
+        const original = await client.fixtureDownload(
+          id,
+          fromMoved ? ["fixture-docs", fromMoved] : ["fixture-docs"],
+          source,
+        );
+        if (
+          createHash("sha256").update(original).digest("hex") !== receipt.digest
+        )
+          throw new ProvisionError(409, "uploaded_file_changed");
+        await transaction(pool, async (db) => {
+          await authorize(db, true);
+          const [locked] = await rows<{ digest: string }>(
+            db,
+            "SELECT digest FROM client_uploaded_files WHERE server_id=? AND name=? FOR UPDATE",
+            [id, sourceName],
+          );
+          if (locked?.digest !== receipt.digest)
+            throw new ProvisionError(409, "upload_changed");
+          await db.execute(
+            "DELETE FROM client_uploaded_files WHERE server_id=? AND (name=? OR name=?)",
+            [id, sourceName, receiptName],
+          );
+          await db.execute(
+            "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'wings.fixture_file_rename_requested',?)",
+            [actor.id, id],
+          );
+        });
+        await client.renameUploadedFixture(
+          id,
+          source,
+          target,
+          moved,
+          fromMoved,
+        );
+        if (
+          (await client.fixtureUploadTargetExists(id, source, fromMoved)) ||
+          !(await client.fixtureDownload(id, destination, target)).equals(
+            original,
+          )
+        )
+          throw new ProvisionError(502, "file_rename_unverified");
+        await pool.execute(
+          "INSERT INTO client_uploaded_files (server_id,name,digest) VALUES (?,?,?)",
+          [id, receiptName, receipt.digest],
+        );
+        return {
+          name: target,
+          size: original.length,
+          directory: `/${destination.join("/")}`,
+        };
+      } catch (error) {
+        if (error instanceof WingsUnavailable)
+          throw new ProvisionError(502, "file_rename_unverified");
         throw error;
       }
     });
@@ -887,110 +997,17 @@ export function createProvisioner(
       });
     },
     chmodFixture,
-    async renameFixture(
-      id: string,
-      actor: Actor,
-      source: string,
-      target: string,
-      moved?: FixtureSubfolder,
-      fromMoved?: FixtureSubfolder,
-    ) {
-      const destination = moved ? ["fixture-docs", moved] : ["fixture-docs"];
-      const sourceName = fromMoved ? `${fromMoved}/${source}` : source;
-      const receiptName = moved ? `${moved}/${target}` : target;
-      return exclusive(id, async () => {
-        if (
-          (fromMoved === moved && source === target) ||
-          sourceName.length > 80 ||
-          receiptName.length > 80 ||
-          ![source, target].every(
-            (name) => fixturePathSegment(name) && name.endsWith(".txt"),
-          )
-        )
-          throw new ProvisionError(400, "invalid_rename");
-        const authorize = async (db: Executor, lock = false) => {
-          const server = await load(db, id, lock);
-          if (
-            !server ||
-            actor.channel !== "session" ||
-            server.ownerId !== actor.id ||
-            !eligible(server) ||
-            server.phase !== "installed"
-          )
-            throw new ProvisionError(404, "server_not_found");
-        };
-        await authorize(pool);
-        try {
-          if ((await client.state(id)) !== "offline")
-            throw new ProvisionError(409, "server_not_offline");
-          if (await client.fixtureUploadTargetExists(id, target, moved))
-            throw new ProvisionError(409, "file_exists");
-          const [receipt] = await rows<{ digest: string }>(
-            pool,
-            "SELECT digest FROM client_uploaded_files WHERE server_id=? AND name=?",
-            [id, sourceName],
-          );
-          if (!receipt) throw new ProvisionError(404, "upload_not_found");
-          const original = await client.fixtureDownload(
-            id,
-            fromMoved ? ["fixture-docs", fromMoved] : ["fixture-docs"],
-            source,
-          );
-          if (
-            createHash("sha256").update(original).digest("hex") !==
-            receipt.digest
-          )
-            throw new ProvisionError(409, "uploaded_file_changed");
-          await transaction(pool, async (db) => {
-            await authorize(db, true);
-            const [locked] = await rows<{ digest: string }>(
-              db,
-              "SELECT digest FROM client_uploaded_files WHERE server_id=? AND name=? FOR UPDATE",
-              [id, sourceName],
-            );
-            if (locked?.digest !== receipt.digest)
-              throw new ProvisionError(409, "upload_changed");
-            await db.execute(
-              "DELETE FROM client_uploaded_files WHERE server_id=? AND (name=? OR name=?)",
-              [id, sourceName, receiptName],
-            );
-            await db.execute(
-              "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'wings.fixture_file_rename_requested',?)",
-              [actor.id, id],
-            );
-          });
-          await client.renameUploadedFixture(
-            id,
-            source,
-            target,
-            moved,
-            fromMoved,
-          );
-          if (
-            (await client.fixtureUploadTargetExists(id, source, fromMoved)) ||
-            !(await client.fixtureDownload(id, destination, target)).equals(
-              original,
-            )
-          )
-            throw new ProvisionError(502, "file_rename_unverified");
-          await pool.execute(
-            "INSERT INTO client_uploaded_files (server_id,name,digest) VALUES (?,?,?)",
-            [id, receiptName, receipt.digest],
-          );
-          return {
-            name: target,
-            size: original.length,
-            directory: `/${destination.join("/")}`,
-          };
-        } catch (error) {
-          if (error instanceof WingsUnavailable)
-            throw new ProvisionError(502, "file_rename_unverified");
-          throw error;
-        }
-      });
-    },
+    renameFixture,
     editFixtureText,
     compatFiles: {
+      rename: (
+        id: string,
+        actor: Actor,
+        source: string,
+        target: string,
+        destination?: FixtureSubfolder,
+        origin?: FixtureSubfolder,
+      ) => renameFixture(id, actor, source, target, destination, origin, true),
       chmod: (id: string, actor: Actor, name: string, mode: "600" | "644") =>
         chmodFixture(id, actor, name, mode, true),
       async deleteUpload(id: string, actor: Actor, name: string) {

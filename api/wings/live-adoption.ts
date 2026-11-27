@@ -1261,6 +1261,7 @@ async function main() {
           clientUploadFile?: boolean;
           clientDeleteFile?: boolean;
           clientChmodFile?: boolean;
+          clientRenameFile?: boolean;
         } = {},
       ) {
         const key = `rly_${randomBytes(32).toString("base64url")}`;
@@ -5157,6 +5158,7 @@ async function main() {
           assert.ok(!names.includes(rejected));
         const chmodKey = await issueKey(ownerSession, false, false, false, {
           clientChmodFile: true,
+          clientRenameFile: true,
         });
         const chmod = (
           base: string,
@@ -5213,6 +5215,66 @@ async function main() {
         );
         console.log(
           "::notice::Pterodactyl chmod contract verified 204 and matching Wings modes with dedicated key scope",
+        );
+        const rename = (base: string, key: string, from: string, to: string) =>
+          fetch(`${base}/api/client/servers/${identifier}/files/rename`, {
+            method: "PUT",
+            headers: { ...auth(key), "content-type": "application/json" },
+            body: JSON.stringify({ root: directory, files: [{ from, to }] }),
+          });
+        assert.equal(
+          (await rename(relayBase, editKey, relayName, "renamed.txt")).status,
+          403,
+        );
+        assert.equal(
+          (await rename(relayBase, chmodKey, relayName, "../renamed.txt"))
+            .status,
+          400,
+        );
+        assert.equal(
+          (await rename(relayBase, chmodKey, relayName, legacyName)).status,
+          409,
+        );
+        const steps = (name: string) => [
+          name,
+          `renamed-${name}`,
+          `review/${name}`,
+          name,
+        ];
+        const verifyMove = async (from: string, to: string) => {
+          const parts = to.split("/");
+          assert.deepEqual(
+            await wingClient.fixtureDownload(
+              uuid,
+              ["fixture-docs", ...parts.slice(0, -1)],
+              parts[parts.length - 1],
+            ),
+            uploaded,
+          );
+          const source = from.split("/");
+          assert.equal(
+            await wingClient.fixtureUploadTargetExists(
+              uuid,
+              source[source.length - 1],
+              source.length === 2 ? "review" : undefined,
+            ),
+            false,
+          );
+        };
+        for (const [base, key, name] of [
+          [legacyBase, legacyKey, legacyName],
+          [relayBase, chmodKey, relayName],
+        ]) {
+          const path = steps(name);
+          for (let i = 1; i < path.length; i++) {
+            const from = path[i - 1],
+              to = path[i];
+            assert.equal((await rename(base, key, from, to)).status, 204);
+            await verifyMove(from, to);
+          }
+        }
+        console.log(
+          "::notice::Pterodactyl rename and move matched 204, source removal and destination bytes through real Wings",
         );
         const deleteKey = await issueKey(ownerSession, false, false, false, {
           clientDeleteFile: true,
