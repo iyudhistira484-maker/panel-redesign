@@ -60,11 +60,24 @@ export function registeredWorkload(
   installed: Parameters<typeof lifecycleFixture>[0],
   server: NonNullable<Parameters<typeof lifecycleFixture>[1]>,
 ) {
-  return compileReviewedProfile(
+  const profileConfig = compileReviewedProfile(
     profile.document,
     installed,
     server,
     profile.overrides,
     profile.resources,
   );
+  if (profile.file === "egg-gitea.ptdl") {
+    return {
+      ...profileConfig,
+      install: {
+        ...profileConfig.install,
+        script: readFileSync(
+          new URL("./upstream/install-gitea-staging.sh", import.meta.url),
+          "utf8",
+        ),
+      },
+    };
+  }
+  return profileConfig;
 }
