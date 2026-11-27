@@ -417,6 +417,43 @@ export class WingsClient {
       throw error;
     }
   }
+  async copyFixtureWithSuffix(id: string, source: string, original: Buffer) {
+    if (
+      !fixturePathSegment(source) ||
+      !source.endsWith(".txt") ||
+      source.length > 72
+    )
+      throw new WingsUnavailable("payload");
+    const root = "/fixture-docs",
+      segments = ["fixture-docs"];
+    const rows = await this.#fixtureEntries(id, root);
+    const before = new Set(rows.map((entry) => entry.name));
+    const candidates = Array.from(
+      { length: 51 },
+      (_, i) => `${source.slice(0, -4)} copy${i ? ` ${i}` : ""}.txt`,
+    );
+    if (!candidates.some((name) => !before.has(name)))
+      throw new WingsUnavailable("payload");
+    const response = await this.#send(
+      `${this.#server(id)}/files/copy`,
+      204,
+      "POST",
+      { location: `${root}/${source}` },
+    );
+    await response.body?.cancel();
+    const after = await this.#fixtureEntries(id, root);
+    const newCopies = after.filter(
+      (entry) => !before.has(entry.name) && candidates.includes(entry.name),
+    );
+    if (newCopies.length !== 1) throw new WingsUnavailable("payload");
+    const name = newCopies[0].name as string;
+    if (
+      !(await this.fixtureDownload(id, segments, name)).equals(original) ||
+      !(await this.fixtureDownload(id, segments, source)).equals(original)
+    )
+      throw new WingsUnavailable("payload");
+    return name;
+  }
   async loadFixtureTar(id: string, name: string) {
     if (
       !/^archive-[A-Za-z0-9+_-]+\.tar\.gz$/.test(name) ||

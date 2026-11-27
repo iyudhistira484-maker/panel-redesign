@@ -19,6 +19,7 @@ type Entry = {
   modified_at: unknown;
 };
 export type FileBinding = {
+  copy(id: string, actor: Actor, source: string): Promise<void>;
   pull(id: string, actor: Actor, url: string, name: string): Promise<void>;
   archiveDownloadAllowed(id: string, actor: Actor): Promise<boolean>;
   readArchive(id: string, name: string): Promise<Buffer>;
@@ -593,6 +594,40 @@ export function registerClientFiles(
         return failure(reply, 400);
       try {
         await binding.pull(server.id, actor, url, filename);
+        return reply.code(204).send();
+      } catch (error) {
+        return textError(error, reply);
+      }
+    },
+  );
+  app.post<{ Params: { identifier: string }; Body: { location?: unknown } }>(
+    "/api/client/servers/:identifier/files/copy",
+    {
+      bodyLimit: 1024,
+      config: { rateLimit: { max: 8, timeWindow: "1 minute" } },
+    },
+    async (req, reply) => {
+      const actor = await authenticate(req.headers.authorization ?? "");
+      if (!actor) return failure(reply, 401);
+      const server = await resolve(req.params.identifier, actor.id);
+      if (!server) return failure(reply, 404);
+      if (!binding) return failure(reply, 503);
+      const { location } = req.body ?? {};
+      if (
+        Object.keys(req.body ?? {}).length !== 1 ||
+        typeof location !== "string" ||
+        !location.startsWith("/fixture-docs/")
+      )
+        return failure(reply, 400);
+      const name = location.slice("/fixture-docs/".length);
+      if (
+        name.length > 72 ||
+        !fixturePathSegment(name) ||
+        !name.endsWith(".txt")
+      )
+        return failure(reply, 400);
+      try {
+        await binding.copy(server.id, actor, name);
         return reply.code(204).send();
       } catch (error) {
         return textError(error, reply);

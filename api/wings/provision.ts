@@ -391,7 +391,8 @@ export function createProvisioner(
       | "compress"
       | "decompress"
       | "download"
-      | "pull",
+      | "pull"
+      | "copy",
     db: Executor = pool,
     lock = false,
   ) {
@@ -410,7 +411,7 @@ export function createProvisioner(
       (
         await rows(
           db,
-          `SELECT id FROM api_keys WHERE id=? AND user_id=? AND ${{ upload: "client_upload_file", delete: "client_delete_file", chmod: "client_chmod_file", rename: "client_rename_file", compress: "client_compress_file", decompress: "client_decompress_file", download: "client_download", pull: "client_pull_file" }[scope]}=TRUE AND expires_at>UTC_TIMESTAMP(3)`,
+          `SELECT id FROM api_keys WHERE id=? AND user_id=? AND ${{ upload: "client_upload_file", delete: "client_delete_file", chmod: "client_chmod_file", rename: "client_rename_file", compress: "client_compress_file", decompress: "client_decompress_file", download: "client_download", pull: "client_pull_file", copy: "client_copy_file" }[scope]}=TRUE AND expires_at>UTC_TIMESTAMP(3)`,
           [actor.keyId, actor.id],
         )
       ).length === 1
@@ -1029,6 +1030,54 @@ export function createProvisioner(
     renameFixture,
     editFixtureText,
     compatFiles: {
+      async copy(id: string, actor: Actor, source: string) {
+        return exclusive(id, async () => {
+          const authorize = async () => {
+            if (!(await ownerFileScope(id, actor, "copy")))
+              throw new ProvisionError(403, "copy_scope_required");
+          };
+          await authorize();
+          try {
+            if ((await client.state(id)) !== "offline")
+              throw new ProvisionError(409, "server_not_offline");
+            const [receipt] = await rows<{ digest: string }>(
+              pool,
+              "SELECT digest FROM client_uploaded_files WHERE server_id=? AND name=?",
+              [id, source],
+            );
+            if (!receipt) throw new ProvisionError(404, "upload_not_found");
+            const original = await client.fixtureDownload(
+              id,
+              ["fixture-docs"],
+              source,
+            );
+            if (
+              createHash("sha256").update(original).digest("hex") !==
+              receipt.digest
+            )
+              throw new ProvisionError(409, "uploaded_file_changed");
+            await authorize();
+            await pool.execute(
+              "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'wings.compat_fixture_file_copy_requested',?)",
+              [actor.id, id],
+            );
+            const name = await client.copyFixtureWithSuffix(
+              id,
+              source,
+              original,
+            );
+            await pool.execute(
+              "INSERT INTO client_uploaded_files (server_id,name,digest) VALUES (?,?,?) ON DUPLICATE KEY UPDATE digest=VALUES(digest)",
+              [id, name, receipt.digest],
+            );
+          } catch (error) {
+            if (error instanceof WingsUnavailable)
+              throw new ProvisionError(502, "copy_unverified");
+            throw error;
+          }
+        });
+      },
+
       async pull(id: string, actor: Actor, url: string, name: string) {
         return exclusive(id, async () => {
           const authorize = async () => {

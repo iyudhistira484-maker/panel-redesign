@@ -1303,6 +1303,7 @@ async function main() {
           clientCompressFile?: boolean;
           clientDecompressFile?: boolean;
           clientPullFile?: boolean;
+          clientCopyFile?: boolean;
         } = {},
       ) {
         const key = `rly_${randomBytes(32).toString("base64url")}`;
@@ -5207,6 +5208,7 @@ async function main() {
           clientCompressFile: true,
           clientDecompressFile: true,
           clientPullFile: true,
+          clientCopyFile: true,
         });
         const chmod = (
           base: string,
@@ -5542,6 +5544,59 @@ async function main() {
         );
         console.log(
           "::notice::Fixed-source pull verified exact bytes, no redirect, chunked size bound, scope and duplicate rejection",
+        );
+        const copy = (base: string, key: string, location: string) =>
+          fetch(`${base}/api/client/servers/${identifier}/files/copy`, {
+            method: "POST",
+            headers: { ...auth(key), "content-type": "application/json" },
+            body: JSON.stringify({ location }),
+          });
+        assert.equal(
+          (await copy(relayBase, editKey, `${directory}/${relayName}`)).status,
+          403,
+        );
+        assert.equal(
+          (await copy(relayBase, chmodKey, `${directory}/../escaped.txt`))
+            .status,
+          400,
+        );
+        assert.equal(
+          (await copy(relayBase, chmodKey, `${directory}/${legacyName}`))
+            .status,
+          404,
+        );
+        for (const [base, key, name] of [
+          [legacyBase, legacyKey, legacyName],
+          [relayBase, chmodKey, relayName],
+        ]) {
+          for (const suffix of [" copy", " copy 1"]) {
+            const result = await copy(base, key, `${directory}/${name}`);
+            assert.equal(result.status, 204);
+            const target = `${name.slice(0, -4)}${suffix}.txt`;
+            assert.deepEqual(
+              await wingClient.fixtureDownload(uuid, ["fixture-docs"], target),
+              uploaded,
+            );
+            if (base === relayBase) {
+              const [receipt] = await rows<{ digest: string }>(
+                pool,
+                "SELECT digest FROM client_uploaded_files WHERE server_id=? AND name=?",
+                [uuid, target],
+              );
+              assert.equal(
+                receipt?.digest,
+                createHash("sha256").update(uploaded).digest("hex"),
+              );
+            }
+          }
+          for (const file of [name, `${name.slice(0, -4)} copy.txt`])
+            assert.deepEqual(
+              await wingClient.fixtureDownload(uuid, ["fixture-docs"], file),
+              uploaded,
+            );
+        }
+        console.log(
+          "::notice::Pterodactyl copy matched 204, automatic numbered suffixes and source/copy bytes on Wings",
         );
         const deleteKey = await issueKey(ownerSession, false, false, false, {
           clientDeleteFile: true,
