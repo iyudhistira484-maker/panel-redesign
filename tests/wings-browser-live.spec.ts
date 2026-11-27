@@ -399,14 +399,30 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       },
     ]);
     const moveBack = (target: string) =>
-      page
-        .context()
-        .request.post(renameApi, {
-          headers: editHeaders,
-          data: { source: moveTarget, target, destination: "parent" },
-        });
+      page.context().request.post(renameApi, {
+        headers: editHeaders,
+        data: { source: moveTarget, target, destination: "parent" },
+      });
     expect((await moveBack(uploadName)).status()).toBe(409);
-    const returned = await moveBack(moveTarget);
+    await files.getByRole("button", { name: "moved", exact: true }).click();
+    await files.getByRole("button", { name: moveTarget, exact: true }).click();
+    const returnedResponse = page.waitForResponse(
+      (response) => response.url() === renameApi,
+    );
+    await page
+      .getByRole("button", { name: "Pindahkan kembali ke fixture-docs" })
+      .click();
+    const returned = await returnedResponse;
+    await expect(
+      page.getByText("Pemindahan terverifikasi.", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      files.getByRole("button", { name: moveTarget, exact: true }),
+    ).toHaveCount(0);
+    await page.getByRole("button", { name: "Folder induk" }).click();
+    await expect(
+      files.getByRole("button", { name: moveTarget, exact: true }),
+    ).toBeVisible();
     expect(returned.status()).toBe(200);
     expect(await returned.json()).toMatchObject({
       name: moveTarget,

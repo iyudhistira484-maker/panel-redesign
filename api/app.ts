@@ -1524,7 +1524,7 @@ export async function createApp({
       Querystring: { directory?: string; preview?: string; download?: string };
     }>(
       "/api/v1/servers/:id/files",
-      { config: { rateLimit: { max: 15, timeWindow: "1 minute" } } },
+      { config: { rateLimit: { max: 18, timeWindow: "1 minute" } } },
       async (req, reply) => {
         reply.header("cache-control", "no-store");
         const principal = await actor(
