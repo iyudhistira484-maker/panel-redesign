@@ -267,7 +267,9 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       })
     ).status(),
   ).toBe(409);
-  await page.getByLabel("File sumber").selectOption(uploadName);
+  await page
+    .getByRole("combobox", { name: /^File sumber/ })
+    .selectOption(uploadName);
   await page.getByLabel("Nama / jalur").fill(copyName);
   const copied = page.waitForResponse((response) => response.url() === copyApi);
   await page.getByRole("button", { name: "Salin file" }).click();
@@ -302,7 +304,9 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   expect((await requestRename(copyName, "../rename-escape.txt")).status()).toBe(
     400,
   );
-  await page.getByLabel("File sumber").selectOption(copyName);
+  await page
+    .getByRole("combobox", { name: /^File sumber/ })
+    .selectOption(copyName);
   await page.getByLabel("Nama / jalur").fill(renamed);
   const renameReply = page.waitForResponse(
     (response) => response.url() === renameApi,
@@ -387,7 +391,9 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       })
     ).status(),
   ).toBe(400);
-  await page.getByLabel("File sumber").selectOption(renamed);
+  await page
+    .getByRole("combobox", { name: /^File sumber/ })
+    .selectOption(renamed);
   await page.getByLabel("Nama / jalur").fill(moveTarget);
   await page.getByLabel("Folder tujuan").selectOption(moveFolder);
   const moveReply = page.waitForResponse(
@@ -517,7 +523,9 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   console.log(
     "::notice::Chromium fixture move verified destination bytes, source absence and relocated receipt",
   );
-  await page.getByLabel("File sumber").selectOption(uploadName);
+  await page
+    .getByRole("combobox", { name: /^File sumber/ })
+    .selectOption(uploadName);
   expect((await chmod(uploadName, "777")).status()).toBe(400);
   expect((await chmod("../browser-upload.txt", "600")).status()).toBe(400);
   expect((await chmod("example.txt", "600")).status()).toBe(404);
@@ -762,7 +770,9 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   );
   expect(storedBinary.stdout).toEqual(binaryBytes);
   const binaryCopy = "browser-copy.bin";
-  await page.getByLabel("File sumber").selectOption(binaryName);
+  await page
+    .getByRole("combobox", { name: /^File sumber/ })
+    .selectOption(binaryName);
   await page.getByLabel("Nama / jalur").fill(binaryCopy);
   const copiedBinary = page.waitForResponse(
     (response) => response.url() === copyApi,
@@ -773,7 +783,9 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     files.getByRole("button", { name: `Unduh ${binaryCopy}` }),
   ).toBeVisible();
   expect((await requestCopy(binaryName, binaryCopy)).status()).toBe(409);
-  await page.getByLabel("File sumber").selectOption(binaryCopy);
+  await page
+    .getByRole("combobox", { name: /^File sumber/ })
+    .selectOption(binaryCopy);
   await page.getByLabel("Nama / jalur").fill(binaryCopy);
   await page.getByLabel("Folder tujuan").selectOption("review");
   const movedBinary = page.waitForResponse(
