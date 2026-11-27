@@ -416,6 +416,48 @@ export class WingsClient {
       throw error;
     }
   }
+  async compressFixture(id: string, files: string[]) {
+    if (
+      !files.length ||
+      files.length > 4 ||
+      !files.every((name) => fixturePathSegment(name) && name.endsWith(".txt"))
+    )
+      throw new WingsUnavailable("payload");
+    const response = await this.#send(
+      `${this.#server(id)}/files/compress`,
+      200,
+      "POST",
+      { root: "/fixture-docs", files },
+    );
+    let result: Record<string, unknown>;
+    try {
+      result = JSON.parse((await this.#read(response, 4096)).toString("utf8"));
+    } catch {
+      throw new WingsUnavailable("payload");
+    }
+    if (
+      !result ||
+      typeof result.name !== "string" ||
+      !/^archive-[A-Za-z0-9+_-]+\.tar\.gz$/.test(result.name) ||
+      result.file !== true ||
+      result.symlink !== false ||
+      !Number.isSafeInteger(result.size) ||
+      typeof result.size !== "number" ||
+      result.size < 1 ||
+      result.size > 80000
+    )
+      throw new WingsUnavailable("payload");
+    return {
+      name: result.name,
+      size: result.size,
+      mode: result.mode,
+      mode_bits: result.mode_bits,
+      created_at: result.created,
+      modified_at: result.modified,
+      mimetype: "application/tar+gzip",
+      directory: false,
+    };
+  }
   async chmodFixture(id: string, name: string, mode: "600" | "644") {
     if (
       !fixturePathSegment(name) ||

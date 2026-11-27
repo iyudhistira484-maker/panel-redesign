@@ -372,7 +372,7 @@ export function createProvisioner(
   async function ownerFileScope(
     id: string,
     actor: Actor,
-    scope: "upload" | "delete" | "chmod" | "rename",
+    scope: "upload" | "delete" | "chmod" | "rename" | "compress",
     db: Executor = pool,
     lock = false,
   ) {
@@ -391,7 +391,7 @@ export function createProvisioner(
       (
         await rows(
           db,
-          `SELECT id FROM api_keys WHERE id=? AND user_id=? AND ${{ upload: "client_upload_file", delete: "client_delete_file", chmod: "client_chmod_file", rename: "client_rename_file" }[scope]}=TRUE AND expires_at>UTC_TIMESTAMP(3)`,
+          `SELECT id FROM api_keys WHERE id=? AND user_id=? AND ${{ upload: "client_upload_file", delete: "client_delete_file", chmod: "client_chmod_file", rename: "client_rename_file", compress: "client_compress_file" }[scope]}=TRUE AND expires_at>UTC_TIMESTAMP(3)`,
           [actor.keyId, actor.id],
         )
       ).length === 1
@@ -1000,6 +1000,46 @@ export function createProvisioner(
     renameFixture,
     editFixtureText,
     compatFiles: {
+      async compress(id: string, actor: Actor, files: string[]) {
+        return exclusive(id, async () => {
+          if (!(await ownerFileScope(id, actor, "compress")))
+            throw new ProvisionError(403, "compress_scope_required");
+          try {
+            if ((await client.state(id)) !== "offline")
+              throw new ProvisionError(409, "server_not_offline");
+            for (const name of files) {
+              const [receipt] = await rows<{ digest: string }>(
+                pool,
+                "SELECT digest FROM client_uploaded_files WHERE server_id=? AND name=?",
+                [id, name],
+              );
+              if (!receipt) throw new ProvisionError(404, "upload_not_found");
+              const bytes = await client.fixtureDownload(
+                id,
+                ["fixture-docs"],
+                name,
+              );
+              if (
+                createHash("sha256").update(bytes).digest("hex") !==
+                receipt.digest
+              )
+                throw new ProvisionError(409, "uploaded_file_changed");
+            }
+            if (!(await ownerFileScope(id, actor, "compress")))
+              throw new ProvisionError(403, "compress_scope_required");
+            await pool.execute(
+              "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'wings.fixture_file_compress_requested',?)",
+              [actor.id, id],
+            );
+            return await client.compressFixture(id, files);
+          } catch (error) {
+            if (error instanceof WingsUnavailable)
+              throw new ProvisionError(502, "file_compress_unverified");
+            throw error;
+          }
+        });
+      },
+
       rename: (
         id: string,
         actor: Actor,

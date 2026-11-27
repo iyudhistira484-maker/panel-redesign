@@ -19,6 +19,7 @@ type Entry = {
   modified_at: unknown;
 };
 export type FileBinding = {
+  compress(id: string, actor: Actor, files: string[]): Promise<Entry>;
   rename(
     id: string,
     actor: Actor,
@@ -430,6 +431,58 @@ export function registerClientFiles(
           from.folder,
         );
         return reply.code(204).send();
+      } catch (error) {
+        return textError(error, reply);
+      }
+    },
+  );
+  app.post<{
+    Params: { identifier: string };
+    Body: { root?: unknown; files?: unknown };
+  }>(
+    "/api/client/servers/:identifier/files/compress",
+    {
+      bodyLimit: 1024,
+      config: { rateLimit: { max: 8, timeWindow: "1 minute" } },
+    },
+    async (req, reply) => {
+      const actor = await authenticate(req.headers.authorization ?? "");
+      if (!actor) return failure(reply, 401);
+      const server = await resolve(req.params.identifier, actor.id);
+      if (!server) return failure(reply, 404);
+      if (!binding) return failure(reply, 503);
+      const { root, files } = req.body ?? {};
+      if (
+        root !== "/fixture-docs" ||
+        Object.keys(req.body ?? {}).length !== 2 ||
+        !Array.isArray(files) ||
+        !files.length ||
+        files.length > 4 ||
+        new Set(files).size !== files.length ||
+        !files.every(
+          (name) =>
+            typeof name === "string" &&
+            fixturePathSegment(name) &&
+            name.endsWith(".txt"),
+        )
+      )
+        return failure(reply, 400);
+      try {
+        const entry = await binding.compress(server.id, actor, files);
+        return {
+          object: "file_object",
+          attributes: {
+            name: entry.name,
+            size: entry.size,
+            mode: entry.mode,
+            mode_bits: entry.mode_bits,
+            is_file: true,
+            is_symlink: false,
+            mimetype: entry.mimetype,
+            created_at: atom(entry.created_at),
+            modified_at: atom(entry.modified_at),
+          },
+        };
       } catch (error) {
         return textError(error, reply);
       }

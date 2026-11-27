@@ -1262,6 +1262,7 @@ async function main() {
           clientDeleteFile?: boolean;
           clientChmodFile?: boolean;
           clientRenameFile?: boolean;
+          clientCompressFile?: boolean;
         } = {},
       ) {
         const key = `rly_${randomBytes(32).toString("base64url")}`;
@@ -5159,6 +5160,7 @@ async function main() {
         const chmodKey = await issueKey(ownerSession, false, false, false, {
           clientChmodFile: true,
           clientRenameFile: true,
+          clientCompressFile: true,
         });
         const chmod = (
           base: string,
@@ -5275,6 +5277,72 @@ async function main() {
         }
         console.log(
           "::notice::Pterodactyl rename and move matched 204, source removal and destination bytes through real Wings",
+        );
+        const compress = (base: string, key: string, files: string[]) =>
+          fetch(`${base}/api/client/servers/${identifier}/files/compress`, {
+            method: "POST",
+            headers: { ...auth(key), "content-type": "application/json" },
+            body: JSON.stringify({ root: directory, files }),
+          });
+        assert.equal(
+          (await compress(relayBase, editKey, [relayName])).status,
+          403,
+        );
+        assert.equal(
+          (await compress(relayBase, chmodKey, ["../example.txt"])).status,
+          400,
+        );
+        assert.equal(
+          (await compress(relayBase, chmodKey, [relayName, relayName])).status,
+          400,
+        );
+        assert.equal(
+          (await compress(relayBase, chmodKey, [legacyName])).status,
+          404,
+        );
+        const archiveRoot = process.env.RELAY_WINGS_CONTRACT_DATA;
+        assert.ok(archiveRoot);
+        for (const [base, key, name] of [
+          [legacyBase, legacyKey, legacyName],
+          [relayBase, chmodKey, relayName],
+        ]) {
+          const response = await compress(base, key, [name]);
+          assert.equal(response.status, 200);
+          const archive = (await response.json()) as {
+            object: string;
+            attributes: {
+              name: string;
+              mimetype: string;
+              size: number;
+              is_file: boolean;
+              is_symlink: boolean;
+            };
+          };
+          assert.equal(archive.object, "file_object");
+          assert.match(
+            archive.attributes.name,
+            /^archive-[A-Za-z0-9+_-]+\.tar\.gz$/,
+          );
+          assert.equal(archive.attributes.mimetype, "application/tar+gzip");
+          assert.equal(archive.attributes.is_file, true);
+          assert.equal(archive.attributes.is_symlink, false);
+          assert.ok(archive.attributes.size > 0);
+          const path: string = `${archiveRoot}/${uuid}/fixture-docs/${archive.attributes.name}`;
+          const args = ["exec", "relay-wings-contract", "tar"];
+          const listing = await docker("docker", [...args, "-tzf", path], {
+            timeout: 5000,
+          });
+          const member: string = listing.stdout.trim();
+          assert.equal(member, `fixture-docs/${name}`);
+          const actual = await docker(
+            "docker",
+            [...args, "-xOzf", path, member],
+            { encoding: "buffer", timeout: 5000 },
+          );
+          assert.deepEqual(actual.stdout, uploaded);
+        }
+        console.log(
+          "::notice::Pterodactyl compress matched file_object response and real tar.gz member bytes",
         );
         const deleteKey = await issueKey(ownerSession, false, false, false, {
           clientDeleteFile: true,
