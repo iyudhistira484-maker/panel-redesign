@@ -5333,7 +5333,7 @@ async function main() {
             timeout: 5000,
           });
           const member: string = listing.stdout.trim();
-          assert.equal(member, `fixture-docs/${name}`);
+          assert.equal(member, name);
           const actual = await docker(
             "docker",
             [...args, "-xOzf", path, member],
