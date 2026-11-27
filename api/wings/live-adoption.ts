@@ -1263,6 +1263,7 @@ async function main() {
           clientChmodFile?: boolean;
           clientRenameFile?: boolean;
           clientCompressFile?: boolean;
+          clientDecompressFile?: boolean;
         } = {},
       ) {
         const key = `rly_${randomBytes(32).toString("base64url")}`;
@@ -5161,6 +5162,7 @@ async function main() {
           clientChmodFile: true,
           clientRenameFile: true,
           clientCompressFile: true,
+          clientDecompressFile: true,
         });
         const chmod = (
           base: string,
@@ -5300,6 +5302,12 @@ async function main() {
           (await compress(relayBase, chmodKey, [legacyName])).status,
           404,
         );
+        const decompress = (base: string, key: string, file: string) =>
+          fetch(`${base}/api/client/servers/${identifier}/files/decompress`, {
+            method: "POST",
+            headers: { ...auth(key), "content-type": "application/json" },
+            body: JSON.stringify({ root: directory, file }),
+          });
         const archiveRoot = process.env.RELAY_WINGS_CONTRACT_DATA;
         assert.ok(archiveRoot);
         for (const [base, key, name] of [
@@ -5340,9 +5348,52 @@ async function main() {
             { encoding: "buffer", timeout: 5000 },
           );
           assert.deepEqual(actual.stdout, uploaded);
+          if (base === relayBase) {
+            assert.equal(
+              (await decompress(base, editKey, archive.attributes.name)).status,
+              403,
+            );
+            assert.equal(
+              (await decompress(base, chmodKey, "../archive-invalid.tar.gz"))
+                .status,
+              400,
+            );
+            const invalid = "archive-invalid.tar.gz";
+            await wingClient.uploadFixtureText(uuid, invalid, "not an archive");
+            const before = await wingClient.fixtureDirectory(uuid, [
+              "fixture-docs",
+            ]);
+            assert.equal(
+              (await decompress(base, chmodKey, invalid)).status,
+              400,
+            );
+            assert.deepEqual(
+              await wingClient.fixtureDirectory(uuid, ["fixture-docs"]),
+              before,
+            );
+          }
+          const unpacked = await decompress(base, key, archive.attributes.name);
+          assert.equal(unpacked.status, 204);
+          if (base === relayBase) {
+            const folder =
+              unpacked.headers.get("x-relay-extracted-directory") ?? "";
+            assert.match(folder, /^\/fixture-docs\/extract-[a-f0-9]{32}$/);
+            assert.deepEqual(
+              await wingClient.fixtureDownload(
+                uuid,
+                folder.slice(1).split("/"),
+                name,
+              ),
+              uploaded,
+            );
+            assert.deepEqual(
+              await wingClient.fixtureDownload(uuid, ["fixture-docs"], name),
+              uploaded,
+            );
+          }
         }
         console.log(
-          "::notice::Pterodactyl compress matched file_object response and real tar.gz member bytes",
+          "::notice::Pterodactyl tar.gz compress and decompress verified with real Wings; Relay uses a fresh destination",
         );
         const deleteKey = await issueKey(ownerSession, false, false, false, {
           clientDeleteFile: true,

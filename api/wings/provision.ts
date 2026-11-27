@@ -1,3 +1,4 @@
+import { extractFixtureTar } from "./fixture-tar";
 import { extractFixtureZip, fixtureZipLimits } from "./fixture-zip";
 import { extractFixtureText } from "./fixture-gzip";
 import { lockFreeAllocation } from "../catalog/transfer";
@@ -372,7 +373,7 @@ export function createProvisioner(
   async function ownerFileScope(
     id: string,
     actor: Actor,
-    scope: "upload" | "delete" | "chmod" | "rename" | "compress",
+    scope: "upload" | "delete" | "chmod" | "rename" | "compress" | "decompress",
     db: Executor = pool,
     lock = false,
   ) {
@@ -391,7 +392,7 @@ export function createProvisioner(
       (
         await rows(
           db,
-          `SELECT id FROM api_keys WHERE id=? AND user_id=? AND ${{ upload: "client_upload_file", delete: "client_delete_file", chmod: "client_chmod_file", rename: "client_rename_file", compress: "client_compress_file" }[scope]}=TRUE AND expires_at>UTC_TIMESTAMP(3)`,
+          `SELECT id FROM api_keys WHERE id=? AND user_id=? AND ${{ upload: "client_upload_file", delete: "client_delete_file", chmod: "client_chmod_file", rename: "client_rename_file", compress: "client_compress_file", decompress: "client_decompress_file" }[scope]}=TRUE AND expires_at>UTC_TIMESTAMP(3)`,
           [actor.keyId, actor.id],
         )
       ).length === 1
@@ -589,6 +590,52 @@ export function createProvisioner(
         throw error;
       }
     });
+  }
+
+  async function publishArchive(
+    id: string,
+    actor: Actor,
+    entries: Awaited<ReturnType<typeof extractFixtureZip>>,
+    event: string,
+  ) {
+    const suffix = randomBytes(16).toString("hex");
+    await pool.execute(
+      "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,?,?)",
+      [actor.id, event, id],
+    );
+    const manifest = entries.map(({ name, bytes }) => ({
+      name,
+      digest: createHash("sha256").update(bytes).digest("hex"),
+    }));
+    await pool.execute(
+      "INSERT IGNORE INTO fixture_zip_operations (server_id,operation_id,status,manifest) VALUES (?,?,'retryable',?)",
+      [id, suffix, JSON.stringify(manifest)],
+    );
+    const [claim] = await pool.execute<
+      import("mysql2/promise").ResultSetHeader
+    >(
+      "UPDATE fixture_zip_operations SET operation_id=?,status='pending',manifest=? WHERE server_id=? AND status<>'pending'",
+      [suffix, JSON.stringify(manifest), id],
+    );
+    if (claim.affectedRows !== 1)
+      throw new ProvisionError(409, "zip_reconciliation_required");
+    try {
+      const directory = await client.publishFixtureZip(id, suffix, entries);
+      await pool.execute(
+        "UPDATE fixture_zip_operations SET status='succeeded' WHERE server_id=? AND operation_id=?",
+        [id, suffix],
+      );
+      return {
+        status: "succeeded",
+        operationId: suffix,
+        directory,
+        count: entries.length,
+      };
+    } catch (error) {
+      if (error instanceof WingsUnavailable)
+        return { status: "pending", operationId: suffix };
+      throw error;
+    }
   }
 
   return {
@@ -895,48 +942,12 @@ export function createProvisioner(
           if ((await client.state(id)) !== "offline")
             throw new ProvisionError(409, "server_not_offline");
           await authorize();
-          const suffix = randomBytes(16).toString("hex");
-          await pool.execute(
-            "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'wings.fixture_zip_extract_requested',?)",
-            [actor.id, id],
+          return await publishArchive(
+            id,
+            actor,
+            entries,
+            "wings.fixture_zip_extract_requested",
           );
-          const manifest = entries.map(({ name, bytes }) => ({
-            name,
-            digest: createHash("sha256").update(bytes).digest("hex"),
-          }));
-          await pool.execute(
-            "INSERT IGNORE INTO fixture_zip_operations (server_id,operation_id,status,manifest) VALUES (?,?,'retryable',?)",
-            [id, suffix, JSON.stringify(manifest)],
-          );
-          const [claim] = await pool.execute<
-            import("mysql2/promise").ResultSetHeader
-          >(
-            "UPDATE fixture_zip_operations SET operation_id=?,status='pending',manifest=? WHERE server_id=? AND status<>'pending'",
-            [suffix, JSON.stringify(manifest), id],
-          );
-          if (claim.affectedRows !== 1)
-            throw new ProvisionError(409, "zip_reconciliation_required");
-          try {
-            const directory = await client.publishFixtureZip(
-              id,
-              suffix,
-              entries,
-            );
-            await pool.execute(
-              "UPDATE fixture_zip_operations SET status='succeeded' WHERE server_id=? AND operation_id=?",
-              [id, suffix],
-            );
-            return {
-              status: "succeeded",
-              operationId: suffix,
-              directory,
-              count: entries.length,
-            };
-          } catch (error) {
-            if (error instanceof WingsUnavailable)
-              return { status: "pending", operationId: suffix };
-            throw error;
-          }
         } catch (error) {
           if (error instanceof WingsUnavailable)
             throw new ProvisionError(502, "zip_extract_unverified");
@@ -1000,6 +1011,42 @@ export function createProvisioner(
     renameFixture,
     editFixtureText,
     compatFiles: {
+      async decompress(id: string, actor: Actor, name: string) {
+        return exclusive(id, async () => {
+          const authorize = async () => {
+            if (!(await ownerFileScope(id, actor, "decompress")))
+              throw new ProvisionError(403, "decompress_scope_required");
+          };
+          await authorize();
+          try {
+            if ((await client.state(id)) !== "offline")
+              throw new ProvisionError(409, "server_not_offline");
+            const archive = await client.loadFixtureTar(id, name);
+            const entries = await extractFixtureTar(archive).catch(() => {
+              throw new ProvisionError(400, "invalid_fixture_tar");
+            });
+            await authorize();
+            return await publishArchive(
+              id,
+              actor,
+              entries,
+              "wings.fixture_tar_extract_requested",
+            );
+          } catch (error) {
+            if (error instanceof WingsUnavailable)
+              throw new ProvisionError(
+                error.reason === "not_found"
+                  ? 404
+                  : error.reason === "payload"
+                    ? 400
+                    : 502,
+                "archive_unavailable",
+              );
+            throw error;
+          }
+        });
+      },
+
       async compress(id: string, actor: Actor, files: string[]) {
         return exclusive(id, async () => {
           if (!(await ownerFileScope(id, actor, "compress")))

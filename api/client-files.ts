@@ -19,6 +19,11 @@ type Entry = {
   modified_at: unknown;
 };
 export type FileBinding = {
+  decompress(
+    id: string,
+    actor: Actor,
+    file: string,
+  ): Promise<{ status: string; operationId: string; directory?: string }>;
   compress(id: string, actor: Actor, files: string[]): Promise<Entry>;
   rename(
     id: string,
@@ -483,6 +488,44 @@ export function registerClientFiles(
             modified_at: atom(entry.modified_at),
           },
         };
+      } catch (error) {
+        return textError(error, reply);
+      }
+    },
+  );
+  app.post<{
+    Params: { identifier: string };
+    Body: { root?: unknown; file?: unknown };
+  }>(
+    "/api/client/servers/:identifier/files/decompress",
+    {
+      bodyLimit: 1024,
+      config: { rateLimit: { max: 8, timeWindow: "1 minute" } },
+    },
+    async (req, reply) => {
+      const actor = await authenticate(req.headers.authorization ?? "");
+      if (!actor) return failure(reply, 401);
+      const server = await resolve(req.params.identifier, actor.id);
+      if (!server) return failure(reply, 404);
+      if (!binding) return failure(reply, 503);
+      const { root, file } = req.body ?? {};
+      if (
+        root !== "/fixture-docs" ||
+        Object.keys(req.body ?? {}).length !== 2 ||
+        typeof file !== "string" ||
+        !fixturePathSegment(file) ||
+        !/^archive-[A-Za-z0-9+_-]+\.tar\.gz$/.test(file)
+      )
+        return failure(reply, 400);
+      try {
+        const result = await binding.decompress(server.id, actor, file);
+        reply.header("x-relay-operation-id", result.operationId);
+        if (result.status !== "succeeded")
+          return reply.code(202).send({ status: result.status });
+        return reply
+          .header("x-relay-extracted-directory", result.directory)
+          .code(204)
+          .send();
       } catch (error) {
         return textError(error, reply);
       }

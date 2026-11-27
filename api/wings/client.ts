@@ -1,3 +1,4 @@
+import { fixtureTarLimit } from "./fixture-tar";
 export type FixtureSubfolder = "moved" | "review";
 export const fixturePathSegment = (value: string) =>
   /^[A-Za-z0-9_][A-Za-z0-9_. -]{0,79}$/.test(value) && !/[\r\n]/.test(value);
@@ -353,8 +354,8 @@ export class WingsClient {
       !/^[0-9a-f]{32}$/.test(suffix) ||
       !entries.length ||
       entries.length > 4 ||
-      !entries.every(({ name }) =>
-        /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}\.txt$/.test(name),
+      !entries.every(
+        ({ name }) => fixturePathSegment(name) && name.endsWith(".txt"),
       )
     )
       throw new WingsUnavailable("payload");
@@ -415,6 +416,26 @@ export class WingsClient {
       }
       throw error;
     }
+  }
+  async loadFixtureTar(id: string, name: string) {
+    if (
+      !/^archive-[A-Za-z0-9+_-]+\.tar\.gz$/.test(name) ||
+      !fixturePathSegment(name)
+    )
+      throw new WingsUnavailable("payload");
+    const entry = (await this.fixtureDirectory(id, ["fixture-docs"])).find(
+      (item) => item.name === name && !item.directory,
+    );
+    if (!entry) throw new WingsUnavailable("not_found");
+    if (entry.size < 1 || entry.size > fixtureTarLimit)
+      throw new WingsUnavailable("payload");
+    const response = await this.#send(
+      `${this.#server(id)}/files/contents?file=${encodeURIComponent(`/fixture-docs/${name}`)}&download=1`,
+      200,
+    );
+    const bytes = await this.#read(response, fixtureTarLimit);
+    if (bytes.length !== entry.size) throw new WingsUnavailable("payload");
+    return bytes;
   }
   async compressFixture(id: string, files: string[]) {
     if (

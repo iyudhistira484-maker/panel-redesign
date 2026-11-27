@@ -298,7 +298,9 @@ export async function createApp({
             req.routeOptions.url ===
               "/api/client/servers/:identifier/files/chmod" ||
             req.routeOptions.url ===
-              "/api/client/servers/:identifier/files/compress")) ||
+              "/api/client/servers/:identifier/files/compress" ||
+            req.routeOptions.url ===
+              "/api/client/servers/:identifier/files/decompress")) ||
           (req.method === "PUT" &&
             req.routeOptions.url ===
               "/api/client/servers/:identifier/files/rename")) &&
@@ -1024,6 +1026,7 @@ export async function createApp({
       clientChmodFile?: boolean;
       clientRenameFile?: boolean;
       clientCompressFile?: boolean;
+      clientDecompressFile?: boolean;
     };
   }>(
     "/api/v1/account/keys",
@@ -1045,6 +1048,7 @@ export async function createApp({
             clientChmodFile: { type: "boolean" },
             clientRenameFile: { type: "boolean" },
             clientCompressFile: { type: "boolean" },
+            clientDecompressFile: { type: "boolean" },
           },
           ["label", "key"],
         ),
@@ -1065,7 +1069,7 @@ export async function createApp({
         const digest = crypt.digest("api-key", `${req.body.key}.${suffix}`);
         try {
           await db.execute(
-            "INSERT INTO api_keys (id,user_id,digest,label,expires_at,client_power,client_console,client_stream,client_list_files,client_download,client_edit_file,client_upload_file,client_delete_file,client_chmod_file,client_rename_file,client_compress_file) VALUES (?,?,?,?,TIMESTAMPADD(DAY,90,UTC_TIMESTAMP(3)),?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO api_keys (id,user_id,digest,label,expires_at,client_power,client_console,client_stream,client_list_files,client_download,client_edit_file,client_upload_file,client_delete_file,client_chmod_file,client_rename_file,client_compress_file,client_decompress_file) VALUES (?,?,?,?,TIMESTAMPADD(DAY,90,UTC_TIMESTAMP(3)),?,?,?,?,?,?,?,?,?,?,?,?)",
             [
               id,
               u.id,
@@ -1082,6 +1086,7 @@ export async function createApp({
               req.body.clientChmodFile === true,
               req.body.clientRenameFile === true,
               req.body.clientCompressFile === true,
+              req.body.clientDecompressFile === true,
             ],
           );
         } catch (e) {
