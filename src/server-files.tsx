@@ -58,7 +58,6 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
       );
       if (!response.ok) throw new Error();
       const result = await response.json();
-      if (result.status === "succeeded") await load(["fixture-docs"]);
       setArchiveStatus(
         result.status === "succeeded"
           ? { kind: "done", directory: result.directory }
