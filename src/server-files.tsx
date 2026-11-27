@@ -35,13 +35,15 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
     | { kind: "done"; directory: string }
     | null
   >(null);
+  const [zipNames, setZipNames] = useState<string[]>([]);
   const archiveInput = useRef<HTMLInputElement>(null);
   async function extractArchive() {
     if (!archive || busy) return;
     setArchiveStatus(null);
+    const zip = archive.name.endsWith(".zip");
     if (
-      !archive.name.endsWith(".gz") ||
-      archive.size > 16512 ||
+      (!zip && !archive.name.endsWith(".gz")) ||
+      archive.size > (zip ? 70000 : 16512) ||
       archive.size === 0
     ) {
       setArchiveStatus({ kind: "invalid" });
@@ -51,7 +53,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
     try {
       const bytes = new Uint8Array(await archive.arrayBuffer());
       const reply = await fetch(
-        `/api/v1/servers/${encodeURIComponent(id)}/files/gunzip-fixture`,
+        `/api/v1/servers/${encodeURIComponent(id)}/files/${zip ? "unzip" : "gunzip"}-fixture`,
         {
           method: "POST",
           credentials: "same-origin",
@@ -78,13 +80,18 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
         directory: string;
         name: string;
         size: number;
+        count: number;
       };
       if (
         !/^\/fixture-docs\/extract-[0-9a-f]{32}$/.test(result.directory) ||
-        result.name !== "extracted.txt" ||
-        !Number.isSafeInteger(result.size) ||
-        result.size < 0 ||
-        result.size > 16384
+        (zip
+          ? !Number.isInteger(result.count) ||
+            result.count < 1 ||
+            result.count > 4
+          : result.name !== "extracted.txt" ||
+            !Number.isSafeInteger(result.size) ||
+            result.size < 0 ||
+            result.size > 16384)
       )
         throw new Error("Extraction unverified");
       const name = result.directory.slice("/fixture-docs/".length);
@@ -556,8 +563,8 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
         <div>
           <p>
             {en
-              ? "Gzip supports one UTF-8 text file up to 16 KiB. Extraction requires an offline server and creates a new folder."
-              : "Gzip mendukung satu file teks UTF-8 hingga 16 KiB. Ekstraksi membutuhkan server offline dan membuat folder baru."}
+              ? "Gzip supports one and ZIP up to four UTF-8 text files (16 KiB each). Extraction requires an offline server and creates a new folder."
+              : "Gzip mendukung satu dan ZIP hingga empat file teks UTF-8 (masing-masing 16 KiB). Ekstraksi membutuhkan server offline dan membuat folder baru."}
           </p>
           <Button
             disabled={busy || !copySource}
@@ -566,11 +573,46 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
             {en ? "Download as gzip" : "Unduh sebagai gzip"}
           </Button>{" "}
           <label>
-            {en ? "Gzip file to extract" : "File gzip untuk diekstrak"}{" "}
+            {en ? "ZIP source files" : "File sumber ZIP"}{" "}
+            <select
+              multiple
+              size={3}
+              value={zipNames}
+              disabled={busy}
+              onChange={(event) =>
+                setZipNames(
+                  Array.from(
+                    event.currentTarget.selectedOptions,
+                    (option) => option.value,
+                  ),
+                )
+              }
+            >
+              {items
+                .filter(
+                  (item) =>
+                    !item.directory &&
+                    /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}\.txt$/.test(item.name),
+                )
+                .map((item) => (
+                  <option key={item.name}>{item.name}</option>
+                ))}
+            </select>
+          </label>{" "}
+          {zipNames.length > 0 && zipNames.length <= 4 && (
+            <a
+              href={`/api/v1/servers/${encodeURIComponent(id)}/files/zip-fixture?${new URLSearchParams({ names: zipNames.join(",") })}`}
+              download
+            >
+              {en ? "Download ZIP" : "Unduh ZIP"}
+            </a>
+          )}{" "}
+          <label>
+            {en ? "Archive to extract" : "Arsip untuk diekstrak"}{" "}
             <input
               ref={archiveInput}
               type="file"
-              accept=".gz,application/gzip"
+              accept=".gz,.zip,application/gzip,application/zip"
               disabled={busy}
               onChange={(event) => {
                 setArchive(event.currentTarget.files?.[0] ?? null);
@@ -582,18 +624,18 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
             disabled={busy || !archive}
             onClick={() => void extractArchive()}
           >
-            {en ? "Extract gzip to new folder" : "Ekstrak gzip ke folder baru"}
+            {en ? "Extract to new folder" : "Ekstrak ke folder baru"}
           </Button>
           {archiveStatus && (
             <output>
               {archiveStatus.kind === "done"
                 ? en
-                  ? `Extracted and verified: ${archiveStatus.directory}/extracted.txt`
-                  : `Ekstraksi terverifikasi: ${archiveStatus.directory}/extracted.txt`
+                  ? `Extracted and verified: ${archiveStatus.directory}`
+                  : `Ekstraksi terverifikasi: ${archiveStatus.directory}`
                 : archiveStatus.kind === "invalid"
                   ? en
-                    ? "Invalid gzip text file."
-                    : "File gzip teks tidak valid."
+                    ? "Invalid text archive."
+                    : "Arsip teks tidak valid."
                   : archiveStatus.kind === "rejected"
                     ? en
                       ? "Extraction requires an offline server."

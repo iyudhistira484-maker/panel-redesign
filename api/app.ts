@@ -1,3 +1,4 @@
+import { compressFixtureZip } from "./wings/fixture-zip";
 import { compressFixtureText } from "./wings/fixture-gzip";
 import {
   registerAppDatabase,
@@ -1568,6 +1569,107 @@ export async function createApp({
         }
       },
     );
+  if (provisioner) {
+    app.get<{ Params: { id: string }; Querystring: { names: string } }>(
+      "/api/v1/servers/:id/files/zip-fixture",
+      {
+        config: { rateLimit: { max: 8, timeWindow: "1 minute" } },
+        schema: {
+          querystring: object({ names: text(1, 271, "^[A-Za-z0-9_.,-]+$") }),
+        },
+      },
+      async (req, reply) => {
+        reply.header("cache-control", "no-store");
+        const principal = await actor(
+          req.cookies[sessionCookie],
+          req.headers.authorization,
+        );
+        if (!principal || principal.channel !== "session")
+          return reply.code(401).send({ error: "unauthenticated" });
+        if (!UUID_V4.test(req.params.id))
+          return reply.code(404).send({ error: "server_not_found" });
+        const names = req.query.names.split(",");
+        if (
+          names.length > 4 ||
+          new Set(names.map((name) => name.toLowerCase())).size !==
+            names.length ||
+          !names.every((name) =>
+            /^[A-Za-z0-9][A-Za-z0-9_-]{0,62}\.txt$/.test(name),
+          )
+        )
+          return reply.code(400).send({ error: "invalid_fixture_zip_names" });
+        try {
+          const entries = [];
+          for (const name of names) {
+            const bytes = await provisioner.files(
+              req.params.id,
+              principal,
+              "/fixture-docs",
+              name,
+              true,
+            );
+            if (!Buffer.isBuffer(bytes))
+              return reply
+                .code(502)
+                .send({ error: "zip_compression_unverified" });
+            entries.push({ name, bytes });
+          }
+          const output = await compressFixtureZip(entries).catch(() => null);
+          if (!output)
+            return reply
+              .code(400)
+              .send({ error: "invalid_fixture_zip_source" });
+          return reply
+            .type("application/zip")
+            .header(
+              "content-disposition",
+              'attachment; filename="fixture-docs.zip"',
+            )
+            .send(output);
+        } catch (error) {
+          if (error instanceof ProvisionError)
+            return reply.code(error.status).send({ error: error.code });
+          throw error;
+        }
+      },
+    );
+    app.post<{ Params: { id: string }; Body: { content: string } }>(
+      "/api/v1/servers/:id/files/unzip-fixture",
+      {
+        bodyLimit: 95000,
+        config: { rateLimit: { max: 8, timeWindow: "1 minute" } },
+        schema: {
+          body: object({ content: text(1, 93336, "^[A-Za-z0-9+/]*={0,2}$") }),
+        },
+      },
+      async (req, reply) => {
+        reply.header("cache-control", "no-store");
+        const principal = await actor(
+          req.cookies[sessionCookie],
+          req.headers.authorization,
+        );
+        if (!principal || principal.channel !== "session")
+          return reply.code(401).send({ error: "unauthenticated" });
+        if (!UUID_V4.test(req.params.id))
+          return reply.code(404).send({ error: "server_not_found" });
+        try {
+          return reply
+            .code(201)
+            .send(
+              await provisioner.extractZipFixture(
+                req.params.id,
+                principal,
+                req.body.content,
+              ),
+            );
+        } catch (error) {
+          if (error instanceof ProvisionError)
+            return reply.code(error.status).send({ error: error.code });
+          throw error;
+        }
+      },
+    );
+  }
   if (provisioner) {
     app.get<{ Params: { id: string }; Querystring: { name: string } }>(
       "/api/v1/servers/:id/files/gzip-fixture",

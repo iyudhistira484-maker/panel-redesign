@@ -281,6 +281,78 @@ export class WingsClient {
     );
     await written.body?.cancel();
   }
+  async publishFixtureZip(
+    id: string,
+    suffix: string,
+    entries: { name: string; bytes: Buffer }[],
+  ) {
+    if (
+      !/^[0-9a-f]{32}$/.test(suffix) ||
+      !entries.length ||
+      entries.length > 4 ||
+      !entries.every(({ name }) =>
+        /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}\.txt$/.test(name),
+      )
+    )
+      throw new WingsUnavailable("payload");
+    const pending = `zip-pending-${suffix}`,
+      destination = `extract-${suffix}`;
+    const root = "/fixture-docs",
+      files = `${this.#server(id)}/files`;
+    if (
+      (await this.fixtureUploadTargetExists(id, pending)) ||
+      (await this.fixtureUploadTargetExists(id, destination))
+    )
+      throw new WingsUnavailable("payload");
+    try {
+      await (
+        await this.#send(`${files}/create-directory`, 204, "POST", {
+          path: root,
+          name: pending,
+        })
+      ).body?.cancel();
+      for (const { name, bytes } of entries) {
+        await (
+          await this.#send(
+            `${files}/write?file=${encodeURIComponent(`${root}/${pending}/${name}`)}`,
+            204,
+            "POST",
+            bytes.toString("utf8"),
+          )
+        ).body?.cancel();
+        if (
+          !(
+            await this.fixtureDownload(id, ["fixture-docs", pending], name)
+          ).equals(bytes)
+        )
+          throw new WingsUnavailable("payload");
+      }
+      if (await this.fixtureUploadTargetExists(id, destination))
+        throw new WingsUnavailable("payload");
+      await (
+        await this.#send(`${files}/rename`, 204, "PUT", {
+          root,
+          files: [{ from: pending, to: destination }],
+        })
+      ).body?.cancel();
+      return `${root}/${destination}`;
+    } catch (error) {
+      // Never delete the published destination: a lost rename response may mean
+      // it already contains the complete archive. Clean up the pending name only.
+      try {
+        if (await this.fixtureUploadTargetExists(id, pending))
+          await (
+            await this.#send(`${files}/delete`, 204, "POST", {
+              root,
+              files: [pending],
+            })
+          ).body?.cancel();
+      } catch {
+        /* Outcome remains unverified; do not retry automatically. */
+      }
+      throw error;
+    }
+  }
   async renameUploadedFixture(
     id: string,
     source: string,

@@ -418,25 +418,19 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   const compressedPath = await compressed.path();
   assert.ok(compressedPath);
   const unpack = (content: string) =>
-    page
-      .context()
-      .request.post(`${fileApi}/gunzip-fixture`, {
-        headers: editHeaders,
-        data: { content },
-      });
-  await page
-    .getByLabel("File gzip untuk diekstrak")
-    .setInputFiles({
-      name: `${uploadName}.gz`,
-      mimeType: "application/gzip",
-      buffer: await readFile(compressedPath),
+    page.context().request.post(`${fileApi}/gunzip-fixture`, {
+      headers: editHeaders,
+      data: { content },
     });
+  await page.getByLabel("Arsip untuk diekstrak").setInputFiles({
+    name: `${uploadName}.gz`,
+    mimeType: "application/gzip",
+    buffer: await readFile(compressedPath),
+  });
   const extractResponse = page.waitForResponse(
     (response) => response.url() === `${fileApi}/gunzip-fixture`,
   );
-  await page
-    .getByRole("button", { name: "Ekstrak gzip ke folder baru" })
-    .click();
+  await page.getByRole("button", { name: "Ekstrak ke folder baru" }).click();
   const gzipResult = await extractResponse;
   expect(gzipResult.status()).toBe(201);
   await expect(
@@ -474,6 +468,62 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
         { timeout: 5000 },
       )
     ).stdout;
+  const zipNames = [uploadName, "example.txt"];
+  await page.getByLabel("File sumber ZIP").selectOption(zipNames);
+  const zipDownload = page.waitForEvent("download");
+  await page.getByRole("link", { name: "Unduh ZIP" }).click();
+  const archiveFile = await (await zipDownload).path();
+  assert.ok(archiveFile);
+  await page
+    .getByLabel("Arsip untuk diekstrak")
+    .setInputFiles({
+      name: "fixture-docs.zip",
+      mimeType: "application/zip",
+      buffer: await readFile(archiveFile),
+    });
+  const zipResponse = page.waitForResponse(
+    (response) => response.url() === `${fileApi}/unzip-fixture`,
+  );
+  await page.getByRole("button", { name: "Ekstrak ke folder baru" }).click();
+  const zipResult = await zipResponse;
+  expect(zipResult.status()).toBe(201);
+  const zipOutput = (await zipResult.json()) as {
+    directory: string;
+    count: number;
+  };
+  expect(zipOutput.count).toBe(2);
+  expect(zipOutput.directory).toMatch(/^\/fixture-docs\/extract-[a-f0-9]{32}$/);
+  for (const name of zipNames) {
+    const read = async (path: string) =>
+      (
+        await docker(
+          "docker",
+          [
+            "exec",
+            fixtureDaemon,
+            "cat",
+            `${uploadVolume}/${id}${path}/${name}`,
+          ],
+          { encoding: "buffer", timeout: 5000 },
+        )
+      ).stdout;
+    expect(await read(zipOutput.directory)).toEqual(
+      await read("/fixture-docs"),
+    );
+  }
+  expect(await entries()).not.toContain("zip-pending-");
+  const beforeBadZip = await entries();
+  expect(
+    (
+      await page
+        .context()
+        .request.post(`${fileApi}/unzip-fixture`, {
+          headers: editHeaders,
+          data: { content: Buffer.from("invalid zip").toString("base64") },
+        })
+    ).status(),
+  ).toBe(400);
+  expect(await entries()).toBe(beforeBadZip);
   const beforeInvalid = await entries();
   expect(
     (await unpack(Buffer.from("invalid gzip").toString("base64"))).status(),
