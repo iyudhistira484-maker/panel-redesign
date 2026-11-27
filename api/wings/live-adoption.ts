@@ -5360,11 +5360,23 @@ async function main() {
               (await fileApi(base, listKey, "download", archivePath)).status,
               403,
             );
-            assert.equal(
-              (await fileApi(base, sharedFileKey, "download", archivePath))
-                .status,
-              403,
-            );
+            assert.equal((await mutate(uuid, "grant")).statusCode, 204);
+            try {
+              assert.equal(
+                (await mutate(uuid, "grant", "file.read-content")).statusCode,
+                204,
+              );
+              assert.equal(
+                (await fileApi(base, sharedFileKey, "download", archivePath))
+                  .status,
+                403,
+              );
+            } finally {
+              await pool.execute(
+                "DELETE FROM server_grants WHERE server_id=? AND user_id=(SELECT id FROM users WHERE email='collaborator@example.test')",
+                [uuid],
+              );
+            }
           }
           const ticket = await downloadTicket(
             base,
