@@ -1947,6 +1947,60 @@ export async function createApp({
   if (provisioner)
     app.post<{
       Params: { id: string };
+      Body: {
+        operation: "copy" | "move";
+        items: { source: string; target: string }[];
+        destination?: string;
+      };
+    }>(
+      "/api/v1/servers/:id/files/batch-fixture",
+      {
+        bodyLimit: 2048,
+        config: { rateLimit: { max: 4, timeWindow: "1 minute" } },
+        schema: {
+          body: object(
+            {
+              operation: { type: "string", enum: ["copy", "move"] },
+              items: {
+                type: "array",
+                minItems: 1,
+                maxItems: 4,
+                items: object({ source: text(1, 80), target: text(1, 80) }),
+              },
+              destination: text(1, 97),
+            },
+            ["operation", "items"],
+          ),
+        },
+      },
+      async (req, reply) => {
+        reply.header("cache-control", "no-store");
+        const principal = await actor(
+          req.cookies[sessionCookie],
+          req.headers.authorization,
+        );
+        if (!principal || principal.channel !== "session")
+          return reply.code(401).send({ error: "unauthenticated" });
+        if (!UUID_V4.test(req.params.id))
+          return reply.code(404).send({ error: "server_not_found" });
+        try {
+          return await provisioner.batchFiles(
+            req.params.id,
+            principal,
+            req.body.operation,
+            req.body.items,
+            req.body.destination,
+          );
+        } catch (error) {
+          if (error instanceof ProvisionError)
+            return reply.code(error.status).send({ error: error.code });
+          throw error;
+        }
+      },
+    );
+  if (provisioner)
+    app.post<{
+      Params: { id: string };
       Body: { source: string; target: string };
     }>(
       "/api/v1/servers/:id/files/copy-fixture",

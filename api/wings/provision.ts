@@ -1,3 +1,4 @@
+import { executeFixtureBatch, type FixtureBatchItem } from "./fixture-batch";
 import { readPullSource, validatePullSource } from "./fixture-pull";
 import { extractFixtureTar } from "./fixture-tar";
 import { extractFixtureZip, fixtureZipLimits } from "./fixture-zip";
@@ -588,15 +589,17 @@ export function createProvisioner(
     actor: Actor,
     source: string,
     target: string,
+    locked = false,
   ) {
-    return exclusive(id, async () => {
+    const run = async () => {
       if (!atomicBinary)
         throw new ProvisionError(422, "atomic_rename_required");
       if (
         source === target ||
         source.length > 72 ||
+        source.slice(-4) !== target.slice(-4) ||
         ![source, target].every(
-          (name) => fixturePathSegment(name) && name.endsWith(".bin"),
+          (name) => fixturePathSegment(name) && /\.(txt|bin)$/.test(name),
         )
       )
         throw new ProvisionError(400, "invalid_binary_copy");
@@ -629,7 +632,7 @@ export function createProvisioner(
           throw new ProvisionError(409, "uploaded_file_changed");
         await authorize();
         await pool.execute(
-          "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'wings.fixture_binary_copy_requested',?)",
+          "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'wings.fixture_verified_copy_requested',?)",
           [actor.id, id],
         );
         const copy = await client.copyFixtureWithSuffix(id, source, bytes);
@@ -650,7 +653,8 @@ export function createProvisioner(
           throw new ProvisionError(502, "file_copy_unverified");
         throw error;
       }
-    });
+    };
+    return locked ? run() : exclusive(id, run);
   }
   async function renameFixture(
     id: string,
@@ -660,6 +664,7 @@ export function createProvisioner(
     moved?: FixtureSubfolder,
     fromMoved?: FixtureSubfolder,
     compat = false,
+    locked = false,
   ) {
     const binary =
       !compat && source.endsWith(".bin") && target.endsWith(".bin");
@@ -670,7 +675,7 @@ export function createProvisioner(
       : ["fixture-docs"];
     const sourceName = fromMoved ? `${fromMoved}/${source}` : source;
     const receiptName = moved ? `${moved}/${target}` : target;
-    return exclusive(id, async () => {
+    const run = async () => {
       if (
         (fromMoved === moved && source === target) ||
         sourceName.length > 80 ||
@@ -769,7 +774,8 @@ export function createProvisioner(
           throw new ProvisionError(502, "file_rename_unverified");
         throw error;
       }
-    });
+    };
+    return locked ? run() : exclusive(id, run);
   }
 
   async function completeArchive(
@@ -1258,6 +1264,81 @@ export function createProvisioner(
     },
     chmodFixture,
     renameFixture,
+    async batchFiles(
+      id: string,
+      actor: Actor,
+      operation: "copy" | "move",
+      items: FixtureBatchItem[],
+      destination?: string,
+    ) {
+      return exclusive(id, async () => {
+        const server = await load(pool, id);
+        if (
+          !server ||
+          actor.channel !== "session" ||
+          server.ownerId !== actor.id ||
+          !eligible(server) ||
+          server.phase !== "installed"
+        )
+          throw new ProvisionError(404, "server_not_found");
+        if (!atomicBinary)
+          throw new ProvisionError(422, "atomic_rename_required");
+        if (
+          (operation === "move" &&
+            (!destination || !(await managedFolder(pool, id, destination)))) ||
+          (operation === "copy" && destination !== undefined)
+        )
+          throw new ProvisionError(400, "invalid_batch_destination");
+        const sources = new Set(items.map((item) => item.source));
+        const targets = new Set(items.map((item) => item.target));
+        if (
+          !items.length ||
+          items.length > 4 ||
+          sources.size !== items.length ||
+          targets.size !== items.length ||
+          items.some(
+            ({ source, target }) =>
+              ![source, target].every(
+                (name) => fixturePathSegment(name) && /\.(txt|bin)$/.test(name),
+              ) ||
+              source.slice(-4) !== target.slice(-4) ||
+              (operation === "copy" &&
+                (source.length > 72 || sources.has(target))) ||
+              (destination !== undefined &&
+                destination.length + 1 + target.length > 80),
+          )
+        )
+          throw new ProvisionError(400, "invalid_file_batch");
+        try {
+          if ((await client.state(id)) !== "offline")
+            throw new ProvisionError(409, "server_not_offline");
+        } catch (error) {
+          if (error instanceof WingsUnavailable)
+            throw new ProvisionError(502, "batch_preflight_unavailable");
+          throw error;
+        }
+        return await executeFixtureBatch(
+          items,
+          ({ source, target }) =>
+            operation === "copy"
+              ? copyBinaryFixture(id, actor, source, target, true)
+              : renameFixture(
+                  id,
+                  actor,
+                  source,
+                  target,
+                  destination,
+                  undefined,
+                  false,
+                  true,
+                ),
+          (error) =>
+            error instanceof ProvisionError && error.status < 500
+              ? error.code
+              : undefined,
+        );
+      });
+    },
     copyBinaryFixture,
     createFolder,
     editFixtureText,

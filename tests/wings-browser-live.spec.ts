@@ -736,15 +736,13 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       count: zipNames.length,
     });
     await expect(check).toBeEnabled();
-    const recoveredBinary = await page
-      .context()
-      .request.get(fileApi, {
-        params: {
-          directory: zipOutput.directory,
-          preview: binaryName,
-          download: "1",
-        },
-      });
+    const recoveredBinary = await page.context().request.get(fileApi, {
+      params: {
+        directory: zipOutput.directory,
+        preview: binaryName,
+        download: "1",
+      },
+    });
     expect(recoveredBinary.status()).toBe(200);
     expect(recoveredBinary.headers()["content-type"]).toBe(
       "application/octet-stream",
@@ -860,6 +858,66 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     ],
     { timeout: 5000 },
   );
+  const batchApi = `${fileApi}/batch-fixture`;
+  const batch = (
+    operation: "copy" | "move",
+    items: { source: string; target: string }[],
+    destination?: string,
+  ) =>
+    page
+      .context()
+      .request.post(batchApi, {
+        headers: editHeaders,
+        data: { operation, items, destination },
+      });
+  const batchText = "batch-text.txt",
+    batchBinary = "batch-data.bin";
+  const batchItems = [
+    { source: uploadName, target: batchText },
+    { source: moveTarget, target: "example.txt" },
+    { source: binaryName, target: batchBinary },
+  ];
+  expect((await batch("copy", [batchItems[0], batchItems[0]])).status()).toBe(
+    400,
+  );
+  expect((await batch("move", [batchItems[0]], "unregistered")).status()).toBe(
+    400,
+  );
+  const copyBatch = await batch("copy", batchItems);
+  expect(copyBatch.status()).toBe(200);
+  expect(await copyBatch.json()).toEqual({
+    halted: false,
+    results: [
+      { ...batchItems[0], status: "verified" },
+      { ...batchItems[1], status: "rejected", error: "file_exists" },
+      { ...batchItems[2], status: "verified" },
+    ],
+  });
+  await verifyBinary(batchBinary);
+  expect(await readUploaded()).toEqual(uploadedBytes);
+  const moveItems = [
+    { source: batchText, target: batchText },
+    { source: batchBinary, target: batchBinary },
+  ];
+  const moveBatch = await batch("move", moveItems, moveFolder);
+  expect(moveBatch.status()).toBe(200);
+  expect(await moveBatch.json()).toEqual({
+    halted: false,
+    results: moveItems.map((item) => ({ ...item, status: "verified" })),
+  });
+  await verifyBinary(`${moveFolder}/${batchBinary}`);
+  const batchTextBytes = await docker(
+    "docker",
+    ["exec", fixtureDaemon, "cat", `${binVolume}/${moveFolder}/${batchText}`],
+    { encoding: "buffer", timeout: 5000 },
+  );
+  expect(batchTextBytes.stdout).toEqual(uploadedBytes);
+  for (const { source } of moveItems)
+    await docker(
+      "docker",
+      ["exec", fixtureDaemon, "test", "!", "-e", `${binVolume}/${source}`],
+      { timeout: 5000 },
+    );
   const binaryDb = stagingPool();
   try {
     const [receipts] = await binaryDb.query(
@@ -868,6 +926,26 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     );
     expect(receipts).toEqual([
       { digest: createHash("sha256").update(binaryBytes).digest("hex") },
+    ]);
+    const [batchReceipts] = await binaryDb.query(
+      "SELECT CAST(name AS CHAR) AS name,digest FROM client_uploaded_files WHERE server_id=? AND name IN (?,?,?,?) ORDER BY name",
+      [
+        id,
+        batchText,
+        batchBinary,
+        `${moveFolder}/${batchText}`,
+        `${moveFolder}/${batchBinary}`,
+      ],
+    );
+    expect(batchReceipts).toEqual([
+      {
+        name: `${moveFolder}/${batchBinary}`,
+        digest: createHash("sha256").update(binaryBytes).digest("hex"),
+      },
+      {
+        name: `${moveFolder}/${batchText}`,
+        digest: createHash("sha256").update(uploadedBytes).digest("hex"),
+      },
     ]);
     const [copyReceipts] = await binaryDb.query(
       "SELECT CAST(name AS CHAR) AS name,digest FROM client_uploaded_files WHERE server_id=? AND name IN (?,?)",
