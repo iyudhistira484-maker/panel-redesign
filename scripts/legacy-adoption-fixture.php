@@ -95,7 +95,7 @@ while :; do
 done
 WORKLOAD
 chmod 644 /mnt/server/relay-start.sh
-mkdir -p /mnt/server/fixture-docs/moved
+mkdir -p /mnt/server/fixture-docs/moved /mnt/server/fixture-docs/review
 ln -sfn fixture-docs /mnt/server/fixture-link
 printf '%s\n' '<strong>fixture preview</strong>' > /mnt/server/fixture-docs/example.txt
 printf '\000fixture' > /mnt/server/fixture-docs/binary.txt

@@ -339,6 +339,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   console.log(
     "::notice::Chromium rename verified destination bytes and removed source without overwrite",
   );
+  const moveFolder = "review";
   const moveTarget = "moved-fixture.txt";
   const badDestination = await page.context().request.post(renameApi, {
     headers: editHeaders,
@@ -347,16 +348,15 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   expect(badDestination.status()).toBe(400);
   await page.getByLabel("File teks sumber").selectOption(renamed);
   await page.getByLabel("Nama file baru").fill(moveTarget);
+  await page.getByLabel("Folder tujuan").selectOption(moveFolder);
   const moveReply = page.waitForResponse(
     (response) => response.url() === renameApi,
   );
   await page
-    .getByRole("button", { name: "Pindahkan file unggahan ke moved" })
+    .getByRole("button", { name: "Pindahkan file", exact: true })
     .click();
   expect((await moveReply).status()).toBe(200);
-  await expect(
-    page.getByText("Pemindahan ke /fixture-docs/moved terverifikasi."),
-  ).toBeVisible();
+  await expect(page.getByText("Pemindahan terverifikasi.")).toBeVisible();
   await expect(
     files.getByRole("button", { name: renamed, exact: true }),
   ).toHaveCount(0);
@@ -368,7 +368,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
           "exec",
           fixtureDaemon,
           "cat",
-          `${uploadVolume}/${id}/fixture-docs/moved/${moveTarget}`,
+          `${uploadVolume}/${id}/fixture-docs/${moveFolder}/${moveTarget}`,
         ],
         { encoding: "buffer", timeout: 5000 },
       )
@@ -390,21 +390,26 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   try {
     const [receipts] = await moveDb.query(
       "SELECT CAST(name AS CHAR) AS name, digest FROM client_uploaded_files WHERE server_id=? AND name IN (?,?)",
-      [id, renamed, `moved/${moveTarget}`],
+      [id, renamed, `${moveFolder}/${moveTarget}`],
     );
     expect(receipts).toEqual([
       {
-        name: `moved/${moveTarget}`,
+        name: `${moveFolder}/${moveTarget}`,
         digest: createHash("sha256").update(uploadedBytes).digest("hex"),
       },
     ]);
     const moveBack = (target: string) =>
       page.context().request.post(renameApi, {
         headers: editHeaders,
-        data: { source: moveTarget, target, destination: "parent" },
+        data: {
+          source: moveTarget,
+          target,
+          destination: "parent",
+          sourceFolder: moveFolder,
+        },
       });
     expect((await moveBack(uploadName)).status()).toBe(409);
-    await files.getByRole("button", { name: "moved", exact: true }).click();
+    await files.getByRole("button", { name: moveFolder, exact: true }).click();
     await files.getByRole("button", { name: moveTarget, exact: true }).click();
     const returnedResponse = page.waitForResponse(
       (response) => response.url() === renameApi,
@@ -438,12 +443,19 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     expect(readBack.stdout).toEqual(uploadedBytes);
     await docker(
       "docker",
-      ["exec", fixtureDaemon, "test", "!", "-e", `${root}/moved/${moveTarget}`],
+      [
+        "exec",
+        fixtureDaemon,
+        "test",
+        "!",
+        "-e",
+        `${root}/${moveFolder}/${moveTarget}`,
+      ],
       { timeout: 5000 },
     );
     const [returnedReceipts] = await moveDb.query(
       "SELECT CAST(name AS CHAR) AS name,digest FROM client_uploaded_files WHERE server_id=? AND name IN (?,?)",
-      [id, moveTarget, `moved/${moveTarget}`],
+      [id, moveTarget, `${moveFolder}/${moveTarget}`],
     );
     expect(returnedReceipts).toEqual([
       {

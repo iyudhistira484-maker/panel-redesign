@@ -1780,7 +1780,8 @@ export async function createApp({
       Body: {
         source: string;
         target: string;
-        destination?: "moved" | "parent";
+        destination?: "moved" | "review" | "parent";
+        sourceFolder?: "moved" | "review";
       };
     }>(
       "/api/v1/servers/:id/files/rename-fixture",
@@ -1791,7 +1792,11 @@ export async function createApp({
             {
               source: text(1, 80),
               target: text(1, 80),
-              destination: { type: "string", enum: ["moved", "parent"] },
+              destination: {
+                type: "string",
+                enum: ["moved", "review", "parent"],
+              },
+              sourceFolder: { type: "string", enum: ["moved", "review"] },
             },
             ["source", "target"],
           ),
@@ -1816,8 +1821,12 @@ export async function createApp({
                 principal,
                 req.body.source,
                 req.body.target,
-                req.body.destination === "moved",
-                req.body.destination === "parent",
+                req.body.destination === "parent"
+                  ? undefined
+                  : req.body.destination,
+                req.body.destination === "parent"
+                  ? (req.body.sourceFolder ?? "moved")
+                  : undefined,
               ),
             );
         } catch (error) {

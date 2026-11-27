@@ -1,7 +1,7 @@
 import { extractFixtureZip, fixtureZipLimits } from "./fixture-zip";
 import { extractFixtureText } from "./fixture-gzip";
 import { lockFreeAllocation } from "../catalog/transfer";
-import { fixturePathSegment } from "./client";
+import { type FixtureSubfolder, fixturePathSegment } from "./client";
 import {
   upstreamProfiles,
   registeredWorkload,
@@ -837,12 +837,12 @@ export function createProvisioner(
       actor: Actor,
       source: string,
       target: string,
-      moved = false,
-      fromMoved = false,
+      moved?: FixtureSubfolder,
+      fromMoved?: FixtureSubfolder,
     ) {
-      const destination = moved ? ["fixture-docs", "moved"] : ["fixture-docs"];
-      const sourceName = fromMoved ? `moved/${source}` : source;
-      const receiptName = moved ? `moved/${target}` : target;
+      const destination = moved ? ["fixture-docs", moved] : ["fixture-docs"];
+      const sourceName = fromMoved ? `${fromMoved}/${source}` : source;
+      const receiptName = moved ? `${moved}/${target}` : target;
       return exclusive(id, async () => {
         if (
           (fromMoved === moved && source === target) ||
@@ -878,7 +878,7 @@ export function createProvisioner(
           if (!receipt) throw new ProvisionError(404, "upload_not_found");
           const original = await client.fixtureDownload(
             id,
-            fromMoved ? ["fixture-docs", "moved"] : ["fixture-docs"],
+            fromMoved ? ["fixture-docs", fromMoved] : ["fixture-docs"],
             source,
           );
           if (

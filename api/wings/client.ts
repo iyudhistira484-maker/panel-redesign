@@ -1,3 +1,4 @@
+export type FixtureSubfolder = "moved" | "review";
 export const fixturePathSegment = (value: string) =>
   /^[A-Za-z0-9_][A-Za-z0-9_. -]{0,79}$/.test(value) && !/[\r\n]/.test(value);
 import { createHash } from "node:crypto";
@@ -248,8 +249,12 @@ export class WingsClient {
       throw new WingsUnavailable("payload");
     return data;
   }
-  async fixtureUploadTargetExists(id: string, name: string, moved = false) {
-    const segments = moved ? ["fixture-docs", "moved"] : ["fixture-docs"];
+  async fixtureUploadTargetExists(
+    id: string,
+    name: string,
+    moved?: FixtureSubfolder,
+  ) {
+    const segments = moved ? ["fixture-docs", moved] : ["fixture-docs"];
     await this.fixtureDirectory(id, segments);
     const entries = await this.#fixtureEntries(id, `/${segments.join("/")}`);
     if (entries.some((entry) => !entry || typeof entry.name !== "string"))
@@ -415,8 +420,8 @@ export class WingsClient {
     id: string,
     source: string,
     target: string,
-    moved = false,
-    fromMoved = false,
+    moved?: FixtureSubfolder,
+    fromMoved?: FixtureSubfolder,
   ) {
     if (
       ![source, target].every(
@@ -432,8 +437,8 @@ export class WingsClient {
         root: "/fixture-docs",
         files: [
           {
-            from: fromMoved ? `moved/${source}` : source,
-            to: moved ? `moved/${target}` : target,
+            from: fromMoved ? `${fromMoved}/${source}` : source,
+            to: moved ? `${moved}/${target}` : target,
           },
         ],
       },

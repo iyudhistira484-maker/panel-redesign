@@ -25,6 +25,11 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
   >(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const [copySource, setCopySource] = useState("");
+  const [moveFolder, setMoveFolder] = useState("moved");
+  const inMoveFolder =
+    path[0] === "fixture-docs" &&
+    path.length === 2 &&
+    ["moved", "review"].includes(path[1]);
   const [copyTarget, setCopyTarget] = useState("");
   const [copyStatus, setCopyStatus] = useState<
     "done" | "moved" | "renamed" | "rejected" | "unknown" | null
@@ -181,7 +186,10 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
             source,
             target,
             ...(moved || back
-              ? { destination: moved ? "moved" : "parent" }
+              ? {
+                  destination: moved ? moveFolder : "parent",
+                  ...(back ? { sourceFolder: path[1] } : {}),
+                }
               : {}),
           }),
           signal: AbortSignal.timeout(30000),
@@ -567,27 +575,39 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
           >
             {en ? "Rename uploaded file" : "Ubah nama file unggahan"}
           </Button>
-          {items.some((item) => item.directory && item.name === "moved") && (
-            <Button
-              disabled={
-                busy ||
-                !copySource ||
-                !/^[A-Za-z0-9_][A-Za-z0-9_. -]{0,73}$/.test(copyTarget) ||
-                !copyTarget.endsWith(".txt")
-              }
-              onClick={() => void copyFile(true, true)}
+          <label>
+            {en ? "Destination folder" : "Folder tujuan"}{" "}
+            <select
+              value={moveFolder}
+              onChange={(event) => setMoveFolder(event.currentTarget.value)}
+              disabled={busy}
             >
-              {en
-                ? "Move uploaded file to moved"
-                : "Pindahkan file unggahan ke moved"}
-            </Button>
-          )}
+              {["moved", "review"]
+                .filter((name) =>
+                  items.some((item) => item.directory && item.name === name),
+                )
+                .map((name) => (
+                  <option key={name}>{name}</option>
+                ))}
+            </select>
+          </label>{" "}
+          <Button
+            disabled={
+              busy ||
+              !copySource ||
+              !copyTarget ||
+              !items.some((item) => item.directory && item.name === moveFolder)
+            }
+            onClick={() => void copyFile(true, true)}
+          >
+            {en ? "Move file" : "Pindahkan file"}
+          </Button>
           {copyStatus && (
             <output>
               {copyStatus === "moved"
                 ? en
-                  ? "Move verified in /fixture-docs/moved."
-                  : "Pemindahan ke /fixture-docs/moved terverifikasi."
+                  ? "Move verified."
+                  : "Pemindahan terverifikasi."
                 : copyStatus === "renamed"
                   ? en
                     ? "Rename verified."
@@ -778,7 +798,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
           ))}
         </ul>
       )}
-      {path.join("/") === "fixture-docs/moved" && copyStatus && (
+      {inMoveFolder && copyStatus && (
         <output>
           {copyStatus === "renamed"
             ? en
@@ -808,7 +828,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
           >
             {en ? "Download text file" : "Unduh file teks"}
           </Button>
-          {path.join("/") === "fixture-docs/moved" && (
+          {inMoveFolder && (
             <Button
               disabled={busy}
               onClick={() => void copyFile(true, false, preview.name)}
