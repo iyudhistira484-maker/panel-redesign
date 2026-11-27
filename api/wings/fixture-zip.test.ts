@@ -43,3 +43,16 @@ test("rejects symlinks, nested paths, duplicate names and oversized text", async
     await assert.rejects(extractFixtureZip(await zip));
   }
 });
+
+test("mixed ZIP preserves arbitrary binary bytes but rejects them under a text filename", async () => {
+  const bytes = Buffer.from(Array.from({ length: 16384 }, (_, i) => i % 256));
+  const entries = [
+    { name: "data.bin", bytes },
+    { name: "notes.txt", bytes: Buffer.from("catatan\r\n") },
+  ];
+  assert.deepEqual(
+    await extractFixtureZip(await compressFixtureZip(entries)),
+    entries,
+  );
+  await assert.rejects(compressFixtureZip([{ name: "data.txt", bytes }]));
+});

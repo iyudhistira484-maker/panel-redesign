@@ -1,4 +1,4 @@
-import { compressFixtureZip } from "./wings/fixture-zip";
+import { compressFixtureZip, fixtureZipName } from "./wings/fixture-zip";
 import { compressFixtureText } from "./wings/fixture-gzip";
 import {
   registerAppDatabase,
@@ -1564,7 +1564,7 @@ export async function createApp({
       Querystring: { directory?: string; preview?: string; download?: string };
     }>(
       "/api/v1/servers/:id/files",
-      { config: { rateLimit: { max: 24, timeWindow: "1 minute" } } },
+      { config: { rateLimit: { max: 25, timeWindow: "1 minute" } } },
       async (req, reply) => {
         reply.header("cache-control", "no-store");
         const principal = await actor(
@@ -1633,9 +1633,7 @@ export async function createApp({
           names.length > 4 ||
           new Set(names.map((name) => name.toLowerCase())).size !==
             names.length ||
-          !names.every((name) =>
-            /^[A-Za-z0-9][A-Za-z0-9_-]{0,62}\.txt$/.test(name),
-          )
+          !names.every(fixtureZipName)
         )
           return reply.code(400).send({ error: "invalid_fixture_zip_names" });
         try {

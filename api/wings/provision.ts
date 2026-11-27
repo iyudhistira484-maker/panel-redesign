@@ -772,6 +772,28 @@ export function createProvisioner(
     });
   }
 
+  async function completeArchive(
+    id: string,
+    suffix: string,
+    manifest: { name: string; digest: string }[],
+  ) {
+    await transaction(pool, async (db) => {
+      const [result] = await db.execute<
+        import("mysql2/promise").ResultSetHeader
+      >(
+        "UPDATE fixture_zip_operations SET status='succeeded' WHERE server_id=? AND operation_id=? AND status='pending'",
+        [id, suffix],
+      );
+      if (result.affectedRows !== 1)
+        throw new ProvisionError(409, "zip_reconciliation_required");
+      for (const file of manifest)
+        if (file.name.endsWith(".bin"))
+          await db.execute(
+            "INSERT INTO client_uploaded_files (server_id,name,digest) VALUES (?,?,?) ON DUPLICATE KEY UPDATE digest=VALUES(digest)",
+            [id, `extract-${suffix}/${file.name}`, file.digest],
+          );
+    });
+  }
   async function publishArchive(
     id: string,
     actor: Actor,
@@ -801,10 +823,7 @@ export function createProvisioner(
       throw new ProvisionError(409, "zip_reconciliation_required");
     try {
       const directory = await client.publishFixtureZip(id, suffix, entries);
-      await pool.execute(
-        "UPDATE fixture_zip_operations SET status='succeeded' WHERE server_id=? AND operation_id=?",
-        [id, suffix],
-      );
+      await completeArchive(id, suffix, manifest);
       return {
         status: "succeeded",
         operationId: suffix,
@@ -1126,7 +1145,9 @@ export function createProvisioner(
             operationId,
             record.manifest,
           );
-          if (status !== "needs_review")
+          if (status === "succeeded")
+            await completeArchive(id, operationId, record.manifest);
+          else if (status === "retryable")
             await pool.execute(
               "UPDATE fixture_zip_operations SET status=? WHERE server_id=? AND operation_id=? AND status='pending'",
               [status, id, operationId],
@@ -1164,6 +1185,8 @@ export function createProvisioner(
         } catch {
           throw new ProvisionError(400, "invalid_fixture_zip");
         }
+        if (entries.some((file) => file.name.endsWith(".bin")) && !atomicBinary)
+          throw new ProvisionError(422, "atomic_rename_required");
         try {
           if ((await client.state(id)) !== "offline")
             throw new ProvisionError(409, "server_not_offline");

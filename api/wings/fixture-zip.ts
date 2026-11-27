@@ -10,6 +10,8 @@ export const fixtureZipLimits = {
   archive: 70_000,
 };
 export type FixtureZipEntry = { name: string; bytes: Buffer };
+export const fixtureZipName = (name: string) =>
+  /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}\.(txt|bin)(?![\s\S])/.test(name);
 const invalid = () => new Error("Invalid fixture ZIP");
 function validate(entries: FixtureZipEntry[]) {
   const names = new Set<string>();
@@ -18,14 +20,15 @@ function validate(entries: FixtureZipEntry[]) {
     throw invalid();
   for (const { name, bytes } of entries) {
     if (
-      !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}\.txt$/.test(name) ||
+      !fixtureZipName(name) ||
       names.has(name.toLowerCase()) ||
       bytes.length > fixtureTextLimit
     )
       throw invalid();
     names.add(name.toLowerCase());
     total += bytes.length;
-    new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    if (name.endsWith(".txt"))
+      new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   }
   if (total > fixtureZipLimits.total) throw invalid();
 }

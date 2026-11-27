@@ -689,7 +689,9 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
                 .filter(
                   (item) =>
                     !item.directory &&
-                    /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}\.txt$/.test(item.name),
+                    /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}\.(txt|bin)$/.test(
+                      item.name,
+                    ),
                 )
                 .map((item) => (
                   <option key={item.name}>{item.name}</option>

@@ -619,7 +619,41 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
         { timeout: 5000 },
       )
     ).stdout;
-  const zipNames = [uploadName, "example.txt"];
+  const binaryName = "browser-data.bin";
+  const binaryBytes = Buffer.from(
+    Array.from({ length: 16384 }, (_, i) => i % 256),
+  );
+  await input.setInputFiles({
+    name: binaryName,
+    mimeType: "application/octet-stream",
+    buffer: binaryBytes,
+  });
+  const binaryUpload = page.waitForResponse(
+    (response) => response.url() === uploadApi,
+  );
+  await page.getByRole("button", { name: "Unggah file" }).click();
+  expect((await binaryUpload).status()).toBe(201);
+  const binaryDownload = page.waitForEvent("download");
+  await files
+    .getByRole("button", { name: `Unduh ${binaryName}`, exact: true })
+    .click();
+  const binaryArtifact = await binaryDownload;
+  expect(binaryArtifact.suggestedFilename()).toBe(binaryName);
+  const binaryPath = await binaryArtifact.path();
+  assert.ok(binaryPath);
+  expect(await readFile(binaryPath)).toEqual(binaryBytes);
+  const storedBinary = await docker(
+    "docker",
+    [
+      "exec",
+      fixtureDaemon,
+      "cat",
+      `${uploadVolume}/${id}/fixture-docs/${binaryName}`,
+    ],
+    { encoding: "buffer", timeout: 5000 },
+  );
+  expect(storedBinary.stdout).toEqual(binaryBytes);
+  const zipNames = [uploadName, "example.txt", binaryName];
   await page.getByLabel("File sumber ZIP").selectOption(zipNames);
   const zipDownload = page.waitForEvent("download");
   await page.getByRole("link", { name: "Unduh ZIP" }).click();
@@ -640,7 +674,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     directory: string;
     count: number;
   };
-  expect(zipOutput.count).toBe(2);
+  expect(zipOutput.count).toBe(zipNames.length);
   expect(zipOutput.directory).toMatch(/^\/fixture-docs\/extract-[a-f0-9]{32}$/);
   for (const name of zipNames) {
     const read = async (path: string) =>
@@ -670,7 +704,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   expect(await reconciliation.json()).toMatchObject({
     status: "succeeded",
     directory: zipOutput.directory,
-    count: 2,
+    count: zipNames.length,
   });
   expect(await entries()).not.toContain("zip-pending-");
   // Recreate the durable states left by a lost response, using the real Wings volume.
@@ -684,6 +718,13 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       [id],
     );
   try {
+    await zipDb.execute(
+      "DELETE FROM client_uploaded_files WHERE server_id=? AND name=?",
+      [
+        id,
+        `${zipOutput.directory.slice("/fixture-docs/".length)}/${binaryName}`,
+      ],
+    );
     await markPending();
     const recovered = page.waitForResponse(
       (response) => response.url() === `${fileApi}/reconcile-zip-fixture`,
@@ -692,9 +733,23 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     expect(await (await recovered).json()).toMatchObject({
       status: "succeeded",
       directory: zipOutput.directory,
-      count: 2,
+      count: zipNames.length,
     });
     await expect(check).toBeEnabled();
+    const recoveredBinary = await page
+      .context()
+      .request.get(fileApi, {
+        params: {
+          directory: zipOutput.directory,
+          preview: binaryName,
+          download: "1",
+        },
+      });
+    expect(recoveredBinary.status()).toBe(200);
+    expect(recoveredBinary.headers()["content-type"]).toBe(
+      "application/octet-stream",
+    );
+    expect(await recoveredBinary.body()).toEqual(binaryBytes);
     const folder = `${uploadVolume}/${id}${zipOutput.directory}`;
     const staged = folder.replace(
       /\/extract-([a-f0-9]{32})$/,
@@ -735,40 +790,6 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   console.log(
     "::notice::Wings gzip round-trip verified exact bytes in a new folder; corrupt input created nothing",
   );
-  const binaryName = "browser-data.bin";
-  const binaryBytes = Buffer.from(
-    Array.from({ length: 16384 }, (_, i) => i % 256),
-  );
-  await input.setInputFiles({
-    name: binaryName,
-    mimeType: "application/octet-stream",
-    buffer: binaryBytes,
-  });
-  const binaryUpload = page.waitForResponse(
-    (response) => response.url() === uploadApi,
-  );
-  await page.getByRole("button", { name: "Unggah file" }).click();
-  expect((await binaryUpload).status()).toBe(201);
-  const binaryDownload = page.waitForEvent("download");
-  await files
-    .getByRole("button", { name: `Unduh ${binaryName}`, exact: true })
-    .click();
-  const binaryArtifact = await binaryDownload;
-  expect(binaryArtifact.suggestedFilename()).toBe(binaryName);
-  const binaryPath = await binaryArtifact.path();
-  assert.ok(binaryPath);
-  expect(await readFile(binaryPath)).toEqual(binaryBytes);
-  const storedBinary = await docker(
-    "docker",
-    [
-      "exec",
-      fixtureDaemon,
-      "cat",
-      `${uploadVolume}/${id}/fixture-docs/${binaryName}`,
-    ],
-    { encoding: "buffer", timeout: 5000 },
-  );
-  expect(storedBinary.stdout).toEqual(binaryBytes);
   const binaryCopy = "browser-copy.bin";
   await page
     .getByRole("combobox", { name: /^File sumber/ })

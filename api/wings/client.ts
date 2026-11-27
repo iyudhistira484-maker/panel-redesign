@@ -374,7 +374,7 @@ export class WingsClient {
       !entries.length ||
       entries.length > 4 ||
       !entries.every(
-        ({ name }) => fixturePathSegment(name) && name.endsWith(".txt"),
+        ({ name }) => fixturePathSegment(name) && /\.(txt|bin)$/.test(name),
       )
     )
       throw new WingsUnavailable("payload");
@@ -400,7 +400,9 @@ export class WingsClient {
             `${files}/write?file=${encodeURIComponent(`${root}/${pending}/${name}`)}`,
             204,
             "POST",
-            bytes.toString("utf8"),
+            name.endsWith(".bin")
+              ? Uint8Array.from(bytes).buffer
+              : bytes.toString("utf8"),
           )
         ).body?.cancel();
         if (
