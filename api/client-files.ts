@@ -15,6 +15,12 @@ type Entry = {
   modified_at: unknown;
 };
 export type FileBinding = {
+  chmod(
+    id: string,
+    actor: Actor,
+    name: string,
+    mode: "600" | "644",
+  ): Promise<unknown>;
   deleteUpload(id: string, actor: Actor, name: string): Promise<void>;
   uploadAllowed(id: string, actor: Actor): Promise<boolean>;
   upload(
@@ -305,6 +311,50 @@ export function registerClientFiles(
               },
             ],
           });
+        return textError(error, reply);
+      }
+    },
+  );
+  app.post<{
+    Params: { identifier: string };
+    Body: { root?: unknown; files?: unknown };
+  }>(
+    "/api/client/servers/:identifier/files/chmod",
+    {
+      bodyLimit: 1024,
+      config: { rateLimit: { max: 12, timeWindow: "1 minute" } },
+    },
+    async (req, reply) => {
+      const actor = await authenticate(req.headers.authorization ?? "");
+      if (!actor) return failure(reply, 401);
+      const server = await resolve(req.params.identifier, actor.id);
+      if (!server) return failure(reply, 404);
+      if (!binding) return failure(reply, 503);
+      const { root, files } = req.body ?? {};
+      if (
+        root !== "/fixture-docs" ||
+        Object.keys(req.body ?? {}).length !== 2 ||
+        !Array.isArray(files) ||
+        files.length !== 1
+      )
+        return failure(reply, 400);
+      const entry = files[0];
+      if (
+        !entry ||
+        typeof entry !== "object" ||
+        Object.keys(entry).length !== 2 ||
+        typeof entry.file !== "string" ||
+        !fixturePathSegment(entry.file) ||
+        !entry.file.endsWith(".txt")
+      )
+        return failure(reply, 400);
+      const mode =
+        entry.mode === 600 ? "600" : entry.mode === 644 ? "644" : entry.mode;
+      if (mode !== "600" && mode !== "644") return failure(reply, 400);
+      try {
+        await binding.chmod(server.id, actor, entry.file, mode);
+        return reply.code(204).send();
+      } catch (error) {
         return textError(error, reply);
       }
     },

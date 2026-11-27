@@ -1260,18 +1260,21 @@ async function main() {
           clientEditFile?: boolean;
           clientUploadFile?: boolean;
           clientDeleteFile?: boolean;
+          clientChmodFile?: boolean;
         } = {},
       ) {
         const key = `rly_${randomBytes(32).toString("base64url")}`;
         const result = await relay.inject({
           method: "POST",
-          remoteAddress: fileScopes.clientDeleteFile
-            ? "127.0.0.10"
-            : fileScopes.clientUploadFile
-              ? "127.0.0.9"
-              : fileScopes.clientEditFile
-                ? "127.0.0.8"
-                : "127.0.0.1",
+          remoteAddress: fileScopes.clientChmodFile
+            ? "127.0.0.11"
+            : fileScopes.clientDeleteFile
+              ? "127.0.0.10"
+              : fileScopes.clientUploadFile
+                ? "127.0.0.9"
+                : fileScopes.clientEditFile
+                  ? "127.0.0.8"
+                  : "127.0.0.1",
           url: "/api/v1/account/keys",
           headers: { ...headers, ...session },
           payload: {
@@ -5152,6 +5155,57 @@ async function main() {
           "extra.txt",
         ])
           assert.ok(!names.includes(rejected));
+        const chmodKey = await issueKey(ownerSession, false, false, false, {
+          clientChmodFile: true,
+        });
+        const chmod = (
+          base: string,
+          key: string,
+          file: string,
+          mode: string | number,
+        ) =>
+          fetch(`${base}/api/client/servers/${identifier}/files/chmod`, {
+            method: "POST",
+            headers: { ...auth(key), "content-type": "application/json" },
+            body: JSON.stringify({ root: directory, files: [{ file, mode }] }),
+          });
+        assert.equal(
+          (await chmod(relayBase, editKey, relayName, "600")).status,
+          403,
+        );
+        assert.equal(
+          (await chmod(relayBase, chmodKey, relayName, "777")).status,
+          400,
+        );
+        assert.equal(
+          (await chmod(relayBase, chmodKey, "../example.txt", "600")).status,
+          400,
+        );
+        assert.equal(
+          (await chmod(relayBase, chmodKey, legacyName, "600")).status,
+          404,
+        );
+        for (const mode of [600, "644"]) {
+          const legacy = await chmod(legacyBase, legacyKey, legacyName, mode);
+          const relay = await chmod(relayBase, chmodKey, relayName, mode);
+          assert.equal(legacy.status, 204);
+          assert.equal(relay.status, 204);
+          const entries = await wingClient.fixtureDirectoryMetadata(uuid, [
+            "fixture-docs",
+          ]);
+          for (const name of [relayName, legacyName])
+            assert.equal(
+              entries.find((row) => row.name === name)?.mode_bits,
+              String(mode),
+            );
+        }
+        assert.deepEqual(
+          await wingClient.fixtureDownload(uuid, ["fixture-docs"], relayName),
+          uploaded,
+        );
+        console.log(
+          "::notice::Pterodactyl chmod contract verified 204 and matching Wings modes with dedicated key scope",
+        );
         const deleteKey = await issueKey(ownerSession, false, false, false, {
           clientDeleteFile: true,
         });

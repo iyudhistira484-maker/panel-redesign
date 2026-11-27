@@ -4,7 +4,7 @@ Baseline: Panel Pterodactyl v1.15.2 inventories. Generated from Relay route regi
 
 ## client
 
-69 upstream entries: **17 registered**, **0 disposable Wings only**, **52 not registered**.
+69 upstream entries: **18 registered**, **0 disposable Wings only**, **51 not registered**.
 
 | Method | Upstream path | Relay registration |
 | --- | --- | --- |
@@ -43,7 +43,7 @@ Baseline: Panel Pterodactyl v1.15.2 inventories. Generated from Relay route regi
 | POST | `/servers/{server}/files/decompress` | Not registered |
 | POST | `/servers/{server}/files/delete` | Registered |
 | POST | `/servers/{server}/files/create-folder` | Not registered |
-| POST | `/servers/{server}/files/chmod` | Not registered |
+| POST | `/servers/{server}/files/chmod` | Registered |
 | POST | `/servers/{server}/files/pull` | Not registered |
 | GET | `/servers/{server}/files/upload` | Registered |
 | GET | `/servers/{server}/schedules` | Not registered |

@@ -293,7 +293,9 @@ export async function createApp({
           req.routeOptions.url ===
             "/api/client/servers/:identifier/files/write" ||
           req.routeOptions.url ===
-            "/api/client/servers/:identifier/files/delete") &&
+            "/api/client/servers/:identifier/files/delete" ||
+          req.routeOptions.url ===
+            "/api/client/servers/:identifier/files/chmod") &&
         req.headers.origin === undefined &&
         req.headers.cookie === undefined &&
         /^Bearer rly_[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{22}$/.test(
@@ -1013,6 +1015,7 @@ export async function createApp({
       clientEditFile?: boolean;
       clientUploadFile?: boolean;
       clientDeleteFile?: boolean;
+      clientChmodFile?: boolean;
     };
   }>(
     "/api/v1/account/keys",
@@ -1031,6 +1034,7 @@ export async function createApp({
             clientEditFile: { type: "boolean" },
             clientUploadFile: { type: "boolean" },
             clientDeleteFile: { type: "boolean" },
+            clientChmodFile: { type: "boolean" },
           },
           ["label", "key"],
         ),
@@ -1051,7 +1055,7 @@ export async function createApp({
         const digest = crypt.digest("api-key", `${req.body.key}.${suffix}`);
         try {
           await db.execute(
-            "INSERT INTO api_keys (id,user_id,digest,label,expires_at,client_power,client_console,client_stream,client_list_files,client_download,client_edit_file,client_upload_file,client_delete_file) VALUES (?,?,?,?,TIMESTAMPADD(DAY,90,UTC_TIMESTAMP(3)),?,?,?,?,?,?,?,?)",
+            "INSERT INTO api_keys (id,user_id,digest,label,expires_at,client_power,client_console,client_stream,client_list_files,client_download,client_edit_file,client_upload_file,client_delete_file,client_chmod_file) VALUES (?,?,?,?,TIMESTAMPADD(DAY,90,UTC_TIMESTAMP(3)),?,?,?,?,?,?,?,?,?)",
             [
               id,
               u.id,
@@ -1065,6 +1069,7 @@ export async function createApp({
               req.body.clientEditFile === true,
               req.body.clientUploadFile === true,
               req.body.clientDeleteFile === true,
+              req.body.clientChmodFile === true,
             ],
           );
         } catch (e) {

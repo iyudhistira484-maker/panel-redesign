@@ -1,0 +1,1 @@
+ALTER TABLE api_keys ADD COLUMN client_chmod_file BOOLEAN NOT NULL DEFAULT FALSE;

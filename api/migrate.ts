@@ -62,6 +62,7 @@ export async function migrate(pool: Pool, direction: "up" | "down") {
         { version: 37, file: "037_app_database_restore_observation" },
         { version: 38, file: "038_fixture_runtime_profile" },
         { version: 39, file: "039_fixture_zip_operations" },
+        { version: 40, file: "040_client_chmod" },
       ];
       if (direction === "down") migrations.reverse();
       for (const { version, file } of migrations) {

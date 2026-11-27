@@ -372,7 +372,7 @@ export function createProvisioner(
   async function ownerFileScope(
     id: string,
     actor: Actor,
-    scope: "upload" | "delete",
+    scope: "upload" | "delete" | "chmod",
   ) {
     const server = await load(pool, id);
     if (
@@ -389,7 +389,7 @@ export function createProvisioner(
       (
         await rows(
           pool,
-          `SELECT id FROM api_keys WHERE id=? AND user_id=? AND ${scope === "upload" ? "client_upload_file" : "client_delete_file"}=TRUE AND expires_at>UTC_TIMESTAMP(3)`,
+          `SELECT id FROM api_keys WHERE id=? AND user_id=? AND ${{ upload: "client_upload_file", delete: "client_delete_file", chmod: "client_chmod_file" }[scope]}=TRUE AND expires_at>UTC_TIMESTAMP(3)`,
           [actor.keyId, actor.id],
         )
       ).length === 1
@@ -427,6 +427,60 @@ export function createProvisioner(
       [actor, id],
     );
   }
+  async function chmodFixture(
+    id: string,
+    actor: Actor,
+    name: string,
+    mode: "600" | "644",
+    compat = false,
+  ) {
+    return exclusive(id, async () => {
+      const authorize = async () => {
+        if (compat) {
+          if (!(await ownerFileScope(id, actor, "chmod")))
+            throw new ProvisionError(403, "chmod_scope_required");
+          return;
+        }
+        const server = await load(pool, id);
+        if (
+          !server ||
+          actor.channel !== "session" ||
+          server.ownerId !== actor.id ||
+          !eligible(server) ||
+          server.phase !== "installed"
+        )
+          throw new ProvisionError(404, "server_not_found");
+      };
+      await authorize();
+      if (!fixturePathSegment(name) || !name.endsWith(".txt"))
+        throw new ProvisionError(400, "invalid_chmod_target");
+      const [receipt] = await rows<{ digest: string }>(
+        pool,
+        "SELECT digest FROM client_uploaded_files WHERE server_id=? AND name=?",
+        [id, name],
+      );
+      if (!receipt) throw new ProvisionError(404, "upload_not_found");
+      try {
+        if ((await client.state(id)) !== "offline")
+          throw new ProvisionError(409, "server_not_offline");
+        const bytes = await client.fixtureDownload(id, ["fixture-docs"], name);
+        if (createHash("sha256").update(bytes).digest("hex") !== receipt.digest)
+          throw new ProvisionError(409, "uploaded_file_changed");
+        await authorize();
+        await pool.execute(
+          "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'wings.fixture_file_chmod_requested',?)",
+          [actor.id, id],
+        );
+        await client.chmodFixture(id, name, mode);
+        return { name, mode };
+      } catch (error) {
+        if (error instanceof WingsUnavailable)
+          throw new ProvisionError(502, "file_chmod_unverified");
+        throw error;
+      }
+    });
+  }
+
   return {
     provider,
     applicationCreate: {
@@ -832,59 +886,7 @@ export function createProvisioner(
         }
       });
     },
-    async chmodFixture(
-      id: string,
-      actor: Actor,
-      name: string,
-      mode: "600" | "644",
-    ) {
-      return exclusive(id, async () => {
-        const authorize = async () => {
-          const server = await load(pool, id);
-          if (
-            !server ||
-            actor.channel !== "session" ||
-            server.ownerId !== actor.id ||
-            !eligible(server) ||
-            server.phase !== "installed"
-          )
-            throw new ProvisionError(404, "server_not_found");
-        };
-        await authorize();
-        if (!fixturePathSegment(name) || !name.endsWith(".txt"))
-          throw new ProvisionError(400, "invalid_chmod_target");
-        const [receipt] = await rows<{ digest: string }>(
-          pool,
-          "SELECT digest FROM client_uploaded_files WHERE server_id=? AND name=?",
-          [id, name],
-        );
-        if (!receipt) throw new ProvisionError(404, "upload_not_found");
-        try {
-          if ((await client.state(id)) !== "offline")
-            throw new ProvisionError(409, "server_not_offline");
-          const bytes = await client.fixtureDownload(
-            id,
-            ["fixture-docs"],
-            name,
-          );
-          if (
-            createHash("sha256").update(bytes).digest("hex") !== receipt.digest
-          )
-            throw new ProvisionError(409, "uploaded_file_changed");
-          await authorize();
-          await pool.execute(
-            "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'wings.fixture_file_chmod_requested',?)",
-            [actor.id, id],
-          );
-          await client.chmodFixture(id, name, mode);
-          return { name, mode };
-        } catch (error) {
-          if (error instanceof WingsUnavailable)
-            throw new ProvisionError(502, "file_chmod_unverified");
-          throw error;
-        }
-      });
-    },
+    chmodFixture,
     async renameFixture(
       id: string,
       actor: Actor,
@@ -989,6 +991,8 @@ export function createProvisioner(
     },
     editFixtureText,
     compatFiles: {
+      chmod: (id: string, actor: Actor, name: string, mode: "600" | "644") =>
+        chmodFixture(id, actor, name, mode, true),
       async deleteUpload(id: string, actor: Actor, name: string) {
         return exclusive(id, async () => {
           if (!fixturePathSegment(name) || !name.endsWith(".txt"))
