@@ -416,6 +416,7 @@ export class WingsClient {
     source: string,
     target: string,
     moved = false,
+    fromMoved = false,
   ) {
     if (
       ![source, target].every(
@@ -429,7 +430,12 @@ export class WingsClient {
       "PUT",
       {
         root: "/fixture-docs",
-        files: [{ from: source, to: moved ? `moved/${target}` : target }],
+        files: [
+          {
+            from: fromMoved ? `moved/${source}` : source,
+            to: moved ? `moved/${target}` : target,
+          },
+        ],
       },
     );
     await response.body?.cancel();

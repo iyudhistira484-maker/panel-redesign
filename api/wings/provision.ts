@@ -838,12 +838,15 @@ export function createProvisioner(
       source: string,
       target: string,
       moved = false,
+      fromMoved = false,
     ) {
       const destination = moved ? ["fixture-docs", "moved"] : ["fixture-docs"];
+      const sourceName = fromMoved ? `moved/${source}` : source;
       const receiptName = moved ? `moved/${target}` : target;
       return exclusive(id, async () => {
         if (
-          (!moved && source === target) ||
+          (fromMoved === moved && source === target) ||
+          sourceName.length > 80 ||
           receiptName.length > 80 ||
           ![source, target].every(
             (name) => fixturePathSegment(name) && name.endsWith(".txt"),
@@ -870,12 +873,12 @@ export function createProvisioner(
           const [receipt] = await rows<{ digest: string }>(
             pool,
             "SELECT digest FROM client_uploaded_files WHERE server_id=? AND name=?",
-            [id, source],
+            [id, sourceName],
           );
           if (!receipt) throw new ProvisionError(404, "upload_not_found");
           const original = await client.fixtureDownload(
             id,
-            ["fixture-docs"],
+            fromMoved ? ["fixture-docs", "moved"] : ["fixture-docs"],
             source,
           );
           if (
@@ -888,22 +891,28 @@ export function createProvisioner(
             const [locked] = await rows<{ digest: string }>(
               db,
               "SELECT digest FROM client_uploaded_files WHERE server_id=? AND name=? FOR UPDATE",
-              [id, source],
+              [id, sourceName],
             );
             if (locked?.digest !== receipt.digest)
               throw new ProvisionError(409, "upload_changed");
             await db.execute(
               "DELETE FROM client_uploaded_files WHERE server_id=? AND (name=? OR name=?)",
-              [id, source, receiptName],
+              [id, sourceName, receiptName],
             );
             await db.execute(
               "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'wings.fixture_file_rename_requested',?)",
               [actor.id, id],
             );
           });
-          await client.renameUploadedFixture(id, source, target, moved);
+          await client.renameUploadedFixture(
+            id,
+            source,
+            target,
+            moved,
+            fromMoved,
+          );
           if (
-            (await client.fixtureUploadTargetExists(id, source)) ||
+            (await client.fixtureUploadTargetExists(id, source, fromMoved)) ||
             !(await client.fixtureDownload(id, destination, target)).equals(
               original,
             )

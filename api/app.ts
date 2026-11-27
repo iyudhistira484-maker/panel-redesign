@@ -1777,7 +1777,11 @@ export async function createApp({
   if (provisioner)
     app.post<{
       Params: { id: string };
-      Body: { source: string; target: string; destination?: "moved" };
+      Body: {
+        source: string;
+        target: string;
+        destination?: "moved" | "parent";
+      };
     }>(
       "/api/v1/servers/:id/files/rename-fixture",
       {
@@ -1787,7 +1791,7 @@ export async function createApp({
             {
               source: text(1, 80),
               target: text(1, 80),
-              destination: { type: "string", const: "moved" },
+              destination: { type: "string", enum: ["moved", "parent"] },
             },
             ["source", "target"],
           ),
@@ -1813,6 +1817,7 @@ export async function createApp({
                 req.body.source,
                 req.body.target,
                 req.body.destination === "moved",
+                req.body.destination === "parent",
               ),
             );
         } catch (error) {

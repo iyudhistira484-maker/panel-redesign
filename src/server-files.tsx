@@ -155,12 +155,14 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
       setBusy(false);
     }
   }
-  async function copyFile(rename = false, moved = false) {
+  async function copyFile(rename = false, moved = false, back = "") {
+    const source = back || copySource,
+      target = back || copyTarget;
     if (
       busy ||
-      !copySource ||
-      !/^[A-Za-z0-9_][A-Za-z0-9_. -]{0,79}$/.test(copyTarget) ||
-      !copyTarget.endsWith(".txt")
+      !source ||
+      !/^[A-Za-z0-9_][A-Za-z0-9_. -]{0,79}$/.test(target) ||
+      !target.endsWith(".txt")
     )
       return;
     setBusy(true);
@@ -176,9 +178,11 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
             "x-relay-request": "1",
           },
           body: JSON.stringify({
-            source: copySource,
-            target: copyTarget,
-            ...(moved ? { destination: "moved" } : {}),
+            source,
+            target,
+            ...(moved || back
+              ? { destination: moved ? "moved" : "parent" }
+              : {}),
           }),
           signal: AbortSignal.timeout(30000),
         },
@@ -196,7 +200,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
         throw new Error("Copy unverified");
       const data = (await reply.json()) as { name?: string; size: number };
       if (
-        data.name !== copyTarget ||
+        data.name !== target ||
         !Number.isSafeInteger(data.size) ||
         data.size < 0 ||
         data.size > 16384
@@ -206,9 +210,9 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
         (current) =>
           current &&
           [
-            ...current.filter((item) => !rename || item.name !== copySource),
-            ...(!moved
-              ? [{ name: copyTarget, size: data.size, directory: false }]
+            ...current.filter((item) => !rename || item.name !== source),
+            ...(!moved && !back
+              ? [{ name: target, size: data.size, directory: false }]
               : []),
           ].sort((a, b) => a.name.localeCompare(b.name)),
       );
@@ -774,6 +778,17 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
           ))}
         </ul>
       )}
+      {path.join("/") === "fixture-docs/moved" && copyStatus && (
+        <output>
+          {copyStatus === "renamed"
+            ? en
+              ? "Move verified."
+              : "Pemindahan terverifikasi."
+            : en
+              ? "Move not confirmed."
+              : "Pemindahan belum terkonfirmasi."}
+        </output>
+      )}
       {downloadError && (
         <p role="alert">
           {en ? "Download unavailable." : "Unduhan tidak tersedia."}
@@ -793,6 +808,16 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
           >
             {en ? "Download text file" : "Unduh file teks"}
           </Button>
+          {path.join("/") === "fixture-docs/moved" && (
+            <Button
+              disabled={busy}
+              onClick={() => void copyFile(true, false, preview.name)}
+            >
+              {en
+                ? "Move back to fixture-docs"
+                : "Pindahkan kembali ke fixture-docs"}
+            </Button>
+          )}
           {path.join("/") === "fixture-docs" &&
             preview.name === "example.txt" &&
             (draft === null ? (

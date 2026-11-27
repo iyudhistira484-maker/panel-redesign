@@ -398,6 +398,43 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
         digest: createHash("sha256").update(uploadedBytes).digest("hex"),
       },
     ]);
+    const moveBack = (target: string) =>
+      page
+        .context()
+        .request.post(renameApi, {
+          headers: editHeaders,
+          data: { source: moveTarget, target, destination: "parent" },
+        });
+    expect((await moveBack(uploadName)).status()).toBe(409);
+    const returned = await moveBack(moveTarget);
+    expect(returned.status()).toBe(200);
+    expect(await returned.json()).toMatchObject({
+      name: moveTarget,
+      directory: "/fixture-docs",
+      size: uploadedBytes.length,
+    });
+    const root = `${uploadVolume}/${id}/fixture-docs`;
+    const readBack = await docker(
+      "docker",
+      ["exec", fixtureDaemon, "cat", `${root}/${moveTarget}`],
+      { encoding: "buffer", timeout: 5000 },
+    );
+    expect(readBack.stdout).toEqual(uploadedBytes);
+    await docker(
+      "docker",
+      ["exec", fixtureDaemon, "test", "!", "-e", `${root}/moved/${moveTarget}`],
+      { timeout: 5000 },
+    );
+    const [returnedReceipts] = await moveDb.query(
+      "SELECT CAST(name AS CHAR) AS name,digest FROM client_uploaded_files WHERE server_id=? AND name IN (?,?)",
+      [id, moveTarget, `moved/${moveTarget}`],
+    );
+    expect(returnedReceipts).toEqual([
+      {
+        name: moveTarget,
+        digest: createHash("sha256").update(uploadedBytes).digest("hex"),
+      },
+    ]);
   } finally {
     await moveDb.end();
   }
