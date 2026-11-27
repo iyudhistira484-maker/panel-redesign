@@ -19,6 +19,8 @@ type Entry = {
   modified_at: unknown;
 };
 export type FileBinding = {
+  archiveDownloadAllowed(id: string, actor: Actor): Promise<boolean>;
+  readArchive(id: string, name: string): Promise<Buffer>;
   decompress(
     id: string,
     actor: Actor,
@@ -116,7 +118,14 @@ export function registerClientFiles(
 ) {
   const tickets = new Map<
     string,
-    { id: string; parts: string[]; name: string; actor: Actor; expires: number }
+    {
+      id: string;
+      parts: string[];
+      name: string;
+      actor: Actor;
+      expires: number;
+      archiveDigest?: string;
+    }
   >();
   const ticketPath = "/api/client/file-downloads";
   for (const action of ["list", "download"] as const) {
@@ -165,7 +174,19 @@ export function registerClientFiles(
           }
           const name = parts.pop();
           if (!name) return failure(reply, 400);
-          await binding.read(server.id, parts, name, true);
+          let archiveDigest: string | undefined;
+          if (
+            parts.length === 1 &&
+            parts[0] === "fixture-docs" &&
+            /^archive-[A-Za-z0-9+_-]+\.tar\.gz$/.test(name)
+          ) {
+            if (!(await binding.archiveDownloadAllowed(server.id, actor)))
+              return failure(reply, 403);
+            const bytes = await binding.readArchive(server.id, name);
+            if (!(await binding.archiveDownloadAllowed(server.id, actor)))
+              return failure(reply, 403);
+            archiveDigest = createHash("sha256").update(bytes).digest("hex");
+          } else await binding.read(server.id, parts, name, true);
           const now = Date.now();
           for (const [token, ticket] of tickets)
             if (ticket.expires <= now) tickets.delete(token);
@@ -177,12 +198,15 @@ export function registerClientFiles(
             name,
             actor,
             expires: now + 15_000,
+            archiveDigest,
           });
           const url = new URL(`${ticketPath}/${server.id}/${name}`, origin);
           url.searchParams.set("token", token);
           return { object: "signed_url", attributes: { url: url.href } };
         } catch (err) {
-          return fileError(err, reply);
+          return err instanceof ProvisionError
+            ? failure(reply, err.status)
+            : fileError(err, reply);
         }
       },
     );
@@ -672,22 +696,29 @@ export function registerClientFiles(
       )
         return failure(reply, 404);
       tickets.delete(token);
-      if (!(await binding.allowed(ticket.id, ticket.actor, true)))
-        return failure(reply, 404);
+      const allowed = () =>
+        ticket.archiveDigest
+          ? binding.archiveDownloadAllowed(ticket.id, ticket.actor)
+          : binding.allowed(ticket.id, ticket.actor, true);
+      if (!(await allowed())) return failure(reply, 404);
       try {
-        const bytes = await binding.read(
-          ticket.id,
-          ticket.parts,
-          ticket.name,
-          false,
-        );
+        const bytes = ticket.archiveDigest
+          ? await binding.readArchive(ticket.id, ticket.name)
+          : await binding.read(ticket.id, ticket.parts, ticket.name, false);
         if (
           ticket.expires <= Date.now() ||
-          !(await binding.allowed(ticket.id, ticket.actor, true))
+          !(await allowed()) ||
+          (ticket.archiveDigest &&
+            createHash("sha256").update(bytes).digest("hex") !==
+              ticket.archiveDigest)
         )
           return failure(reply, 404);
         return reply
-          .type("application/octet-stream")
+          .type(
+            ticket.archiveDigest
+              ? "application/gzip"
+              : "application/octet-stream",
+          )
           .header(
             "content-disposition",
             `attachment; filename="${ticket.name}"`,
@@ -695,7 +726,9 @@ export function registerClientFiles(
           .header("x-content-type-options", "nosniff")
           .send(bytes);
       } catch (err) {
-        return fileError(err, reply);
+        return err instanceof ProvisionError
+          ? failure(reply, 404)
+          : fileError(err, reply);
       }
     },
   );

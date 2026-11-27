@@ -373,7 +373,14 @@ export function createProvisioner(
   async function ownerFileScope(
     id: string,
     actor: Actor,
-    scope: "upload" | "delete" | "chmod" | "rename" | "compress" | "decompress",
+    scope:
+      | "upload"
+      | "delete"
+      | "chmod"
+      | "rename"
+      | "compress"
+      | "decompress"
+      | "download",
     db: Executor = pool,
     lock = false,
   ) {
@@ -392,7 +399,7 @@ export function createProvisioner(
       (
         await rows(
           db,
-          `SELECT id FROM api_keys WHERE id=? AND user_id=? AND ${{ upload: "client_upload_file", delete: "client_delete_file", chmod: "client_chmod_file", rename: "client_rename_file", compress: "client_compress_file", decompress: "client_decompress_file" }[scope]}=TRUE AND expires_at>UTC_TIMESTAMP(3)`,
+          `SELECT id FROM api_keys WHERE id=? AND user_id=? AND ${{ upload: "client_upload_file", delete: "client_delete_file", chmod: "client_chmod_file", rename: "client_rename_file", compress: "client_compress_file", decompress: "client_decompress_file", download: "client_download" }[scope]}=TRUE AND expires_at>UTC_TIMESTAMP(3)`,
           [actor.keyId, actor.id],
         )
       ).length === 1
@@ -1011,6 +1018,16 @@ export function createProvisioner(
     renameFixture,
     editFixtureText,
     compatFiles: {
+      archiveDownloadAllowed: (id: string, actor: Actor) =>
+        ownerFileScope(id, actor, "download"),
+      async readArchive(id: string, name: string) {
+        const bytes = await client.loadFixtureTar(id, name);
+        await extractFixtureTar(bytes).catch(() => {
+          throw new ProvisionError(400, "invalid_fixture_tar");
+        });
+        return bytes;
+      },
+
       async decompress(id: string, actor: Actor, name: string) {
         return exclusive(id, async () => {
           const authorize = async () => {

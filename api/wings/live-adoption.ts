@@ -1,3 +1,5 @@
+import { extractFixtureTar } from "./fixture-tar";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   joinFixtureMumble,
   observeMumbleSessions,
@@ -4810,8 +4812,12 @@ async function main() {
           ).status,
           404,
         );
-        const downloadTicket = async (base: string, key: string) => {
-          const response = await fileApi(base, key, "download", binaryFile);
+        const downloadTicket = async (
+          base: string,
+          key: string,
+          file = binaryFile,
+        ) => {
+          const response = await fileApi(base, key, "download", file);
           assert.equal(response.status, 200);
           const body = (await response.json()) as {
             object: string;
@@ -5348,6 +5354,49 @@ async function main() {
             { encoding: "buffer", timeout: 5000 },
           );
           assert.deepEqual(actual.stdout, uploaded);
+          const archivePath = `${directory}/${archive.attributes.name}`;
+          if (base === relayBase) {
+            assert.equal(
+              (await fileApi(base, editKey, "download", archivePath)).status,
+              403,
+            );
+            assert.equal(
+              (await fileApi(base, sharedFileKey, "download", archivePath))
+                .status,
+              403,
+            );
+          }
+          const ticket = await downloadTicket(
+            base,
+            base === relayBase ? downloadKey : legacyKey,
+            archivePath,
+          );
+          const served = await fetch(ticket);
+          assert.equal(served.status, 200);
+          const received = Buffer.from(await served.arrayBuffer());
+          assert.deepEqual(await extractFixtureTar(received), [
+            { name, bytes: uploaded },
+          ]);
+          const stored = await docker(
+            "docker",
+            ["exec", "relay-wings-contract", "cat", path],
+            { encoding: "buffer", timeout: 5000 },
+          );
+          assert.deepEqual(received, stored.stdout);
+          if (base === relayBase) {
+            assert.equal(
+              served.headers.get("content-type"),
+              "application/gzip",
+            );
+            assert.equal((await fetch(ticket)).status, 404);
+            const expires = await downloadTicket(
+              base,
+              downloadKey,
+              archivePath,
+            );
+            await delay(15_100);
+            assert.equal((await fetch(expires)).status, 404);
+          }
           if (base === relayBase) {
             assert.equal(
               (await decompress(base, editKey, archive.attributes.name)).status,
