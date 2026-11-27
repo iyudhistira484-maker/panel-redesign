@@ -455,7 +455,7 @@ export class WingsClient {
   async copyFixtureWithSuffix(id: string, source: string, original: Buffer) {
     if (
       !fixturePathSegment(source) ||
-      !source.endsWith(".txt") ||
+      !/\.(txt|bin)$/.test(source) ||
       source.length > 72
     )
       throw new WingsUnavailable("payload");
@@ -465,7 +465,8 @@ export class WingsClient {
     const before = new Set(rows.map((entry) => entry.name));
     const candidates = Array.from(
       { length: 51 },
-      (_, i) => `${source.slice(0, -4)} copy${i ? ` ${i}` : ""}.txt`,
+      (_, i) =>
+        `${source.slice(0, -4)} copy${i ? ` ${i}` : ""}${source.slice(-4)}`,
     );
     if (!candidates.some((name) => !before.has(name)))
       throw new WingsUnavailable("payload");
@@ -583,7 +584,7 @@ export class WingsClient {
       throw new WingsUnavailable("payload");
     if (
       ![source, target].every(
-        (name) => fixturePathSegment(name) && name.endsWith(".txt"),
+        (name) => fixturePathSegment(name) && /\.(txt|bin)$/.test(name),
       )
     )
       throw new WingsUnavailable("payload");

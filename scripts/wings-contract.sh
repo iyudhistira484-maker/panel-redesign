@@ -33,6 +33,10 @@ if [[ "${RELAY_BOOTSTRAP_SCENARIO:-}" == legacy-panel ]]; then
   patch="$PWD/patches/wings/v1.13.5-sftp-lease.patch"
   git -C "$work/wings-source" apply --unidiff-zero --check "$patch"
   git -C "$work/wings-source" apply --unidiff-zero "$patch"
+  rename_patch="$PWD/patches/wings/v1.13.5-linux-rename-noreplace.patch"
+  git -C "$work/wings-source" apply --unidiff-zero --check "$rename_patch"
+  git -C "$work/wings-source" apply --unidiff-zero "$rename_patch"
+  export RELAY_WINGS_ATOMIC_RENAME=1
   (cd "$work/wings-source" && gofmt -w remote/types.go remote/servers.go sftp/server.go && CGO_ENABLED=0 go build -trimpath -ldflags="-X github.com/pterodactyl/wings/system.Version=1.13.5" -o "$work/wings" ./wings.go)
 else
 curl -fsSL --retry 2 'https://github.com/pterodactyl/wings/releases/download/v1.13.5/wings_linux_amd64' -o "$work/wings"

@@ -1564,7 +1564,7 @@ export async function createApp({
       Querystring: { directory?: string; preview?: string; download?: string };
     }>(
       "/api/v1/servers/:id/files",
-      { config: { rateLimit: { max: 21, timeWindow: "1 minute" } } },
+      { config: { rateLimit: { max: 24, timeWindow: "1 minute" } } },
       async (req, reply) => {
         reply.header("cache-control", "no-store");
         const principal = await actor(
@@ -1899,7 +1899,7 @@ export async function createApp({
     }>(
       "/api/v1/servers/:id/files/rename-fixture",
       {
-        config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+        config: { rateLimit: { max: 13, timeWindow: "1 minute" } },
         schema: {
           body: object(
             {
@@ -1967,6 +1967,20 @@ export async function createApp({
         if (!UUID_V4.test(req.params.id))
           return reply.code(404).send({ error: "server_not_found" });
         try {
+          if (
+            req.body.source.endsWith(".bin") ||
+            req.body.target.endsWith(".bin")
+          )
+            return reply
+              .code(201)
+              .send(
+                await provisioner.copyBinaryFixture(
+                  req.params.id,
+                  principal,
+                  req.body.source,
+                  req.body.target,
+                ),
+              );
           const source = await provisioner.files(
             req.params.id,
             principal,

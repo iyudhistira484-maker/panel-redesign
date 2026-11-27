@@ -579,6 +579,79 @@ export function createProvisioner(
     });
   }
 
+  const atomicBinary =
+    process.env.RELAY_WINGS_ATOMIC_RENAME === "1" &&
+    process.env.RELAY_DISPOSABLE_WINGS_CI === "1" &&
+    process.env.RUNNER_ENVIRONMENT === "github-hosted";
+  async function copyBinaryFixture(
+    id: string,
+    actor: Actor,
+    source: string,
+    target: string,
+  ) {
+    return exclusive(id, async () => {
+      if (!atomicBinary)
+        throw new ProvisionError(422, "atomic_rename_required");
+      if (
+        source === target ||
+        source.length > 72 ||
+        ![source, target].every(
+          (name) => fixturePathSegment(name) && name.endsWith(".bin"),
+        )
+      )
+        throw new ProvisionError(400, "invalid_binary_copy");
+      const authorize = async () => {
+        const server = await load(pool, id);
+        if (
+          !server ||
+          actor.channel !== "session" ||
+          server.ownerId !== actor.id ||
+          !eligible(server) ||
+          server.phase !== "installed"
+        )
+          throw new ProvisionError(404, "server_not_found");
+      };
+      await authorize();
+      try {
+        if ((await client.state(id)) !== "offline")
+          throw new ProvisionError(409, "server_not_offline");
+        if (await client.fixtureUploadTargetExists(id, target))
+          throw new ProvisionError(409, "file_exists");
+        const [receipt] = await rows<{ digest: string }>(
+          pool,
+          "SELECT digest FROM client_uploaded_files WHERE server_id=? AND name=?",
+          [id, source],
+        );
+        if (!receipt) throw new ProvisionError(404, "upload_not_found");
+        const segments = ["fixture-docs"];
+        const bytes = await client.fixtureDownload(id, segments, source);
+        if (createHash("sha256").update(bytes).digest("hex") !== receipt.digest)
+          throw new ProvisionError(409, "uploaded_file_changed");
+        await authorize();
+        await pool.execute(
+          "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'wings.fixture_binary_copy_requested',?)",
+          [actor.id, id],
+        );
+        const copy = await client.copyFixtureWithSuffix(id, source, bytes);
+        if (copy !== target)
+          await client.renameUploadedFixture(id, copy, target);
+        if (
+          !(await client.fixtureDownload(id, segments, target)).equals(bytes) ||
+          !(await client.fixtureDownload(id, segments, source)).equals(bytes)
+        )
+          throw new ProvisionError(502, "file_copy_unverified");
+        await pool.execute(
+          "INSERT INTO client_uploaded_files (server_id,name,digest) VALUES (?,?,?) ON DUPLICATE KEY UPDATE digest=VALUES(digest)",
+          [id, target, receipt.digest],
+        );
+        return { name: target, size: bytes.length };
+      } catch (error) {
+        if (error instanceof WingsUnavailable)
+          throw new ProvisionError(502, "file_copy_unverified");
+        throw error;
+      }
+    });
+  }
   async function renameFixture(
     id: string,
     actor: Actor,
@@ -588,6 +661,10 @@ export function createProvisioner(
     fromMoved?: FixtureSubfolder,
     compat = false,
   ) {
+    const binary =
+      !compat && source.endsWith(".bin") && target.endsWith(".bin");
+    if (binary && !atomicBinary)
+      throw new ProvisionError(422, "atomic_rename_required");
     const destination = moved
       ? ["fixture-docs", ...moved.split("/")]
       : ["fixture-docs"];
@@ -599,7 +676,8 @@ export function createProvisioner(
         sourceName.length > 80 ||
         receiptName.length > 80 ||
         ![source, target].every(
-          (name) => fixturePathSegment(name) && name.endsWith(".txt"),
+          (name) =>
+            fixturePathSegment(name) && (binary || name.endsWith(".txt")),
         )
       )
         throw new ProvisionError(400, "invalid_rename");
@@ -967,14 +1045,14 @@ export function createProvisioner(
         }
         if (
           download &&
-          path === "/fixture-docs" &&
+          segments[0] === "fixture-docs" &&
           fixturePathSegment(preview) &&
           preview.endsWith(".bin")
         ) {
           const [receipt] = await rows<{ digest: string }>(
             pool,
             "SELECT digest FROM client_uploaded_files WHERE server_id=? AND name=?",
-            [id, preview],
+            [id, [...segments.slice(1), preview].join("/")],
           );
           if (!receipt) throw new ProvisionError(404, "upload_not_found");
           const bytes = await client.fixtureDownload(id, segments, preview);
@@ -1157,6 +1235,7 @@ export function createProvisioner(
     },
     chmodFixture,
     renameFixture,
+    copyBinaryFixture,
     createFolder,
     editFixtureText,
     compatFiles: {

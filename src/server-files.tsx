@@ -177,7 +177,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
         ? !/^[a-z][a-z0-9_/-]{0,96}$/.test(target)
         : !source ||
           !/^[A-Za-z0-9_][A-Za-z0-9_. -]{0,79}$/.test(target) ||
-          !target.endsWith(".txt"))
+          !/\.(txt|bin)$/.test(target))
     )
       return;
     setBusy(true);
@@ -530,7 +530,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
               : "Server harus offline. File .txt UTF-8 baru hingga 16 KiB; tidak menimpa file lama."}
           </p>
           <Button disabled={!uploadFile || busy} onClick={() => void upload()}>
-            {en ? "Upload new file" : "Unggah file baru"}
+            {en ? "Upload file" : "Unggah file"}
           </Button>
           {uploadStatus && (
             <output>
@@ -553,7 +553,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
       {path.join("/") === "fixture-docs" && items && (
         <div>
           <label>
-            {en ? "Source text file" : "File teks sumber"}{" "}
+            {en ? "Source file" : "File sumber"}{" "}
             <select
               value={copySource}
               disabled={busy}
@@ -562,14 +562,12 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
                 setCopyStatus(null);
               }}
             >
-              <option value="">
-                {en ? "Choose a text file" : "Pilih file teks"}
-              </option>
+              <option value="">{en ? "Select file" : "Pilih file"}</option>
               {items
                 .filter(
                   (item) =>
                     !item.directory &&
-                    item.name.endsWith(".txt") &&
+                    /\.(txt|bin)$/.test(item.name) &&
                     item.size <= 16384,
                 )
                 .map((item) => (
@@ -597,11 +595,11 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
               !copySource ||
               copySource === copyTarget ||
               !/^[A-Za-z0-9_][A-Za-z0-9_. -]{0,79}$/.test(copyTarget) ||
-              !copyTarget.endsWith(".txt")
+              !/\.(txt|bin)$/.test(copyTarget)
             }
             onClick={() => void copyFile()}
           >
-            {en ? "Copy text file" : "Salin file teks"}
+            {en ? "Copy file" : "Salin file"}
           </Button>
           <Button
             disabled={
@@ -609,11 +607,11 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
               !copySource ||
               copySource === copyTarget ||
               !/^[A-Za-z0-9_][A-Za-z0-9_. -]{0,79}$/.test(copyTarget) ||
-              !copyTarget.endsWith(".txt")
+              !/\.(txt|bin)$/.test(copyTarget)
             }
             onClick={() => void copyFile(true)}
           >
-            {en ? "Rename uploaded file" : "Ubah nama file unggahan"}
+            {en ? "Rename file" : "Ubah nama file"}
           </Button>
           <label>
             {en ? "Destination folder" : "Folder tujuan"}{" "}
@@ -649,7 +647,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
             {["600", "644"].map((mode) => (
               <Button
                 key={mode}
-                disabled={busy || !copySource}
+                disabled={busy || !copySource.endsWith(".txt")}
                 onClick={() => void copyFile(false, false, "", mode)}
               >
                 {mode}
@@ -666,7 +664,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
               : "Gzip (1), ZIP (4), 16 KiB per file."}
           </p>
           <Button
-            disabled={busy || !copySource}
+            disabled={busy || !copySource.endsWith(".txt")}
             onClick={() => void downloadFile(copySource, true)}
           >
             {en ? "Download as gzip" : "Unduh sebagai gzip"}
@@ -776,9 +774,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
       )}
       {error && (
         <p role="alert">
-          {en
-            ? "The folder could not be listed."
-            : "Daftar folder tidak dapat dimuat."}
+          {en ? "Folder unavailable." : "Folder tidak tersedia."}
         </p>
       )}
       {items?.length === 0 && (
@@ -824,6 +820,17 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
                     {en ? "Download" : "Unduh"}
                   </Button>
                 )}
+              {inMoveFolder &&
+                path.length > 1 &&
+                !item.directory &&
+                item.name.endsWith(".bin") && (
+                  <Button
+                    disabled={busy}
+                    onClick={() => void copyFile(true, false, item.name)}
+                  >
+                    {en ? "Move back" : "Pindahkan kembali"}
+                  </Button>
+                )}
             </li>
           ))}
         </ul>
@@ -856,7 +863,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
             disabled={busy}
             onClick={() => void downloadFile(preview.name)}
           >
-            {en ? "Download text file" : "Unduh file teks"}
+            {en ? "Download" : "Unduh"}
           </Button>
           {path.length > 1 && inMoveFolder && (
             <Button

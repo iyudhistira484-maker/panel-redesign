@@ -233,7 +233,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     buffer: uploadedBytes,
   });
   const uploadReply = page.waitForResponse((r) => r.url() === uploadApi);
-  await page.getByRole("button", { name: "Unggah file baru" }).click();
+  await page.getByRole("button", { name: "Unggah file" }).click();
   expect((await uploadReply).status()).toBe(201);
   await expect(page.getByText("Unggahan terverifikasi.")).toBeVisible();
   await expect(
@@ -267,10 +267,10 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       })
     ).status(),
   ).toBe(409);
-  await page.getByLabel("File teks sumber").selectOption(uploadName);
+  await page.getByLabel("File sumber").selectOption(uploadName);
   await page.getByLabel("Nama / jalur").fill(copyName);
   const copied = page.waitForResponse((response) => response.url() === copyApi);
-  await page.getByRole("button", { name: "Salin file teks" }).click();
+  await page.getByRole("button", { name: "Salin file" }).click();
   expect((await copied).status()).toBe(201);
   await expect(page.getByText("Operasi terverifikasi.")).toBeVisible();
   await expect(
@@ -302,12 +302,12 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   expect((await requestRename(copyName, "../rename-escape.txt")).status()).toBe(
     400,
   );
-  await page.getByLabel("File teks sumber").selectOption(copyName);
+  await page.getByLabel("File sumber").selectOption(copyName);
   await page.getByLabel("Nama / jalur").fill(renamed);
   const renameReply = page.waitForResponse(
     (response) => response.url() === renameApi,
   );
-  await page.getByRole("button", { name: "Ubah nama file unggahan" }).click();
+  await page.getByRole("button", { name: "Ubah nama file" }).click();
   expect((await renameReply).status()).toBe(200);
   await expect(page.getByText("Operasi terverifikasi.")).toBeVisible();
   await expect(
@@ -387,7 +387,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       })
     ).status(),
   ).toBe(400);
-  await page.getByLabel("File teks sumber").selectOption(renamed);
+  await page.getByLabel("File sumber").selectOption(renamed);
   await page.getByLabel("Nama / jalur").fill(moveTarget);
   await page.getByLabel("Folder tujuan").selectOption(moveFolder);
   const moveReply = page.waitForResponse(
@@ -517,7 +517,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   console.log(
     "::notice::Chromium fixture move verified destination bytes, source absence and relocated receipt",
   );
-  await page.getByLabel("File teks sumber").selectOption(uploadName);
+  await page.getByLabel("File sumber").selectOption(uploadName);
   expect((await chmod(uploadName, "777")).status()).toBe(400);
   expect((await chmod("../browser-upload.txt", "600")).status()).toBe(400);
   expect((await chmod("example.txt", "600")).status()).toBe(404);
@@ -739,7 +739,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   const binaryUpload = page.waitForResponse(
     (response) => response.url() === uploadApi,
   );
-  await page.getByRole("button", { name: "Unggah file baru" }).click();
+  await page.getByRole("button", { name: "Unggah file" }).click();
   expect((await binaryUpload).status()).toBe(201);
   const binaryDownload = page.waitForEvent("download");
   await files
@@ -761,6 +761,72 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     { encoding: "buffer", timeout: 5000 },
   );
   expect(storedBinary.stdout).toEqual(binaryBytes);
+  const binaryCopy = "browser-copy.bin";
+  await page.getByLabel("File sumber").selectOption(binaryName);
+  await page.getByLabel("Nama / jalur").fill(binaryCopy);
+  const copiedBinary = page.waitForResponse(
+    (response) => response.url() === copyApi,
+  );
+  await page.getByRole("button", { name: "Salin file", exact: true }).click();
+  expect((await copiedBinary).status()).toBe(201);
+  await expect(
+    files.getByRole("button", { name: `Unduh ${binaryCopy}` }),
+  ).toBeVisible();
+  expect((await requestCopy(binaryName, binaryCopy)).status()).toBe(409);
+  await page.getByLabel("File sumber").selectOption(binaryCopy);
+  await page.getByLabel("Nama / jalur").fill(binaryCopy);
+  await page.getByLabel("Folder tujuan").selectOption("review");
+  const movedBinary = page.waitForResponse(
+    (response) => response.url() === renameApi,
+  );
+  await page
+    .getByRole("button", { name: "Pindahkan file", exact: true })
+    .click();
+  expect((await movedBinary).status()).toBe(200);
+  await expect(
+    files.getByRole("button", { name: `Unduh ${binaryCopy}` }),
+  ).toHaveCount(0);
+  const binVolume = `${uploadVolume}/${id}/fixture-docs`;
+  const verifyBinary = async (relative: string) =>
+    expect(
+      (
+        await docker(
+          "docker",
+          ["exec", fixtureDaemon, "cat", `${binVolume}/${relative}`],
+          { encoding: "buffer", timeout: 5000 },
+        )
+      ).stdout,
+    ).toEqual(binaryBytes);
+  await verifyBinary(`review/${binaryCopy}`);
+  await verifyBinary(binaryName);
+  await files.getByRole("button", { name: "review", exact: true }).click();
+  const backBinary = page.waitForResponse(
+    (response) => response.url() === renameApi,
+  );
+  await files
+    .getByRole("button", { name: "Pindahkan kembali", exact: true })
+    .click();
+  expect((await backBinary).status()).toBe(200);
+  await expect(
+    files.getByRole("button", { name: "Pindahkan kembali", exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Folder induk" }).click();
+  await expect(
+    files.getByRole("button", { name: `Unduh ${binaryCopy}` }),
+  ).toBeVisible();
+  await verifyBinary(binaryCopy);
+  await docker(
+    "docker",
+    [
+      "exec",
+      fixtureDaemon,
+      "test",
+      "!",
+      "-e",
+      `${binVolume}/review/${binaryCopy}`,
+    ],
+    { timeout: 5000 },
+  );
   const binaryDb = stagingPool();
   try {
     const [receipts] = await binaryDb.query(
@@ -769,6 +835,16 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     );
     expect(receipts).toEqual([
       { digest: createHash("sha256").update(binaryBytes).digest("hex") },
+    ]);
+    const [copyReceipts] = await binaryDb.query(
+      "SELECT CAST(name AS CHAR) AS name,digest FROM client_uploaded_files WHERE server_id=? AND name IN (?,?)",
+      [id, binaryCopy, `review/${binaryCopy}`],
+    );
+    expect(copyReceipts).toEqual([
+      {
+        name: binaryCopy,
+        digest: createHash("sha256").update(binaryBytes).digest("hex"),
+      },
     ]);
   } finally {
     await binaryDb.end();

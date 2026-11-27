@@ -1,0 +1,6 @@
+diff --git a/internal/ufs/fs_unix.go b/internal/ufs/fs_unix.go
+--- a/internal/ufs/fs_unix.go
++++ b/internal/ufs/fs_unix.go
+@@ -537 +537 @@
+-	if err := unix.Renameat(olddirfd, oldname, newdirfd, newname); err != nil {
++	if err := unix.Renameat2(olddirfd, oldname, newdirfd, newname, unix.RENAME_NOREPLACE); err != nil {
