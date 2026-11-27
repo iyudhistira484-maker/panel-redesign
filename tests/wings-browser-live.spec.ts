@@ -522,6 +522,49 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     count: 2,
   });
   expect(await entries()).not.toContain("zip-pending-");
+  // Recreate the durable states left by a lost response, using the real Wings volume.
+  const zipDb = stagingPool();
+  const check = page.getByRole("button", {
+    name: "Periksa hasil ekstraksi ZIP",
+  });
+  const markPending = () =>
+    zipDb.execute(
+      "UPDATE fixture_zip_operations SET status='pending', updated_at=CURRENT_TIMESTAMP(6)-INTERVAL 61 SECOND WHERE server_id=?",
+      [id],
+    );
+  try {
+    await markPending();
+    const recovered = page.waitForResponse(
+      (response) => response.url() === `${fileApi}/reconcile-zip-fixture`,
+    );
+    await check.click();
+    expect(await (await recovered).json()).toMatchObject({
+      status: "succeeded",
+      directory: zipOutput.directory,
+      count: 2,
+    });
+    await expect(check).toBeEnabled();
+    const folder = `${uploadVolume}/${id}${zipOutput.directory}`;
+    const staged = folder.replace(
+      /\/extract-([a-f0-9]{32})$/,
+      "/zip-pending-$1",
+    );
+    await docker("docker", ["exec", fixtureDaemon, "mv", folder, staged], {
+      timeout: 5000,
+    });
+    await docker(
+      "docker",
+      ["exec", fixtureDaemon, "rm", `${staged}/example.txt`],
+      { timeout: 5000 },
+    );
+    await markPending();
+    await check.click();
+    await expect(page.getByText("Aman dicoba ulang.")).toBeVisible();
+    expect(await entries()).not.toContain(staged.split("/").at(-1));
+    expect(await entries()).not.toContain(folder.split("/").at(-1));
+  } finally {
+    await zipDb.end();
+  }
   const beforeBadZip = await entries();
   expect(
     (

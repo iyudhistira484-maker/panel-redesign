@@ -31,12 +31,54 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
   >(null);
   const [archive, setArchive] = useState<File | null>(null);
   const [archiveStatus, setArchiveStatus] = useState<
-    | { kind: "invalid" | "unknown" | "rejected" }
+    | {
+        kind:
+          | "invalid"
+          | "unknown"
+          | "rejected"
+          | "retryable"
+          | "pending"
+          | "none";
+      }
     | { kind: "done"; directory: string }
     | null
   >(null);
   const [zipNames, setZipNames] = useState<string[]>([]);
   const archiveInput = useRef<HTMLInputElement>(null);
+  async function checkArchive() {
+    setBusy(true);
+    try {
+      const response = await fetch(
+        `/api/v1/servers/${encodeURIComponent(id)}/files/reconcile-zip-fixture`,
+        {
+          method: "POST",
+          headers: { "x-relay-request": "1" },
+          signal: AbortSignal.timeout(30000),
+        },
+      );
+      if (!response.ok) throw new Error();
+      const result = await response.json();
+      if (result.status === "succeeded") await load(["fixture-docs"]);
+      setArchiveStatus(
+        result.status === "succeeded"
+          ? { kind: "done", directory: result.directory }
+          : {
+              kind:
+                result.status === "retryable"
+                  ? "retryable"
+                  : result.status === "pending"
+                    ? "pending"
+                    : result.status === "none"
+                      ? "none"
+                      : "unknown",
+            },
+      );
+    } catch {
+      setArchiveStatus({ kind: "unknown" });
+    } finally {
+      setBusy(false);
+    }
+  }
   async function extractArchive() {
     if (!archive || busy) return;
     setArchiveStatus(null);
@@ -629,23 +671,38 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
           >
             {en ? "Extract to new folder" : "Ekstrak ke folder baru"}
           </Button>
+          <Button disabled={busy} onClick={() => void checkArchive()}>
+            {en ? "Check ZIP extraction" : "Periksa hasil ekstraksi ZIP"}
+          </Button>
           {archiveStatus && (
             <output>
               {archiveStatus.kind === "done"
                 ? en
                   ? `Extracted and verified: ${archiveStatus.directory}`
                   : `Ekstraksi terverifikasi: ${archiveStatus.directory}`
-                : archiveStatus.kind === "invalid"
+                : archiveStatus.kind === "retryable"
                   ? en
-                    ? "Invalid text archive."
-                    : "Arsip teks tidak valid."
-                  : archiveStatus.kind === "rejected"
+                    ? "Safe to retry."
+                    : "Aman dicoba ulang."
+                  : archiveStatus.kind === "pending"
                     ? en
-                      ? "Extraction requires an offline server."
-                      : "Ekstraksi membutuhkan server offline."
-                    : en
-                      ? "Extraction not confirmed. Check the file list before retrying."
-                      : "Ekstraksi belum terkonfirmasi. Periksa daftar file sebelum mencoba lagi."}
+                      ? "Wait and check again."
+                      : "Tunggu lalu periksa lagi."
+                    : archiveStatus.kind === "none"
+                      ? en
+                        ? "No ZIP operation."
+                        : "Belum ada operasi ZIP."
+                      : archiveStatus.kind === "invalid"
+                        ? en
+                          ? "Invalid text archive."
+                          : "Arsip teks tidak valid."
+                        : archiveStatus.kind === "rejected"
+                          ? en
+                            ? "Extraction requires an offline server."
+                            : "Ekstraksi membutuhkan server offline."
+                          : en
+                            ? "Extraction not confirmed. Check the file list before retrying."
+                            : "Ekstraksi belum terkonfirmasi. Periksa daftar file sebelum mencoba lagi."}
             </output>
           )}
         </div>
