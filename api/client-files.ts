@@ -348,8 +348,7 @@ export function registerClientFiles(
         !entry.file.endsWith(".txt")
       )
         return failure(reply, 400);
-      const mode =
-        entry.mode === 600 ? "600" : entry.mode === 644 ? "644" : entry.mode;
+      const mode = entry.mode;
       if (mode !== "600" && mode !== "644") return failure(reply, 400);
       try {
         await binding.chmod(server.id, actor, entry.file, mode);

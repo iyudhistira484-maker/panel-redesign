@@ -5185,7 +5185,15 @@ async function main() {
           (await chmod(relayBase, chmodKey, legacyName, "600")).status,
           404,
         );
-        for (const mode of [600, "644"]) {
+        assert.equal(
+          (await chmod(legacyBase, legacyKey, legacyName, 600)).status,
+          400,
+        );
+        assert.equal(
+          (await chmod(relayBase, chmodKey, relayName, 600)).status,
+          400,
+        );
+        for (const mode of ["600", "644"]) {
           const legacy = await chmod(legacyBase, legacyKey, legacyName, mode);
           const relay = await chmod(relayBase, chmodKey, relayName, mode);
           assert.equal(legacy.status, 204);
