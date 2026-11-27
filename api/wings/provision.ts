@@ -1,3 +1,4 @@
+import { readPullSource, validatePullSource } from "./fixture-pull";
 import { extractFixtureTar } from "./fixture-tar";
 import { extractFixtureZip, fixtureZipLimits } from "./fixture-zip";
 import { extractFixtureText } from "./fixture-gzip";
@@ -84,7 +85,16 @@ export function createProvisioner(
   origin: string,
   applicationDispatchRequest?: typeof fetch,
   verifyApplicationDeletion?: (id: string) => Promise<boolean>,
+  fixturePullSource?: string,
 ) {
+  if (
+    fixturePullSource &&
+    (process.env.RELAY_ENV !== "staging" ||
+      process.env.RELAY_DISPOSABLE_WINGS_CI !== "1" ||
+      process.env.RUNNER_ENVIRONMENT !== "github-hosted")
+  )
+    throw new Error("Remote pull requires disposable hosted staging");
+  const pullSource = fixturePullSource && validatePullSource(fixturePullSource);
   const node = validateNode(rawNode);
   const crypt = cryptoContext(key, pepper, "node-token");
   const client = new WingsClient(node);
@@ -380,7 +390,8 @@ export function createProvisioner(
       | "rename"
       | "compress"
       | "decompress"
-      | "download",
+      | "download"
+      | "pull",
     db: Executor = pool,
     lock = false,
   ) {
@@ -399,7 +410,7 @@ export function createProvisioner(
       (
         await rows(
           db,
-          `SELECT id FROM api_keys WHERE id=? AND user_id=? AND ${{ upload: "client_upload_file", delete: "client_delete_file", chmod: "client_chmod_file", rename: "client_rename_file", compress: "client_compress_file", decompress: "client_decompress_file", download: "client_download" }[scope]}=TRUE AND expires_at>UTC_TIMESTAMP(3)`,
+          `SELECT id FROM api_keys WHERE id=? AND user_id=? AND ${{ upload: "client_upload_file", delete: "client_delete_file", chmod: "client_chmod_file", rename: "client_rename_file", compress: "client_compress_file", decompress: "client_decompress_file", download: "client_download", pull: "client_pull_file" }[scope]}=TRUE AND expires_at>UTC_TIMESTAMP(3)`,
           [actor.keyId, actor.id],
         )
       ).length === 1
@@ -1018,6 +1029,64 @@ export function createProvisioner(
     renameFixture,
     editFixtureText,
     compatFiles: {
+      async pull(id: string, actor: Actor, url: string, name: string) {
+        return exclusive(id, async () => {
+          const authorize = async () => {
+            if (!(await ownerFileScope(id, actor, "pull")))
+              throw new ProvisionError(403, "pull_scope_required");
+          };
+          await authorize();
+          if (!pullSource)
+            throw new ProvisionError(503, "pull_source_unavailable");
+          if (
+            url !== pullSource ||
+            !fixturePathSegment(name) ||
+            !name.endsWith(".txt")
+          )
+            throw new ProvisionError(400, "pull_source_not_allowed");
+          try {
+            if ((await client.state(id)) !== "offline")
+              throw new ProvisionError(409, "server_not_offline");
+            if (await client.fixtureUploadTargetExists(id, name))
+              throw new ProvisionError(409, "file_exists");
+            const text = await readPullSource(pullSource).catch(() => {
+              throw new ProvisionError(502, "pull_source_unverified");
+            });
+            await authorize();
+            if ((await client.state(id)) !== "offline")
+              throw new ProvisionError(409, "server_not_offline");
+            if (await client.fixtureUploadTargetExists(id, name))
+              throw new ProvisionError(409, "file_exists");
+            await transaction(pool, async (db) => {
+              await db.execute(
+                "DELETE FROM client_uploaded_files WHERE server_id=? AND name=?",
+                [id, name],
+              );
+              await db.execute(
+                "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'wings.fixture_file_pull_requested',?)",
+                [actor.id, id],
+              );
+            });
+            const bytes = Buffer.from(text);
+            await client.uploadFixtureText(id, name, text);
+            if (
+              !(
+                await client.fixtureDownload(id, ["fixture-docs"], name)
+              ).equals(bytes)
+            )
+              throw new ProvisionError(502, "pull_write_unverified");
+            await pool.execute(
+              "INSERT INTO client_uploaded_files (server_id,name,digest) VALUES (?,?,?)",
+              [id, name, createHash("sha256").update(bytes).digest("hex")],
+            );
+          } catch (error) {
+            if (error instanceof WingsUnavailable)
+              throw new ProvisionError(502, "pull_write_unverified");
+            throw error;
+          }
+        });
+      },
+
       archiveDownloadAllowed: (id: string, actor: Actor) =>
         ownerFileScope(id, actor, "download"),
       async readArchive(id: string, name: string) {

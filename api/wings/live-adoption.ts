@@ -1,3 +1,4 @@
+import { createServer } from "node:http";
 import { extractFixtureTar } from "./fixture-tar";
 import { setTimeout as delay } from "node:timers/promises";
 import {
@@ -229,6 +230,37 @@ async function main() {
   let backupSignal:
     | { id: string; phase: "create" | "restore"; result?: FixtureBackupSignal }
     | undefined;
+  let pullResponse: "ok" | "oversize" | "redirect" = "ok";
+  let pullRequests = 0;
+  const pullBytes = Buffer.from("\uFEFFRemote staging pull å\r\n");
+  const pullServer = actual
+    ? createServer((request, response) => {
+        pullRequests++;
+        if (request.url !== "/fixture.txt") {
+          response.writeHead(404).end();
+          return;
+        }
+        if (pullResponse === "redirect") {
+          response.writeHead(302, { location: "/never-follow" }).end();
+          return;
+        }
+        response.writeHead(200, { "content-type": "text/plain" });
+        response.write(
+          pullResponse === "oversize" ? Buffer.alloc(16384, 65) : pullBytes,
+        );
+        response.end(pullResponse === "oversize" ? "!" : undefined);
+      })
+    : undefined;
+  let fixturePullSource: string | undefined;
+  if (pullServer) {
+    await new Promise<void>((resolve, reject) => {
+      pullServer.once("error", reject);
+      pullServer.listen(0, "127.0.0.1", resolve);
+    });
+    const location = pullServer.address();
+    assert.ok(location && typeof location !== "string");
+    fixturePullSource = `http://127.0.0.1:${location.port}/fixture.txt`;
+  }
   const relayFor = (configured: typeof node, database = pool) =>
     createApp({
       pool: database,
@@ -239,7 +271,11 @@ async function main() {
       allowedCatalogNodeOrigins: [configured.origin],
       wingsTestNode: configured,
       ...(configured === node
-        ? { applicationDispatchRequest, verifyApplicationDeletion }
+        ? {
+            applicationDispatchRequest,
+            verifyApplicationDeletion,
+            fixturePullSource,
+          }
         : {}),
       ...(actual && configured === node
         ? {
@@ -1266,6 +1302,7 @@ async function main() {
           clientRenameFile?: boolean;
           clientCompressFile?: boolean;
           clientDecompressFile?: boolean;
+          clientPullFile?: boolean;
         } = {},
       ) {
         const key = `rly_${randomBytes(32).toString("base64url")}`;
@@ -5169,6 +5206,7 @@ async function main() {
           clientRenameFile: true,
           clientCompressFile: true,
           clientDecompressFile: true,
+          clientPullFile: true,
         });
         const chmod = (
           base: string,
@@ -5455,6 +5493,55 @@ async function main() {
         }
         console.log(
           "::notice::Pterodactyl tar.gz compress and decompress verified with real Wings; Relay uses a fresh destination",
+        );
+        assert.ok(fixturePullSource);
+        const pull = (key: string, filename: string, url = fixturePullSource) =>
+          fetch(`${relayBase}/api/client/servers/${identifier}/files/pull`, {
+            method: "POST",
+            headers: { ...auth(key), "content-type": "application/json" },
+            body: JSON.stringify({
+              url,
+              directory,
+              filename,
+              foreground: true,
+            }),
+          });
+        const pulled = "remote-pull.txt";
+        assert.equal((await pull(editKey, pulled)).status, 403);
+        assert.equal(
+          (await pull(chmodKey, pulled, `${fixturePullSource}?other=1`)).status,
+          400,
+        );
+        assert.equal((await pull(chmodKey, "../escaped.txt")).status, 400);
+        assert.equal(pullRequests, 0);
+        pullResponse = "redirect";
+        assert.equal((await pull(chmodKey, pulled)).status, 502);
+        assert.equal(pullRequests, 1);
+        pullResponse = "oversize";
+        assert.equal((await pull(chmodKey, pulled)).status, 502);
+        assert.equal(
+          await wingClient.fixtureUploadTargetExists(uuid, pulled),
+          false,
+        );
+        pullResponse = "ok";
+        assert.equal((await pull(chmodKey, pulled)).status, 204);
+        assert.deepEqual(
+          await wingClient.fixtureDownload(uuid, ["fixture-docs"], pulled),
+          pullBytes,
+        );
+        assert.equal((await pull(chmodKey, pulled)).status, 409);
+        assert.equal(pullRequests, 3);
+        const [pulledReceipt] = await rows<{ digest: string }>(
+          pool,
+          "SELECT digest FROM client_uploaded_files WHERE server_id=? AND name=?",
+          [uuid, pulled],
+        );
+        assert.equal(
+          pulledReceipt?.digest,
+          createHash("sha256").update(pullBytes).digest("hex"),
+        );
+        console.log(
+          "::notice::Fixed-source pull verified exact bytes, no redirect, chunked size bound, scope and duplicate rejection",
         );
         const deleteKey = await issueKey(ownerSession, false, false, false, {
           clientDeleteFile: true,
@@ -6248,6 +6335,7 @@ async function main() {
     );
   } finally {
     mail.close();
+    pullServer?.close();
     await relay.close();
     await relay2?.close();
     await legacy.close();

@@ -57,6 +57,7 @@ export type Options = {
   fixtureS3Urls?: Parameters<typeof registerRemote>[7];
   enableDisposableBackups?: boolean;
   fixtureAppDatabase?: FixtureAppDatabaseDriver;
+  fixturePullSource?: string;
 };
 type User = {
   id: string;
@@ -127,6 +128,7 @@ export async function createApp({
   fixtureS3Urls,
   enableDisposableBackups,
   fixtureAppDatabase,
+  fixturePullSource,
 }: Options) {
   if (
     fixtureAppDatabase &&
@@ -161,6 +163,7 @@ export async function createApp({
           origin,
           applicationDispatchRequest,
           verifyApplicationDeletion,
+          fixturePullSource,
         )
       : undefined;
   const receiver =
@@ -300,7 +303,9 @@ export async function createApp({
             req.routeOptions.url ===
               "/api/client/servers/:identifier/files/compress" ||
             req.routeOptions.url ===
-              "/api/client/servers/:identifier/files/decompress")) ||
+              "/api/client/servers/:identifier/files/decompress" ||
+            req.routeOptions.url ===
+              "/api/client/servers/:identifier/files/pull")) ||
           (req.method === "PUT" &&
             req.routeOptions.url ===
               "/api/client/servers/:identifier/files/rename")) &&
@@ -1027,6 +1032,7 @@ export async function createApp({
       clientRenameFile?: boolean;
       clientCompressFile?: boolean;
       clientDecompressFile?: boolean;
+      clientPullFile?: boolean;
     };
   }>(
     "/api/v1/account/keys",
@@ -1049,6 +1055,7 @@ export async function createApp({
             clientRenameFile: { type: "boolean" },
             clientCompressFile: { type: "boolean" },
             clientDecompressFile: { type: "boolean" },
+            clientPullFile: { type: "boolean" },
           },
           ["label", "key"],
         ),
@@ -1069,7 +1076,7 @@ export async function createApp({
         const digest = crypt.digest("api-key", `${req.body.key}.${suffix}`);
         try {
           await db.execute(
-            "INSERT INTO api_keys (id,user_id,digest,label,expires_at,client_power,client_console,client_stream,client_list_files,client_download,client_edit_file,client_upload_file,client_delete_file,client_chmod_file,client_rename_file,client_compress_file,client_decompress_file) VALUES (?,?,?,?,TIMESTAMPADD(DAY,90,UTC_TIMESTAMP(3)),?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO api_keys (id,user_id,digest,label,expires_at,client_power,client_console,client_stream,client_list_files,client_download,client_edit_file,client_upload_file,client_delete_file,client_chmod_file,client_rename_file,client_compress_file,client_decompress_file,client_pull_file) VALUES (?,?,?,?,TIMESTAMPADD(DAY,90,UTC_TIMESTAMP(3)),?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [
               id,
               u.id,
@@ -1087,6 +1094,7 @@ export async function createApp({
               req.body.clientRenameFile === true,
               req.body.clientCompressFile === true,
               req.body.clientDecompressFile === true,
+              req.body.clientPullFile === true,
             ],
           );
         } catch (e) {

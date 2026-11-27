@@ -19,6 +19,7 @@ type Entry = {
   modified_at: unknown;
 };
 export type FileBinding = {
+  pull(id: string, actor: Actor, url: string, name: string): Promise<void>;
   archiveDownloadAllowed(id: string, actor: Actor): Promise<boolean>;
   readArchive(id: string, name: string): Promise<Buffer>;
   decompress(
@@ -550,6 +551,49 @@ export function registerClientFiles(
           .header("x-relay-extracted-directory", result.directory)
           .code(204)
           .send();
+      } catch (error) {
+        return textError(error, reply);
+      }
+    },
+  );
+  app.post<{ Params: { identifier: string }; Body: Record<string, unknown> }>(
+    "/api/client/servers/:identifier/files/pull",
+    {
+      bodyLimit: 1024,
+      config: { rateLimit: { max: 8, timeWindow: "1 minute" } },
+    },
+    async (req, reply) => {
+      const actor = await authenticate(req.headers.authorization ?? "");
+      if (!actor) return failure(reply, 401);
+      const server = await resolve(req.params.identifier, actor.id);
+      if (!server) return failure(reply, 404);
+      if (!binding) return failure(reply, 503);
+      const { url, directory, filename, use_header, foreground } =
+        req.body ?? {};
+      if (
+        directory !== "/fixture-docs" ||
+        typeof url !== "string" ||
+        url.length > 256 ||
+        typeof filename !== "string" ||
+        !fixturePathSegment(filename) ||
+        !filename.endsWith(".txt") ||
+        foreground !== true ||
+        (use_header !== undefined && use_header !== false) ||
+        Object.keys(req.body ?? {}).some(
+          (key) =>
+            ![
+              "url",
+              "directory",
+              "filename",
+              "use_header",
+              "foreground",
+            ].includes(key),
+        )
+      )
+        return failure(reply, 400);
+      try {
+        await binding.pull(server.id, actor, url, filename);
+        return reply.code(204).send();
       } catch (error) {
         return textError(error, reply);
       }
