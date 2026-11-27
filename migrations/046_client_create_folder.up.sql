@@ -1,0 +1,1 @@
+ALTER TABLE api_keys ADD COLUMN client_create_folder BOOLEAN NOT NULL DEFAULT FALSE;

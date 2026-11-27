@@ -1,3 +1,9 @@
+export const fixtureFolderName = (name: string) =>
+  /^[a-z][a-z0-9_-]{0,47}(?![\s\S])/.test(name) &&
+  !name.startsWith("zip-pending-") &&
+  !name.startsWith("extract-") &&
+  name !== "moved" &&
+  name !== "review";
 import { fixtureTarLimit } from "./fixture-tar";
 export type FixtureSubfolder = "moved" | "review";
 export const fixturePathSegment = (value: string) =>
@@ -416,6 +422,19 @@ export class WingsClient {
       }
       throw error;
     }
+  }
+  async createFixtureFolder(id: string, name: string) {
+    if (!fixtureFolderName(name)) throw new WingsUnavailable("payload");
+    const response = await this.#send(
+      `${this.#server(id)}/files/create-directory`,
+      204,
+      "POST",
+      { path: "/fixture-docs", name },
+    );
+    await response.body?.cancel();
+    await this.fixtureDirectory(id, ["fixture-docs", name]);
+    if ((await this.#fixtureEntries(id, `/fixture-docs/${name}`)).length !== 0)
+      throw new WingsUnavailable("payload");
   }
   async copyFixtureWithSuffix(id: string, source: string, original: Buffer) {
     if (

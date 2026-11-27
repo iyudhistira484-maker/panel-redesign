@@ -1304,6 +1304,7 @@ async function main() {
           clientDecompressFile?: boolean;
           clientPullFile?: boolean;
           clientCopyFile?: boolean;
+          clientCreateFolder?: boolean;
         } = {},
       ) {
         const key = `rly_${randomBytes(32).toString("base64url")}`;
@@ -5209,6 +5210,7 @@ async function main() {
           clientDecompressFile: true,
           clientPullFile: true,
           clientCopyFile: true,
+          clientCreateFolder: true,
         });
         const chmod = (
           base: string,
@@ -5597,6 +5599,64 @@ async function main() {
         }
         console.log(
           "::notice::Pterodactyl copy matched 204, automatic numbered suffixes and source/copy bytes on Wings",
+        );
+        const mkdir = (
+          base: string,
+          key: string,
+          name: string,
+          root = directory,
+        ) =>
+          fetch(
+            `${base}/api/client/servers/${identifier}/files/create-folder`,
+            {
+              method: "POST",
+              headers: { ...auth(key), "content-type": "application/json" },
+              body: JSON.stringify({ root, name }),
+            },
+          );
+        assert.equal(
+          (await mkdir(relayBase, editKey, "denied-folder")).status,
+          403,
+        );
+        assert.equal(
+          (await mkdir(relayBase, chmodKey, "../escape")).status,
+          400,
+        );
+        assert.equal(
+          (await mkdir(relayBase, chmodKey, "zip-pending-reserved")).status,
+          400,
+        );
+        assert.equal(
+          (
+            await mkdir(
+              relayBase,
+              chmodKey,
+              "bad-parent",
+              `${directory}/review`,
+            )
+          ).status,
+          400,
+        );
+        for (const [base, key, name] of [
+          [legacyBase, legacyKey, "legacy-created-folder"],
+          [relayBase, chmodKey, "relay-created-folder"],
+        ]) {
+          assert.equal((await mkdir(base, key, name)).status, 204);
+          assert.deepEqual(
+            await wingClient.fixtureDirectory(uuid, ["fixture-docs", name]),
+            [],
+          );
+        }
+        assert.equal(
+          (await mkdir(relayBase, chmodKey, "relay-created-folder")).status,
+          409,
+        );
+        assert.equal(
+          await wingClient.fixtureUploadTargetExists(uuid, "denied-folder"),
+          false,
+        );
+        console.log(
+          "::notice::Pterodactyl create-folder matched 204 and empty directories on real Wings; invalid, duplicate and unscoped requests rejected",
         );
         const deleteKey = await issueKey(ownerSession, false, false, false, {
           clientDeleteFile: true,

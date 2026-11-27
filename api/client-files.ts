@@ -4,6 +4,7 @@ import { ProvisionError } from "./wings/provision";
 import type { Actor } from "./policy";
 import {
   type FixtureSubfolder,
+  fixtureFolderName,
   fixturePathSegment,
   WingsUnavailable,
 } from "./wings/client";
@@ -19,6 +20,7 @@ type Entry = {
   modified_at: unknown;
 };
 export type FileBinding = {
+  createFolder(id: string, actor: Actor, name: string): Promise<void>;
   copy(id: string, actor: Actor, source: string): Promise<void>;
   pull(id: string, actor: Actor, url: string, name: string): Promise<void>;
   archiveDownloadAllowed(id: string, actor: Actor): Promise<boolean>;
@@ -628,6 +630,37 @@ export function registerClientFiles(
         return failure(reply, 400);
       try {
         await binding.copy(server.id, actor, name);
+        return reply.code(204).send();
+      } catch (error) {
+        return textError(error, reply);
+      }
+    },
+  );
+  app.post<{
+    Params: { identifier: string };
+    Body: { root?: unknown; name?: unknown };
+  }>(
+    "/api/client/servers/:identifier/files/create-folder",
+    {
+      bodyLimit: 1024,
+      config: { rateLimit: { max: 8, timeWindow: "1 minute" } },
+    },
+    async (req, reply) => {
+      const actor = await authenticate(req.headers.authorization ?? "");
+      if (!actor) return failure(reply, 401);
+      const server = await resolve(req.params.identifier, actor.id);
+      if (!server) return failure(reply, 404);
+      if (!binding) return failure(reply, 503);
+      const { root, name } = req.body ?? {};
+      if (
+        root !== "/fixture-docs" ||
+        Object.keys(req.body ?? {}).length !== 2 ||
+        typeof name !== "string" ||
+        !fixtureFolderName(name)
+      )
+        return failure(reply, 400);
+      try {
+        await binding.createFolder(server.id, actor, name);
         return reply.code(204).send();
       } catch (error) {
         return textError(error, reply);

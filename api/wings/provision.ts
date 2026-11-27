@@ -3,7 +3,11 @@ import { extractFixtureTar } from "./fixture-tar";
 import { extractFixtureZip, fixtureZipLimits } from "./fixture-zip";
 import { extractFixtureText } from "./fixture-gzip";
 import { lockFreeAllocation } from "../catalog/transfer";
-import { type FixtureSubfolder, fixturePathSegment } from "./client";
+import {
+  type FixtureSubfolder,
+  fixtureFolderName,
+  fixturePathSegment,
+} from "./client";
 import {
   upstreamProfiles,
   registeredWorkload,
@@ -392,7 +396,8 @@ export function createProvisioner(
       | "decompress"
       | "download"
       | "pull"
-      | "copy",
+      | "copy"
+      | "create-folder",
     db: Executor = pool,
     lock = false,
   ) {
@@ -411,7 +416,7 @@ export function createProvisioner(
       (
         await rows(
           db,
-          `SELECT id FROM api_keys WHERE id=? AND user_id=? AND ${{ upload: "client_upload_file", delete: "client_delete_file", chmod: "client_chmod_file", rename: "client_rename_file", compress: "client_compress_file", decompress: "client_decompress_file", download: "client_download", pull: "client_pull_file", copy: "client_copy_file" }[scope]}=TRUE AND expires_at>UTC_TIMESTAMP(3)`,
+          `SELECT id FROM api_keys WHERE id=? AND user_id=? AND ${{ upload: "client_upload_file", delete: "client_delete_file", chmod: "client_chmod_file", rename: "client_rename_file", compress: "client_compress_file", decompress: "client_decompress_file", download: "client_download", pull: "client_pull_file", copy: "client_copy_file", "create-folder": "client_create_folder" }[scope]}=TRUE AND expires_at>UTC_TIMESTAMP(3)`,
           [actor.keyId, actor.id],
         )
       ).length === 1
@@ -1030,6 +1035,34 @@ export function createProvisioner(
     renameFixture,
     editFixtureText,
     compatFiles: {
+      async createFolder(id: string, actor: Actor, name: string) {
+        return exclusive(id, async () => {
+          if (!fixtureFolderName(name))
+            throw new ProvisionError(400, "invalid_fixture_folder");
+          const authorize = async () => {
+            if (!(await ownerFileScope(id, actor, "create-folder")))
+              throw new ProvisionError(403, "create_folder_scope_required");
+          };
+          await authorize();
+          try {
+            if ((await client.state(id)) !== "offline")
+              throw new ProvisionError(409, "server_not_offline");
+            if (await client.fixtureUploadTargetExists(id, name))
+              throw new ProvisionError(409, "folder_exists");
+            await authorize();
+            await pool.execute(
+              "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'wings.compat_fixture_folder_create_requested',?)",
+              [actor.id, id],
+            );
+            await client.createFixtureFolder(id, name);
+          } catch (error) {
+            if (error instanceof WingsUnavailable)
+              throw new ProvisionError(502, "folder_create_unverified");
+            throw error;
+          }
+        });
+      },
+
       async copy(id: string, actor: Actor, source: string) {
         return exclusive(id, async () => {
           const authorize = async () => {

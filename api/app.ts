@@ -307,7 +307,9 @@ export async function createApp({
             req.routeOptions.url ===
               "/api/client/servers/:identifier/files/pull" ||
             req.routeOptions.url ===
-              "/api/client/servers/:identifier/files/copy")) ||
+              "/api/client/servers/:identifier/files/copy" ||
+            req.routeOptions.url ===
+              "/api/client/servers/:identifier/files/create-folder")) ||
           (req.method === "PUT" &&
             req.routeOptions.url ===
               "/api/client/servers/:identifier/files/rename")) &&
@@ -1036,6 +1038,7 @@ export async function createApp({
       clientDecompressFile?: boolean;
       clientPullFile?: boolean;
       clientCopyFile?: boolean;
+      clientCreateFolder?: boolean;
     };
   }>(
     "/api/v1/account/keys",
@@ -1060,6 +1063,7 @@ export async function createApp({
             clientDecompressFile: { type: "boolean" },
             clientPullFile: { type: "boolean" },
             clientCopyFile: { type: "boolean" },
+            clientCreateFolder: { type: "boolean" },
           },
           ["label", "key"],
         ),
@@ -1080,7 +1084,7 @@ export async function createApp({
         const digest = crypt.digest("api-key", `${req.body.key}.${suffix}`);
         try {
           await db.execute(
-            "INSERT INTO api_keys (id,user_id,digest,label,expires_at,client_power,client_console,client_stream,client_list_files,client_download,client_edit_file,client_upload_file,client_delete_file,client_chmod_file,client_rename_file,client_compress_file,client_decompress_file,client_pull_file,client_copy_file) VALUES (?,?,?,?,TIMESTAMPADD(DAY,90,UTC_TIMESTAMP(3)),?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO api_keys (id,user_id,digest,label,expires_at,client_power,client_console,client_stream,client_list_files,client_download,client_edit_file,client_upload_file,client_delete_file,client_chmod_file,client_rename_file,client_compress_file,client_decompress_file,client_pull_file,client_copy_file,client_create_folder) VALUES (?,?,?,?,TIMESTAMPADD(DAY,90,UTC_TIMESTAMP(3)),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [
               id,
               u.id,
@@ -1100,6 +1104,7 @@ export async function createApp({
               req.body.clientDecompressFile === true,
               req.body.clientPullFile === true,
               req.body.clientCopyFile === true,
+              req.body.clientCreateFolder === true,
             ],
           );
         } catch (e) {
