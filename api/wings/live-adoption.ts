@@ -5357,7 +5357,7 @@ async function main() {
           const archivePath = `${directory}/${archive.attributes.name}`;
           if (base === relayBase) {
             assert.equal(
-              (await fileApi(base, editKey, "download", archivePath)).status,
+              (await fileApi(base, listKey, "download", archivePath)).status,
               403,
             );
             assert.equal(
