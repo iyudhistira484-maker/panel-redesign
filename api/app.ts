@@ -1633,6 +1633,31 @@ export async function createApp({
         }
       },
     );
+    app.post<{ Params: { id: string } }>(
+      "/api/v1/servers/:id/files/reconcile-zip-fixture",
+      { config: { rateLimit: { max: 8, timeWindow: "1 minute" } } },
+      async (req, reply) => {
+        reply.header("cache-control", "no-store");
+        const principal = await actor(
+          req.cookies[sessionCookie],
+          req.headers.authorization,
+        );
+        if (!principal || principal.channel !== "session")
+          return reply.code(401).send({ error: "unauthenticated" });
+        if (!UUID_V4.test(req.params.id))
+          return reply.code(404).send({ error: "server_not_found" });
+        try {
+          return await provisioner.reconcileZipFixture(
+            req.params.id,
+            principal,
+          );
+        } catch (error) {
+          if (error instanceof ProvisionError)
+            return reply.code(error.status).send({ error: error.code });
+          throw error;
+        }
+      },
+    );
     app.post<{ Params: { id: string }; Body: { content: string } }>(
       "/api/v1/servers/:id/files/unzip-fixture",
       {
@@ -1653,15 +1678,14 @@ export async function createApp({
         if (!UUID_V4.test(req.params.id))
           return reply.code(404).send({ error: "server_not_found" });
         try {
+          const result = await provisioner.extractZipFixture(
+            req.params.id,
+            principal,
+            req.body.content,
+          );
           return reply
-            .code(201)
-            .send(
-              await provisioner.extractZipFixture(
-                req.params.id,
-                principal,
-                req.body.content,
-              ),
-            );
+            .code(result.status === "succeeded" ? 201 : 202)
+            .send(result);
         } catch (error) {
           if (error instanceof ProvisionError)
             return reply.code(error.status).send({ error: error.code });

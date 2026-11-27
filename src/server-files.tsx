@@ -71,7 +71,10 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
         setArchiveStatus({ kind: "invalid" });
         return;
       }
-      if (reply.status === 409) {
+      if (
+        reply.status === 409 &&
+        (await reply.json()).error === "server_not_offline"
+      ) {
         setArchiveStatus({ kind: "rejected" });
         return;
       }

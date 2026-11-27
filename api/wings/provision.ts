@@ -646,6 +646,61 @@ export function createProvisioner(
         throw error;
       }
     },
+    async reconcileZipFixture(id: string, actor: Actor) {
+      return exclusive(id, async () => {
+        const server = await load(pool, id);
+        if (
+          !server ||
+          actor.channel !== "session" ||
+          server.ownerId !== actor.id ||
+          !eligible(server) ||
+          server.phase !== "installed"
+        )
+          throw new ProvisionError(404, "server_not_found");
+        const [record] = await rows<{
+          operation_id: string;
+          status: "pending" | "succeeded" | "retryable";
+          manifest: { name: string; digest: string }[];
+          ready: number;
+        }>(
+          pool,
+          "SELECT operation_id,status,manifest,updated_at <= CURRENT_TIMESTAMP(6) - INTERVAL 60 SECOND AS ready FROM fixture_zip_operations WHERE server_id=?",
+          [id],
+        );
+        if (!record) return { status: "none" };
+        const operationId = record.operation_id;
+        const result = (status: string) => ({
+          status,
+          operationId,
+          ...(status === "succeeded"
+            ? {
+                directory: `/fixture-docs/extract-${operationId}`,
+                count: record.manifest.length,
+              }
+            : {}),
+        });
+        if (record.status !== "pending") return result(record.status);
+        if (!record.ready) return result("pending");
+        try {
+          if ((await client.state(id)) !== "offline")
+            return result("needs_review");
+          const status = await client.reconcileFixtureZip(
+            id,
+            operationId,
+            record.manifest,
+          );
+          if (status !== "needs_review")
+            await pool.execute(
+              "UPDATE fixture_zip_operations SET status=? WHERE server_id=? AND operation_id=? AND status='pending'",
+              [status, id, operationId],
+            );
+          return result(status);
+        } catch (error) {
+          if (error instanceof WingsUnavailable) return result("needs_review");
+          throw error;
+        }
+      });
+    },
     async extractZipFixture(id: string, actor: Actor, content: string) {
       return exclusive(id, async () => {
         const authorize = async () => {
@@ -681,8 +736,43 @@ export function createProvisioner(
             "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'wings.fixture_zip_extract_requested',?)",
             [actor.id, id],
           );
-          const directory = await client.publishFixtureZip(id, suffix, entries);
-          return { directory, count: entries.length };
+          const manifest = entries.map(({ name, bytes }) => ({
+            name,
+            digest: createHash("sha256").update(bytes).digest("hex"),
+          }));
+          await pool.execute(
+            "INSERT IGNORE INTO fixture_zip_operations (server_id,operation_id,status,manifest) VALUES (?,?,'retryable',?)",
+            [id, suffix, JSON.stringify(manifest)],
+          );
+          const [claim] = await pool.execute<
+            import("mysql2/promise").ResultSetHeader
+          >(
+            "UPDATE fixture_zip_operations SET operation_id=?,status='pending',manifest=? WHERE server_id=? AND status<>'pending'",
+            [suffix, JSON.stringify(manifest), id],
+          );
+          if (claim.affectedRows !== 1)
+            throw new ProvisionError(409, "zip_reconciliation_required");
+          try {
+            const directory = await client.publishFixtureZip(
+              id,
+              suffix,
+              entries,
+            );
+            await pool.execute(
+              "UPDATE fixture_zip_operations SET status='succeeded' WHERE server_id=? AND operation_id=?",
+              [id, suffix],
+            );
+            return {
+              status: "succeeded",
+              operationId: suffix,
+              directory,
+              count: entries.length,
+            };
+          } catch (error) {
+            if (error instanceof WingsUnavailable)
+              return { status: "pending", operationId: suffix };
+            throw error;
+          }
         } catch (error) {
           if (error instanceof WingsUnavailable)
             throw new ProvisionError(502, "zip_extract_unverified");

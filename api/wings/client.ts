@@ -281,6 +281,64 @@ export class WingsClient {
     );
     await written.body?.cancel();
   }
+  async reconcileFixtureZip(
+    id: string,
+    suffix: string,
+    manifest: { name: string; digest: string }[],
+  ): Promise<"succeeded" | "retryable" | "needs_review"> {
+    if (!/^[0-9a-f]{32}$/.test(suffix)) throw new WingsUnavailable("payload");
+    const pending = `zip-pending-${suffix}`,
+      destination = `extract-${suffix}`;
+    const hasPending = await this.fixtureUploadTargetExists(id, pending);
+    if (await this.fixtureUploadTargetExists(id, destination)) {
+      if (hasPending) return "needs_review";
+      await this.fixtureDirectory(id, ["fixture-docs", destination]);
+      const actual = await this.#fixtureEntries(
+        id,
+        `/fixture-docs/${destination}`,
+      );
+      if (actual.length !== manifest.length) return "needs_review";
+      for (const { name, digest } of manifest) {
+        if (!actual.some((entry) => entry.name === name)) return "needs_review";
+        const bytes = await this.fixtureDownload(
+          id,
+          ["fixture-docs", destination],
+          name,
+        );
+        if (createHash("sha256").update(bytes).digest("hex") !== digest)
+          return "needs_review";
+      }
+      return "succeeded";
+    }
+    if (hasPending) {
+      await this.fixtureDirectory(id, ["fixture-docs", pending]);
+      const actual = await this.#fixtureEntries(id, `/fixture-docs/${pending}`);
+      for (const entry of actual) {
+        const expected = manifest.find((item) => item.name === entry.name);
+        if (!expected) return "needs_review";
+        const bytes = await this.fixtureDownload(
+          id,
+          ["fixture-docs", pending],
+          expected.name,
+        );
+        if (
+          createHash("sha256").update(bytes).digest("hex") !== expected.digest
+        )
+          return "needs_review";
+      }
+      const response = await this.#send(
+        `${this.#server(id)}/files/delete`,
+        204,
+        "POST",
+        { root: "/fixture-docs", files: [pending] },
+      );
+      await response.body?.cancel();
+    }
+    return (await this.fixtureUploadTargetExists(id, pending)) ||
+      (await this.fixtureUploadTargetExists(id, destination))
+      ? "needs_review"
+      : "retryable";
+  }
   async publishFixtureZip(
     id: string,
     suffix: string,

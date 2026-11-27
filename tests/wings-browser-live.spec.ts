@@ -474,13 +474,11 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   await page.getByRole("link", { name: "Unduh ZIP" }).click();
   const archiveFile = await (await zipDownload).path();
   assert.ok(archiveFile);
-  await page
-    .getByLabel("Arsip untuk diekstrak")
-    .setInputFiles({
-      name: "fixture-docs.zip",
-      mimeType: "application/zip",
-      buffer: await readFile(archiveFile),
-    });
+  await page.getByLabel("Arsip untuk diekstrak").setInputFiles({
+    name: "fixture-docs.zip",
+    mimeType: "application/zip",
+    buffer: await readFile(archiveFile),
+  });
   const zipResponse = page.waitForResponse(
     (response) => response.url() === `${fileApi}/unzip-fixture`,
   );
@@ -511,16 +509,26 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       await read("/fixture-docs"),
     );
   }
+  const reconciliation = await page
+    .context()
+    .request.post(`${fileApi}/reconcile-zip-fixture`, {
+      headers: editHeaders,
+      data: {},
+    });
+  expect(reconciliation.status()).toBe(200);
+  expect(await reconciliation.json()).toMatchObject({
+    status: "succeeded",
+    directory: zipOutput.directory,
+    count: 2,
+  });
   expect(await entries()).not.toContain("zip-pending-");
   const beforeBadZip = await entries();
   expect(
     (
-      await page
-        .context()
-        .request.post(`${fileApi}/unzip-fixture`, {
-          headers: editHeaders,
-          data: { content: Buffer.from("invalid zip").toString("base64") },
-        })
+      await page.context().request.post(`${fileApi}/unzip-fixture`, {
+        headers: editHeaders,
+        data: { content: Buffer.from("invalid zip").toString("base64") },
+      })
     ).status(),
   ).toBe(400);
   expect(await entries()).toBe(beforeBadZip);
