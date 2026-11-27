@@ -79,5 +79,18 @@ export function registeredWorkload(
       },
     };
   }
+  if (profile.file === "egg-forgejo.ptdl") {
+    return {
+      ...profileConfig,
+      install: {
+        script: readFileSync(
+          new URL("./upstream/install-forgejo-staging.sh", import.meta.url),
+          "utf8",
+        ),
+        entrypoint: "sh",
+        container_image: "codeberg.org/forgejo/forgejo:11.0.5",
+      },
+    };
+  }
   return profileConfig;
 }

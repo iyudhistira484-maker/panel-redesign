@@ -900,7 +900,10 @@ async function main() {
         assert.equal(
           imageHeader,
           "7f 45 4c 46",
-          "Upstream Gitea installer did not produce an ELF executable",
+          `Upstream ${profile.name} installer did not produce an ELF executable`,
+        );
+        console.log(
+          `::notice::${profile.name} staging installer wrote an ELF executable`,
         );
         assert.equal(
           (
