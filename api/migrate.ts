@@ -70,6 +70,7 @@ export async function migrate(pool: Pool, direction: "up" | "down") {
         { version: 45, file: "045_client_copy" },
         { version: 46, file: "046_client_create_folder" },
         { version: 47, file: "047_fixture_folders" },
+        { version: 48, file: "048_nested_fixture_folders" },
       ];
       if (direction === "down") migrations.reverse();
       for (const { version, file } of migrations) {

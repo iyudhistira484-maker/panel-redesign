@@ -268,7 +268,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     ).status(),
   ).toBe(409);
   await page.getByLabel("File teks sumber").selectOption(uploadName);
-  await page.getByLabel("Nama baru").fill(copyName);
+  await page.getByLabel("Nama / jalur").fill(copyName);
   const copied = page.waitForResponse((response) => response.url() === copyApi);
   await page.getByRole("button", { name: "Salin file teks" }).click();
   expect((await copied).status()).toBe(201);
@@ -303,7 +303,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     400,
   );
   await page.getByLabel("File teks sumber").selectOption(copyName);
-  await page.getByLabel("Nama baru").fill(renamed);
+  await page.getByLabel("Nama / jalur").fill(renamed);
   const renameReply = page.waitForResponse(
     (response) => response.url() === renameApi,
   );
@@ -345,17 +345,30 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   console.log(
     "::notice::Chromium rename verified destination bytes and removed source without overwrite",
   );
-  const moveFolder = "browser-created";
+  const folderParent = "browser-created",
+    child = "nested",
+    moveFolder = `${folderParent}/${child}`;
   const folderApi = `${fileApi}/create-folder-fixture`;
-  await page.getByLabel("Nama baru").fill(moveFolder);
-  const created = page.waitForResponse(
-    (response) => response.url() === folderApi,
-  );
-  await page.getByRole("button", { name: "Buat folder", exact: true }).click();
-  expect((await created).status()).toBe(201);
-  await expect(
-    page.getByRole("button", { name: moveFolder, exact: true }),
-  ).toBeVisible();
+  const createFolder = (name: string) =>
+    page
+      .context()
+      .request.post(folderApi, { headers: editHeaders, data: { name } });
+  expect((await createFolder("unregistered/nested")).status()).toBe(400);
+  expect((await createFolder("one/two/three")).status()).toBe(400);
+  for (const name of [folderParent, moveFolder]) {
+    await page.getByLabel("Nama / jalur").fill(name);
+    const created = page.waitForResponse(
+      (response) => response.url() === folderApi,
+    );
+    await page
+      .getByRole("button", { name: "Buat folder", exact: true })
+      .click();
+    expect((await created).status()).toBe(201);
+    await expect(page.getByRole("option", { name, exact: true })).toHaveCount(
+      1,
+    );
+  }
+  expect((await createFolder(moveFolder)).status()).toBe(409);
   const moveTarget = "moved-fixture.txt";
   const badDestination = await page.context().request.post(renameApi, {
     headers: editHeaders,
@@ -375,7 +388,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     ).status(),
   ).toBe(400);
   await page.getByLabel("File teks sumber").selectOption(renamed);
-  await page.getByLabel("Nama baru").fill(moveTarget);
+  await page.getByLabel("Nama / jalur").fill(moveTarget);
   await page.getByLabel("Folder tujuan").selectOption(moveFolder);
   const moveReply = page.waitForResponse(
     (response) => response.url() === renameApi,
@@ -437,7 +450,10 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
         },
       });
     expect((await moveBack(uploadName)).status()).toBe(409);
-    await files.getByRole("button", { name: moveFolder, exact: true }).click();
+    await files
+      .getByRole("button", { name: folderParent, exact: true })
+      .click();
+    await files.getByRole("button", { name: child, exact: true }).click();
     await files.getByRole("button", { name: moveTarget, exact: true }).click();
     const returnedResponse = page.waitForResponse(
       (response) => response.url() === renameApi,
@@ -447,11 +463,15 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       .click();
     const returned = await returnedResponse;
     await expect(
-      page.getByText("Pemindahan terverifikasi.", { exact: true }),
+      page.getByText("Operasi terverifikasi.", { exact: true }),
     ).toBeVisible();
     await expect(
       files.getByRole("button", { name: moveTarget, exact: true }),
     ).toHaveCount(0);
+    await page.getByRole("button", { name: "Folder induk" }).click();
+    await expect(
+      files.getByRole("button", { name: child, exact: true }),
+    ).toBeVisible();
     await page.getByRole("button", { name: "Folder induk" }).click();
     await expect(
       files.getByRole("button", { name: moveTarget, exact: true }),
@@ -822,7 +842,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
 
   await expect(preview.locator("pre")).toHaveText("Saved from Chromium");
   await files.getByRole("button", { name: "binary.txt", exact: true }).click();
-  await expect(page.getByText("Pratinjau teks tidak tersedia.")).toBeVisible();
+  await expect(page.getByText("Pratinjau tidak tersedia.")).toBeVisible();
   await expect(preview).toHaveCount(0);
   for (const [name, status] of [
     ["large.txt", 422],

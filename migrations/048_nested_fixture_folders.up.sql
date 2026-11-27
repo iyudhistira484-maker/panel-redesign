@@ -1,0 +1,1 @@
+ALTER TABLE fixture_folders MODIFY name VARBINARY(97) NOT NULL;

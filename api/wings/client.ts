@@ -8,7 +8,11 @@ export const fixtureFolderName = (name: string) =>
 import { fixtureTarLimit } from "./fixture-tar";
 export type FixtureSubfolder = string;
 export const fixtureMoveFolder = (name: string) =>
-  name === "moved" || name === "review" || fixtureFolderName(name);
+  name === "moved" || name === "review" || fixtureFolderPath(name);
+export const fixtureFolderPath = (name: string) => {
+  const parts = name.split("/");
+  return parts.length <= 2 && parts.every(fixtureFolderName);
+};
 export const fixturePathSegment = (value: string) =>
   /^[A-Za-z0-9_][A-Za-z0-9_. -]{0,79}$/.test(value) && !/[\r\n]/.test(value);
 import { createHash } from "node:crypto";
@@ -266,7 +270,9 @@ export class WingsClient {
   ) {
     if (moved && !fixtureMoveFolder(moved))
       throw new WingsUnavailable("payload");
-    const segments = moved ? ["fixture-docs", moved] : ["fixture-docs"];
+    const segments = moved
+      ? ["fixture-docs", ...moved.split("/")]
+      : ["fixture-docs"];
     await this.fixtureDirectory(id, segments);
     const entries = await this.#fixtureEntries(id, `/${segments.join("/")}`);
     if (entries.some((entry) => !entry || typeof entry.name !== "string"))
@@ -429,15 +435,18 @@ export class WingsClient {
     }
   }
   async createFixtureFolder(id: string, name: string) {
-    if (!fixtureFolderName(name)) throw new WingsUnavailable("payload");
+    if (!fixtureFolderPath(name)) throw new WingsUnavailable("payload");
+    const parts = name.split("/");
+    const leaf = parts[parts.length - 1];
+    const parent = ["fixture-docs", ...parts.slice(0, -1)];
     const response = await this.#send(
       `${this.#server(id)}/files/create-directory`,
       204,
       "POST",
-      { path: "/fixture-docs", name },
+      { path: `/${parent.join("/")}`, name: leaf },
     );
     await response.body?.cancel();
-    await this.fixtureDirectory(id, ["fixture-docs", name]);
+    await this.fixtureDirectory(id, [...parent, leaf]);
     if ((await this.#fixtureEntries(id, `/fixture-docs/${name}`)).length !== 0)
       throw new WingsUnavailable("payload");
   }

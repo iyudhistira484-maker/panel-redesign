@@ -6,6 +6,7 @@ import { lockFreeAllocation } from "../catalog/transfer";
 import {
   type FixtureSubfolder,
   fixtureFolderName,
+  fixtureFolderPath,
   fixtureMoveFolder,
   fixturePathSegment,
 } from "./client";
@@ -526,7 +527,7 @@ export function createProvisioner(
     compat = false,
   ) {
     return exclusive(id, async () => {
-      if (!fixtureFolderName(name))
+      if (!(compat ? fixtureFolderName(name) : fixtureFolderPath(name)))
         throw new ProvisionError(400, "invalid_fixture_folder");
       const authorize = async () => {
         if (compat) {
@@ -545,10 +546,19 @@ export function createProvisioner(
         }
       };
       await authorize();
+      const [first, child] = name.split("/");
+      if (child && !(await managedFolder(pool, id, first)))
+        throw new ProvisionError(400, "invalid_parent_folder");
       try {
         if ((await client.state(id)) !== "offline")
           throw new ProvisionError(409, "server_not_offline");
-        if (await client.fixtureUploadTargetExists(id, name))
+        if (
+          await client.fixtureUploadTargetExists(
+            id,
+            child ?? first,
+            child ? first : undefined,
+          )
+        )
           throw new ProvisionError(409, "folder_exists");
         await authorize();
         await pool.execute(
@@ -578,7 +588,9 @@ export function createProvisioner(
     fromMoved?: FixtureSubfolder,
     compat = false,
   ) {
-    const destination = moved ? ["fixture-docs", moved] : ["fixture-docs"];
+    const destination = moved
+      ? ["fixture-docs", ...moved.split("/")]
+      : ["fixture-docs"];
     const sourceName = fromMoved ? `${fromMoved}/${source}` : source;
     const receiptName = moved ? `${moved}/${target}` : target;
     return exclusive(id, async () => {
@@ -624,7 +636,9 @@ export function createProvisioner(
         if (!receipt) throw new ProvisionError(404, "upload_not_found");
         const original = await client.fixtureDownload(
           id,
-          fromMoved ? ["fixture-docs", fromMoved] : ["fixture-docs"],
+          fromMoved
+            ? ["fixture-docs", ...fromMoved.split("/")]
+            : ["fixture-docs"],
           source,
         );
         if (
@@ -924,7 +938,8 @@ export function createProvisioner(
       try {
         if (preview === undefined) {
           const items = await client.fixtureDirectory(id, segments);
-          if (path !== "/fixture-docs") return items;
+          if (segments[0] !== "fixture-docs" || segments.length > 2)
+            return items;
           const folders = await rows<{ name: string }>(
             pool,
             "SELECT CAST(name AS CHAR) AS name FROM fixture_folders WHERE server_id=?",
@@ -935,9 +950,19 @@ export function createProvisioner(
             "review",
             ...folders.map((folder) => folder.name),
           ]);
+          const relative = segments.slice(1).join("/");
           return items.map((item) => ({
             ...item,
-            movable: item.directory && movable.has(item.name),
+            movable:
+              item.directory &&
+              movable.has(relative ? `${relative}/${item.name}` : item.name),
+            ...(!relative && item.directory
+              ? {
+                  children: folders
+                    .filter((folder) => folder.name.startsWith(`${item.name}/`))
+                    .map((folder) => folder.name),
+                }
+              : {}),
           }));
         }
         if (!fixturePathSegment(preview) || !preview.endsWith(".txt"))

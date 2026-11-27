@@ -1564,7 +1564,7 @@ export async function createApp({
       Querystring: { directory?: string; preview?: string; download?: string };
     }>(
       "/api/v1/servers/:id/files",
-      { config: { rateLimit: { max: 18, timeWindow: "1 minute" } } },
+      { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
       async (req, reply) => {
         reply.header("cache-control", "no-store");
         const principal = await actor(
@@ -1858,7 +1858,7 @@ export async function createApp({
       "/api/v1/servers/:id/files/create-folder-fixture",
       {
         config: { rateLimit: { max: 8, timeWindow: "1 minute" } },
-        schema: { body: object({ name: text(1, 48) }) },
+        schema: { body: object({ name: text(1, 97) }) },
       },
       async (req, reply) => {
         reply.header("cache-control", "no-store");
@@ -1905,8 +1905,8 @@ export async function createApp({
             {
               source: text(1, 80),
               target: text(1, 80),
-              destination: text(1, 48, "^[a-z][a-z0-9_-]*$"),
-              sourceFolder: text(1, 48, "^[a-z][a-z0-9_-]*$"),
+              destination: text(1, 97),
+              sourceFolder: text(1, 97),
             },
             ["source", "target"],
           ),

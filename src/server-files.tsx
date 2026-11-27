@@ -7,6 +7,7 @@ type Entry = {
   directory: boolean;
   size: number;
   movable?: boolean;
+  children?: string[];
 };
 export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
   const en = locale === "en";
@@ -30,12 +31,16 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
   >(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const [copySource, setCopySource] = useState("");
+  const destinations =
+    items?.flatMap((item) =>
+      item.movable ? [item.name, ...(item.children ?? [])] : [],
+    ) ?? [];
   const [moveFolder, setMoveFolder] = useState("moved");
   const [inMoveFolder, setInMoveFolder] = useState(false);
   const [copyTarget, setCopyTarget] = useState("");
-  const [copyStatus, setCopyStatus] = useState<
-    "done" | "verified" | "moved" | "renamed" | "rejected" | "unknown" | null
-  >(null);
+  const [copyStatus, setCopyStatus] = useState<"verified" | "unknown" | null>(
+    null,
+  );
   const [archive, setArchive] = useState<File | null>(null);
   const [archiveStatus, setArchiveStatus] = useState<
     | {
@@ -169,7 +174,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
     if (
       busy ||
       (folder
-        ? !/^[a-z][a-z0-9_-]{0,47}$/.test(target)
+        ? !/^[a-z][a-z0-9_/-]{0,96}$/.test(target)
         : !source ||
           !/^[A-Za-z0-9_][A-Za-z0-9_. -]{0,79}$/.test(target) ||
           !target.endsWith(".txt"))
@@ -198,7 +203,9 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
                     ...(moved || back
                       ? {
                           destination: moved ? moveFolder : "parent",
-                          ...(back ? { sourceFolder: path[1] } : {}),
+                          ...(back
+                            ? { sourceFolder: path.slice(1).join("/") }
+                            : {}),
                         }
                       : {}),
                   },
@@ -206,17 +213,8 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
           signal: AbortSignal.timeout(30000),
         },
       );
-      if (
-        reply.status === 400 ||
-        reply.status === 404 ||
-        reply.status === 409 ||
-        reply.status === 422
-      ) {
-        setCopyStatus("rejected");
-        return;
-      }
       if (reply.status !== (!folder && (mode || rename) ? 200 : 201))
-        throw new Error("Copy unverified");
+        throw new Error();
       const data = (await reply.json()) as {
         name?: string;
         size: number;
@@ -225,12 +223,20 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
       };
       if (folder) {
         if (data.name !== target || !data.movable) throw new Error();
+        const [parent, child] = target.split("/");
         setItems(
           (current) =>
-            current && [
-              ...current,
-              { name: target, size: 0, directory: true, movable: true },
-            ],
+            current &&
+            (child
+              ? current.map((item) =>
+                  item.name === parent
+                    ? { ...item, children: [...(item.children ?? []), target] }
+                    : item,
+                )
+              : [
+                  ...current,
+                  { name: target, size: 0, directory: true, movable: true },
+                ]),
         );
         setMoveFolder(target);
         setCopyTarget("");
@@ -248,7 +254,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
         data.size < 0 ||
         data.size > 16384
       )
-        throw new Error("Copy unverified");
+        throw new Error();
       setItems(
         (current) =>
           current &&
@@ -265,7 +271,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
         setPreview(null);
         setDraft(null);
       }
-      setCopyStatus(moved ? "moved" : rename ? "renamed" : "done");
+      setCopyStatus("verified");
     } catch {
       setCopyStatus("unknown");
     } finally {
@@ -471,6 +477,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
     setItems(null);
     setError(false);
     setPath(parts);
+    setCopyStatus(null);
     try {
       const query = new URLSearchParams({ directory: `/${parts.join("/")}` });
       const response = await fetch(
@@ -481,7 +488,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
           signal: AbortSignal.timeout(30000),
         },
       );
-      if (!response.ok) throw new Error("Directory unavailable");
+      if (!response.ok) throw new Error("Invalid directory");
       const data = (await response.json()) as Entry[];
       if (
         !Array.isArray(data) ||
@@ -493,7 +500,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
             Number.isSafeInteger(row.size),
         )
       )
-        throw new Error("Invalid listing");
+        throw new Error("Invalid directory");
       setItems(data);
     } catch {
       setError(true);
@@ -575,7 +582,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
             </select>
           </label>{" "}
           <label>
-            {en ? "New name" : "Nama baru"}{" "}
+            {en ? "Name / path" : "Nama / jalur"}{" "}
             <input
               value={copyTarget}
               maxLength={80}
@@ -617,11 +624,9 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
               onChange={(event) => setMoveFolder(event.currentTarget.value)}
               disabled={busy}
             >
-              {items
-                .filter((item) => item.movable)
-                .map(({ name }) => (
-                  <option key={name}>{name}</option>
-                ))}
+              {destinations.map((name) => (
+                <option key={name}>{name}</option>
+              ))}
             </select>
           </label>{" "}
           <Button
@@ -629,7 +634,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
               busy ||
               !copySource ||
               !copyTarget ||
-              !items.some((item) => item.movable && item.name === moveFolder)
+              !destinations.includes(moveFolder)
             }
             onClick={() => void copyFile(true, true)}
           >
@@ -653,25 +658,14 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
               </Button>
             ))}
           </span>
-          {copyStatus && (
-            <output>
-              {copyStatus === "rejected" || copyStatus === "unknown"
-                ? en
-                  ? "Operation not confirmed."
-                  : "Operasi belum terkonfirmasi."
-                : en
-                  ? "Operation verified."
-                  : "Operasi terverifikasi."}
-            </output>
-          )}
         </div>
       )}
       {path.join("/") === "fixture-docs" && items && (
         <div>
           <p>
             {en
-              ? "Offline: gzip (1), ZIP (up to 4), 16 KiB each."
-              : "Offline: gzip (1), ZIP (hingga 4), 16 KiB per file."}
+              ? "Gzip (1), ZIP (4), 16 KiB each."
+              : "Gzip (1), ZIP (4), 16 KiB per file."}
           </p>
           <Button
             disabled={busy || !copySource}
@@ -836,15 +830,15 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
           ))}
         </ul>
       )}
-      {path.length === 2 && inMoveFolder && copyStatus && (
+      {copyStatus && (
         <output>
-          {copyStatus === "renamed"
+          {copyStatus === "verified"
             ? en
-              ? "Move verified."
-              : "Pemindahan terverifikasi."
+              ? "Operation verified."
+              : "Operasi terverifikasi."
             : en
-              ? "Move not confirmed."
-              : "Pemindahan belum terkonfirmasi."}
+              ? "Operation not confirmed."
+              : "Operasi belum terkonfirmasi."}
         </output>
       )}
       {downloadError && (
@@ -854,7 +848,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
       )}
       {previewError && (
         <p role="alert">
-          {en ? "Text preview unavailable." : "Pratinjau teks tidak tersedia."}
+          {en ? "Preview unavailable." : "Pratinjau tidak tersedia."}
         </p>
       )}
       {preview && (
@@ -866,7 +860,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
           >
             {en ? "Download text file" : "Unduh file teks"}
           </Button>
-          {path.length === 2 && inMoveFolder && (
+          {path.length > 1 && inMoveFolder && (
             <Button
               disabled={busy}
               onClick={() => void copyFile(true, false, preview.name)}
