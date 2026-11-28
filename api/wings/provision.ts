@@ -97,9 +97,10 @@ export function createProvisioner(
   applicationDispatchRequest?: typeof fetch,
   verifyApplicationDeletion?: (id: string) => Promise<boolean>,
   fixturePullSource?: string,
+  fixtureFileRequest?: typeof fetch,
 ) {
   if (
-    fixturePullSource &&
+    (fixturePullSource || fixtureFileRequest) &&
     (process.env.RELAY_ENV !== "staging" ||
       process.env.RELAY_DISPOSABLE_WINGS_CI !== "1" ||
       process.env.RUNNER_ENVIRONMENT !== "github-hosted")
@@ -108,7 +109,7 @@ export function createProvisioner(
   const pullSource = fixturePullSource && validatePullSource(fixturePullSource);
   const node = validateNode(rawNode);
   const crypt = cryptoContext(key, pepper, "node-token");
-  const client = new WingsClient(node);
+  const client = new WingsClient(node, fixtureFileRequest);
   const appDispatch = applicationDispatchRequest
     ? new WingsClient(node, applicationDispatchRequest)
     : client;

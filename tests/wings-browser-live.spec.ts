@@ -20,7 +20,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     "Disposable Wings contract only",
   );
   assert.equal(process.env.RUNNER_ENVIRONMENT, "github-hosted");
-  test.setTimeout(95_000);
+  test.setTimeout(100_000);
   const id = process.env.RELAY_BROWSER_FIXTURE_ID,
     password = process.env.RELAY_BROWSER_FIXTURE_PASSWORD;
   assert.ok(id && password);
@@ -924,27 +924,27 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   await runBatch.click();
   const moveBatch = await moveBatchResponse;
   expect(moveBatch.status()).toBe(200);
-  const completedMove = await moveBatch.json();
-  expect(completedMove).toEqual({
+  const interruptedMove = await moveBatch.json();
+  expect(interruptedMove).toEqual({
     batchId: expect.stringMatching(/^[a-f0-9]{32}$/),
-    halted: false,
-    results: [...moveItems]
-      .reverse()
-      .map((item) => ({ ...item, status: "verified" })),
+    halted: true,
+    results: [
+      { ...moveItems[1], status: "unconfirmed" },
+      { ...moveItems[0], status: "not_attempted" },
+    ],
   });
   await verifyBinary(`${moveFolder}/${batchBinary}`);
-  const batchTextBytes = await docker(
+  await docker(
     "docker",
-    ["exec", fixtureDaemon, "cat", `${binVolume}/${moveFolder}/${batchText}`],
+    ["exec", fixtureDaemon, "test", "!", "-e", `${binVolume}/${batchBinary}`],
+    { timeout: 5000 },
+  );
+  const untouched = await docker(
+    "docker",
+    ["exec", fixtureDaemon, "cat", `${binVolume}/${batchText}`],
     { encoding: "buffer", timeout: 5000 },
   );
-  expect(batchTextBytes.stdout).toEqual(uploadedBytes);
-  for (const { source } of moveItems)
-    await docker(
-      "docker",
-      ["exec", fixtureDaemon, "test", "!", "-e", `${binVolume}/${source}`],
-      { timeout: 5000 },
-    );
+  expect(untouched.stdout).toEqual(uploadedBytes);
   const binaryDb = stagingPool();
   try {
     const [receipts] = await binaryDb.query(
@@ -957,16 +957,17 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     const statusUrl = `${fileApi}/batch-status-fixture`;
     const stored = await page.context().request.get(statusUrl);
     expect(await stored.json()).toEqual({
-      batch: { ...completedMove, operation: "move", destination: moveFolder },
+      batch: { ...interruptedMove, operation: "move", destination: moveFolder },
     });
-    // Simulate a crash after Wings committed the move but before Relay saved the receipt.
+    await expect(
+      page.getByText(`${batchBinary} → ${batchBinary}: belum terkonfirmasi`, {
+        exact: true,
+      }),
+    ).toBeVisible();
+    // Advance the persisted grace-period timestamp, not the recorded outcome.
     await binaryDb.execute(
-      "UPDATE fixture_file_batches SET items=JSON_SET(items,'$[0].status','unconfirmed'),blocked=TRUE,updated_at=CURRENT_TIMESTAMP(6)-INTERVAL 61 SECOND WHERE server_id=?",
+      "UPDATE fixture_file_batches SET updated_at=CURRENT_TIMESTAMP(6)-INTERVAL 61 SECOND WHERE server_id=?",
       [id],
-    );
-    await binaryDb.execute(
-      "DELETE FROM client_uploaded_files WHERE server_id=? AND name=?",
-      [id, `${moveFolder}/${batchBinary}`],
     );
     const frozen = await batch("move", moveItems, moveFolder);
     expect(frozen.status()).toBe(409);
@@ -979,13 +980,25 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     const recoveredBatch = await recoveredBatchResponse;
     expect(recoveredBatch.status()).toBe(200);
     expect(await recoveredBatch.json()).toEqual({
-      batch: { ...completedMove, operation: "move", destination: moveFolder },
+      batch: {
+        ...interruptedMove,
+        halted: false,
+        results: [
+          { ...moveItems[1], status: "verified" },
+          { ...moveItems[0], status: "not_attempted" },
+        ],
+        operation: "move",
+        destination: moveFolder,
+      },
     });
     await expect(
       page.getByText(`${batchBinary} → ${batchBinary}: terverifikasi`, {
         exact: true,
       }),
     ).toBeVisible();
+    expect((await batch("move", [moveItems[0]], moveFolder)).status()).toBe(
+      200,
+    );
     const [batchReceipts] = await binaryDb.query(
       "SELECT CAST(name AS CHAR) AS name,digest FROM client_uploaded_files WHERE server_id=? AND name IN (?,?,?,?) ORDER BY name",
       [

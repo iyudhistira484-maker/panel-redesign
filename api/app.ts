@@ -47,6 +47,7 @@ export type Options = {
   deliverReset: (message: ResetMessage) => Promise<void>;
   wingsTestNode?: WingsNode;
   applicationDispatchRequest?: typeof fetch;
+  fixtureFileRequest?: typeof fetch;
   verifyApplicationDeletion?: (id: string) => Promise<boolean>;
   enableDisposableProvisioning?: boolean;
   catalogNodeKey?: Buffer;
@@ -118,6 +119,7 @@ export async function createApp({
   deliverReset,
   wingsTestNode,
   applicationDispatchRequest,
+  fixtureFileRequest,
   verifyApplicationDeletion,
   enableDisposableProvisioning,
   catalogNodeKey,
@@ -164,6 +166,7 @@ export async function createApp({
           applicationDispatchRequest,
           verifyApplicationDeletion,
           fixturePullSource,
+          fixtureFileRequest,
         )
       : undefined;
   const receiver =

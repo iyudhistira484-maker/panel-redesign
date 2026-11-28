@@ -261,6 +261,49 @@ async function main() {
     assert.ok(location && typeof location !== "string");
     fixturePullSource = `http://127.0.0.1:${location.port}/fixture.txt`;
   }
+  let browserDropArmed = false;
+  let browserDropCount = 0;
+  const fixtureFileRequest: typeof fetch = async (input, init) => {
+    if (
+      !browserDropArmed ||
+      String(input) !== `${node.origin}/api/servers/${uuid}/files/rename` ||
+      init?.method !== "PUT" ||
+      typeof init.body !== "string" ||
+      JSON.parse(init.body).files?.[0]?.from !== "batch-data.bin"
+    )
+      return fetch(input, init);
+    browserDropArmed = false;
+    // A real loopback HTTP hop forwards the write to Wings, then resets the
+    // connection to Relay before returning any acknowledgement.
+    const hop = createServer(async (request, response) => {
+      request.resume();
+      try {
+        const upstream = await fetch(input, init);
+        if (upstream.status !== 204) {
+          response.writeHead(upstream.status).end();
+          return;
+        }
+        browserDropCount++;
+        request.socket.destroy();
+      } catch {
+        response.writeHead(502).end();
+      }
+    });
+    await new Promise<void>((resolve, reject) =>
+      hop.once("error", reject).listen(0, "127.0.0.1", resolve),
+    );
+    try {
+      const address = hop.address();
+      assert.ok(address && typeof address !== "string");
+      return await fetch(`http://127.0.0.1:${address.port}`, {
+        method: "PUT",
+        signal: init.signal,
+      });
+    } finally {
+      hop.closeAllConnections();
+      hop.close();
+    }
+  };
   const relayFor = (configured: typeof node, database = pool) =>
     createApp({
       pool: database,
@@ -275,6 +318,7 @@ async function main() {
             applicationDispatchRequest,
             verifyApplicationDeletion,
             fixturePullSource,
+            ...(actual ? { fixtureFileRequest } : {}),
           }
         : {}),
       ...(actual && configured === node
@@ -6323,6 +6367,7 @@ async function main() {
                 : relayConfig,
             );
             await restart(false);
+            browserDropArmed = true;
             const run = await docker(
               "./node_modules/.bin/playwright",
               [
@@ -6340,6 +6385,7 @@ async function main() {
                 timeout: 110_000,
               },
             );
+            assert.equal(browserDropCount, 1);
             const readAfter = (app: typeof relay, id: string) =>
               app.inject({
                 url: `/api/v1/servers/${id}/files?directory=%2Ffixture-docs&preview=example.txt&download=1`,
