@@ -261,18 +261,19 @@ async function main() {
     assert.ok(location && typeof location !== "string");
     fixturePullSource = `http://127.0.0.1:${location.port}/fixture.txt`;
   }
-  let browserDropArmed = false;
+  const browserDropTargets = new Set<string>();
   let browserDropCount = 0;
   const fixtureFileRequest: typeof fetch = async (input, init) => {
     if (
-      !browserDropArmed ||
+      !browserDropTargets.size ||
       String(input) !== `${node.origin}/api/servers/${uuid}/files/rename` ||
       init?.method !== "PUT" ||
-      typeof init.body !== "string" ||
-      JSON.parse(init.body).files?.[0]?.from !== "batch-data.bin"
+      typeof init.body !== "string"
     )
       return fetch(input, init);
-    browserDropArmed = false;
+    const file = JSON.parse(init.body).files?.[0];
+    const target = file?.from === "batch-data.bin" ? "move" : file?.to;
+    if (!browserDropTargets.delete(target)) return fetch(input, init);
     // A real loopback HTTP hop forwards the write to Wings, then resets the
     // connection to Relay before returning any acknowledgement.
     const hop = createServer(async (request, response) => {
@@ -6367,7 +6368,8 @@ async function main() {
                 : relayConfig,
             );
             await restart(false);
-            browserDropArmed = true;
+            browserDropTargets.add("move");
+            browserDropTargets.add("batch-recovered-copy.bin");
             const run = await docker(
               "./node_modules/.bin/playwright",
               [
@@ -6385,7 +6387,8 @@ async function main() {
                 timeout: 110_000,
               },
             );
-            assert.equal(browserDropCount, 1);
+            assert.equal(browserDropCount, 2);
+            assert.equal(browserDropTargets.size, 0);
             const readAfter = (app: typeof relay, id: string) =>
               app.inject({
                 url: `/api/v1/servers/${id}/files?directory=%2Ffixture-docs&preview=example.txt&download=1`,

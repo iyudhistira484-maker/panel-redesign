@@ -1071,6 +1071,99 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   } finally {
     await binaryDb.end();
   }
+  const copyRecoveryTarget = "batch-recovered-copy.bin";
+  const pendingCopyItems = [
+    { source: binaryName, target: copyRecoveryTarget },
+    { source: uploadName, target: "batch-untouched.txt" },
+  ];
+  await page.getByLabel("Operasi batch").selectOption("copy");
+  await batchSources.selectOption(pendingCopyItems.map((item) => item.source));
+  for (const item of pendingCopyItems)
+    await page
+      .getByLabel(`Tujuan ${item.source}`, { exact: true })
+      .fill(item.target);
+  const interruptedCopyResponse = page.waitForResponse(
+    (response) => response.url() === batchApi,
+  );
+  await runBatch.click();
+  const interruptedCopyReply = await interruptedCopyResponse;
+  expect(interruptedCopyReply.status()).toBe(200);
+  const interruptedCopy = await interruptedCopyReply.json();
+  expect(interruptedCopy).toEqual({
+    batchId: expect.stringMatching(/^[a-f0-9]{32}$/),
+    halted: true,
+    results: [
+      { ...pendingCopyItems[0], status: "unconfirmed" },
+      { ...pendingCopyItems[1], status: "not_attempted" },
+    ],
+  });
+  await verifyBinary(binaryName);
+  await verifyBinary(copyRecoveryTarget);
+  await docker(
+    "docker",
+    [
+      "exec",
+      fixtureDaemon,
+      "test",
+      "!",
+      "-e",
+      `${binVolume}/batch-untouched.txt`,
+    ],
+    { timeout: 5000 },
+  );
+  await page.reload();
+  if (!loginFirst)
+    await page.getByRole("button", { name: "Muat daftar server" }).click();
+  await page
+    .locator(`[data-server-id="${id}"]`)
+    .getByRole("button", { name: loginFirst ? "Buka konsol" : "Detail server" })
+    .click();
+  await page.getByRole("button", { name: "Buka daftar file" }).click();
+  await files.getByRole("button", { name: "fixture-docs" }).click();
+  await page.getByText("Batch file", { exact: true }).click();
+  await expect(
+    page.getByText(
+      `${binaryName} → ${copyRecoveryTarget}: belum terkonfirmasi`,
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByText(`${uploadName} → batch-untouched.txt: belum dicoba`, {
+      exact: true,
+    }),
+  ).toBeVisible();
+  const copyDb = stagingPool();
+  try {
+    await copyDb.execute(
+      "UPDATE fixture_file_batches SET updated_at=CURRENT_TIMESTAMP(6)-INTERVAL 61 SECOND WHERE server_id=?",
+      [id],
+    );
+    const statusUrl = `${fileApi}/batch-status-fixture`;
+    const checked = page.waitForResponse(
+      (response) =>
+        response.url() === statusUrl && response.request().method() === "POST",
+    );
+    await page.getByRole("button", { name: "Periksa hasil batch" }).click();
+    expect((await checked).status()).toBe(200);
+    await expect(
+      page.getByText(`${binaryName} → ${copyRecoveryTarget}: terverifikasi`, {
+        exact: true,
+      }),
+    ).toBeVisible();
+    const [receipts] = await copyDb.query(
+      "SELECT CAST(name AS CHAR) AS name,digest FROM client_uploaded_files WHERE server_id=? AND name IN (?,?,?) ORDER BY name",
+      [id, binaryName, copyRecoveryTarget, "batch-untouched.txt"],
+    );
+    const digest = createHash("sha256").update(binaryBytes).digest("hex");
+    expect(receipts).toEqual([
+      { name: copyRecoveryTarget, digest },
+      { name: binaryName, digest },
+    ]);
+    await verifyBinary(binaryName);
+    await verifyBinary(copyRecoveryTarget);
+  } finally {
+    await copyDb.end();
+  }
   const rejectedUploads = [
     {
       name: "../upload-traversal.txt",
