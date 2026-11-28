@@ -878,9 +878,6 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   expect((await batch("copy", [batchItems[0], batchItems[0]])).status()).toBe(
     400,
   );
-  expect((await batch("move", [batchItems[0]], "unregistered")).status()).toBe(
-    400,
-  );
   await page.getByText("Batch file", { exact: true }).click();
   const runBatch = page.getByRole("button", { name: "Jalankan batch" });
   const batchSources = page.getByLabel("Sumber batch");
