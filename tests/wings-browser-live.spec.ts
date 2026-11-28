@@ -881,7 +881,19 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   expect((await batch("move", [batchItems[0]], "unregistered")).status()).toBe(
     400,
   );
-  const copyBatch = await batch("copy", batchItems);
+  await page.getByText("Batch file", { exact: true }).click();
+  const runBatch = page.getByRole("button", { name: "Jalankan batch" });
+  const batchSources = page.getByLabel("Sumber batch");
+  await batchSources.selectOption(batchItems.map((item) => item.source));
+  for (const item of batchItems)
+    await page
+      .getByLabel(`Tujuan ${item.source}`, { exact: true })
+      .fill(item.target);
+  const copyBatchResponse = page.waitForResponse(
+    (response) => response.url() === batchApi,
+  );
+  await runBatch.click();
+  const copyBatch = await copyBatchResponse;
   expect(copyBatch.status()).toBe(200);
   expect(await copyBatch.json()).toEqual({
     batchId: expect.stringMatching(/^[a-f0-9]{32}$/),
@@ -892,13 +904,25 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       { ...batchItems[2], status: "verified" },
     ],
   });
+  await expect(
+    page.getByText(`${moveTarget} → example.txt: ditolak (tujuan sudah ada)`, {
+      exact: true,
+    }),
+  ).toBeVisible();
   await verifyBinary(batchBinary);
   expect(await readUploaded()).toEqual(uploadedBytes);
   const moveItems = [
     { source: batchText, target: batchText },
     { source: batchBinary, target: batchBinary },
   ];
-  const moveBatch = await batch("move", moveItems, moveFolder);
+  await page.getByLabel("Operasi batch").selectOption("move");
+  await page.getByLabel("Tujuan batch").selectOption(moveFolder);
+  await batchSources.selectOption(moveItems.map((item) => item.source));
+  const moveBatchResponse = page.waitForResponse(
+    (response) => response.url() === batchApi,
+  );
+  await runBatch.click();
+  const moveBatch = await moveBatchResponse;
   expect(moveBatch.status()).toBe(200);
   const completedMove = await moveBatch.json();
   expect(completedMove).toEqual({
@@ -945,13 +969,21 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     const frozen = await batch("move", moveItems, moveFolder);
     expect(frozen.status()).toBe(409);
     expect((await frozen.json()).error).toBe("batch_reconciliation_required");
-    const recoveredBatch = await page
-      .context()
-      .request.post(statusUrl, { headers: editHeaders });
+    const recoveredBatchResponse = page.waitForResponse(
+      (response) =>
+        response.url() === statusUrl && response.request().method() === "POST",
+    );
+    await page.getByRole("button", { name: "Periksa hasil batch" }).click();
+    const recoveredBatch = await recoveredBatchResponse;
     expect(recoveredBatch.status()).toBe(200);
     expect(await recoveredBatch.json()).toEqual({
       batch: { ...completedMove, operation: "move", destination: moveFolder },
     });
+    await expect(
+      page.getByText(`${batchBinary} → ${batchBinary}: terverifikasi`, {
+        exact: true,
+      }),
+    ).toBeVisible();
     const [batchReceipts] = await binaryDb.query(
       "SELECT CAST(name AS CHAR) AS name,digest FROM client_uploaded_files WHERE server_id=? AND name IN (?,?,?,?) ORDER BY name",
       [
