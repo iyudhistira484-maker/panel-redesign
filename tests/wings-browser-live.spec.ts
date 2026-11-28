@@ -858,33 +858,73 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     ],
     { timeout: 5000 },
   );
-  // Upload retains its original cap. Seed tracked 1 MiB data in this disposable
-  // volume to exercise only the expanded batch transfer path.
   const largeBytes = Buffer.alloc(1024 * 1024);
-  binaryBytes.copy(largeBytes);
+  for (let offset = 0; offset < largeBytes.length; offset += binaryBytes.length)
+    binaryBytes.copy(largeBytes, offset);
   const largeDigest = createHash("sha256").update(largeBytes).digest("hex");
+  const largeName = "browser-stream.bin";
+  const streamUrl = `${fileApi}/binary-stream-fixture`;
+  const uploadLarge = (name: string, data: Buffer) =>
+    page
+      .context()
+      .request.post(`${streamUrl}?${new URLSearchParams({ name })}`, {
+        headers: { ...editHeaders, "content-type": "application/octet-stream" },
+        data,
+      });
+  await input.setInputFiles({
+    name: largeName,
+    mimeType: "application/octet-stream",
+    buffer: largeBytes,
+  });
+  const streamUpload = page.waitForResponse(
+    (response) =>
+      response.url().startsWith(streamUrl) &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Unggah file" }).click();
+  expect((await streamUpload).status()).toBe(201);
+  await verifyBinary(largeName, largeBytes);
+  const largeDownload = page.waitForEvent("download");
+  await files
+    .getByRole("button", { name: `Unduh ${largeName}`, exact: true })
+    .click();
+  const largeArtifact = await largeDownload;
+  expect(largeArtifact.suggestedFilename()).toBe(largeName);
+  const largePath = await largeArtifact.path();
+  assert.ok(largePath);
+  expect(
+    createHash("sha256")
+      .update(await readFile(largePath))
+      .digest("hex"),
+  ).toBe(largeDigest);
   const oversized = "batch-oversized.bin";
+  expect(
+    (
+      await uploadLarge(oversized, Buffer.alloc(largeBytes.length + 1))
+    ).status(),
+  ).toBe(413);
+  await docker(
+    "docker",
+    ["exec", fixtureDaemon, "test", "!", "-e", `${binVolume}/${oversized}`],
+    { timeout: 5000 },
+  );
+  expect(
+    (await uploadLarge(largeName, Buffer.alloc(largeBytes.length))).status(),
+  ).toBe(409);
+  await verifyBinary(largeName, largeBytes);
   const seed = stagingPool();
   try {
-    for (const [name, length] of [
-      [binaryName, largeBytes.length],
-      [oversized, largeBytes.length + 1],
-    ] as const)
-      await docker(
-        "docker",
-        [
-          "exec",
-          fixtureDaemon,
-          "truncate",
-          "-s",
-          String(length),
-          `${binVolume}/${name}`,
-        ],
-        { timeout: 5000 },
-      );
-    await seed.execute(
-      "UPDATE client_uploaded_files SET digest=? WHERE server_id=? AND name=?",
-      [largeDigest, id, binaryName],
+    await docker(
+      "docker",
+      [
+        "exec",
+        fixtureDaemon,
+        "truncate",
+        "-s",
+        String(largeBytes.length + 1),
+        `${binVolume}/${oversized}`,
+      ],
+      { timeout: 5000 },
     );
     await seed.execute(
       "INSERT INTO client_uploaded_files (server_id,name,digest) VALUES (?,?,?)",
@@ -914,7 +954,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   const batchItems = [
     { source: uploadName, target: batchText },
     { source: moveTarget, target: "example.txt" },
-    { source: binaryName, target: batchBinary },
+    { source: largeName, target: batchBinary },
   ];
   const oversizedItem = {
     source: oversized,
@@ -1008,7 +1048,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   try {
     const [receipts] = await binaryDb.query(
       "SELECT digest FROM client_uploaded_files WHERE server_id=? AND name=?",
-      [id, binaryName],
+      [id, largeName],
     );
     expect(receipts).toEqual([{ digest: largeDigest }]);
     const statusUrl = `${fileApi}/batch-status-fixture`;
@@ -1132,7 +1172,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   }
   const copyRecoveryTarget = "batch-recovered-copy.bin";
   const pendingCopyItems = [
-    { source: binaryName, target: copyRecoveryTarget },
+    { source: largeName, target: copyRecoveryTarget },
     { source: uploadName, target: "batch-untouched.txt" },
   ];
   await page.getByLabel("Operasi batch").selectOption("copy");
@@ -1156,7 +1196,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       { ...pendingCopyItems[1], status: "not_attempted" },
     ],
   });
-  await verifyBinary(binaryName, largeBytes);
+  await verifyBinary(largeName, largeBytes);
   await verifyBinary(copyRecoveryTarget, largeBytes);
   await docker(
     "docker",
@@ -1182,7 +1222,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   await page.getByText("Batch file", { exact: true }).click();
   await expect(
     page.getByText(
-      `${binaryName} → ${copyRecoveryTarget}: belum terkonfirmasi`,
+      `${largeName} → ${copyRecoveryTarget}: belum terkonfirmasi`,
       { exact: true },
     ),
   ).toBeVisible();
@@ -1205,35 +1245,29 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     await page.getByRole("button", { name: "Periksa hasil batch" }).click();
     expect((await checked).status()).toBe(200);
     await expect(
-      page.getByText(`${binaryName} → ${copyRecoveryTarget}: terverifikasi`, {
+      page.getByText(`${largeName} → ${copyRecoveryTarget}: terverifikasi`, {
         exact: true,
       }),
     ).toBeVisible();
     const [receipts] = await copyDb.query(
       "SELECT CAST(name AS CHAR) AS name,digest FROM client_uploaded_files WHERE server_id=? AND name IN (?,?,?) ORDER BY name",
-      [id, binaryName, copyRecoveryTarget, "batch-untouched.txt"],
+      [id, largeName, copyRecoveryTarget, "batch-untouched.txt"],
     );
     const digest = largeDigest;
     expect(receipts).toEqual([
+      { name: largeName, digest },
       { name: copyRecoveryTarget, digest },
-      { name: binaryName, digest },
     ]);
-    await verifyBinary(binaryName, largeBytes);
+    await verifyBinary(largeName, largeBytes);
     await verifyBinary(copyRecoveryTarget, largeBytes);
   } finally {
     // Keep the independent volume-recovery fixture within its original file budget.
-    await docker(
-      "docker",
-      [
-        "exec",
-        fixtureDaemon,
-        "truncate",
-        "-s",
-        String(binaryBytes.length),
-        `${binVolume}/${binaryName}`,
-      ],
-      { timeout: 5000 },
-    );
+    const seeded = [
+      largeName,
+      copyRecoveryTarget,
+      `${moveFolder}/${batchBinary}`,
+      oversized,
+    ];
     await docker(
       "docker",
       [
@@ -1241,19 +1275,13 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
         fixtureDaemon,
         "rm",
         "-f",
-        ...[copyRecoveryTarget, `${moveFolder}/${batchBinary}`, oversized].map(
-          (name) => `${binVolume}/${name}`,
-        ),
+        ...seeded.map((name) => `${binVolume}/${name}`),
       ],
       { timeout: 5000 },
     );
     await copyDb.execute(
-      "UPDATE client_uploaded_files SET digest=? WHERE server_id=? AND name=?",
-      [createHash("sha256").update(binaryBytes).digest("hex"), id, binaryName],
-    );
-    await copyDb.execute(
-      "DELETE FROM client_uploaded_files WHERE server_id=? AND name IN (?,?,?)",
-      [id, copyRecoveryTarget, `${moveFolder}/${batchBinary}`, oversized],
+      "DELETE FROM client_uploaded_files WHERE server_id=? AND name IN (?,?,?,?)",
+      [id, ...seeded],
     );
     await copyDb.end();
   }

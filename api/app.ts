@@ -1,3 +1,5 @@
+import { createReadStream } from "node:fs";
+import type { Readable } from "node:stream";
 import { compressFixtureZip, fixtureZipName } from "./wings/fixture-zip";
 import { compressFixtureText } from "./wings/fixture-gzip";
 import {
@@ -16,7 +18,7 @@ import { registerCatalog, type FixtureTransfer } from "./catalog/routes";
 import { localBackupService } from "./wings/local-backups";
 import { stagingSftpAuth } from "./wings/sftp-auth";
 import { registerRemote, type FixtureBackupCallback } from "./wings/remote";
-import { UUID_V4, type WingsNode } from "./wings/client";
+import { fixtureBatchLimit, UUID_V4, type WingsNode } from "./wings/client";
 import { randomBytes, randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
@@ -2091,6 +2093,82 @@ export async function createApp({
         }
       },
     );
+  if (provisioner)
+    app.register(async (routes) => {
+      routes.addContentTypeParser(
+        "application/octet-stream",
+        (_req, payload, done) => done(null, payload),
+      );
+      const url = "/api/v1/servers/:id/files/binary-stream-fixture";
+      for (const method of ["GET", "POST"] as const)
+        routes.route<{
+          Params: { id: string };
+          Querystring: { name?: string; directory?: string };
+          Body: Readable;
+        }>({
+          method,
+          url,
+          config: { rateLimit: { max: 8, timeWindow: "1 minute" } },
+          handler: async (req, reply) => {
+            const principal = await actor(
+              req.cookies[sessionCookie],
+              req.headers.authorization,
+            );
+            if (!principal || principal.channel !== "session")
+              return reply.code(401).send({ error: "unauthenticated" });
+            if (!UUID_V4.test(req.params.id))
+              return reply.code(404).send({ error: "server_not_found" });
+            const { name, directory = "/fixture-docs" } = req.query;
+            if (typeof name !== "string" || typeof directory !== "string")
+              return reply.code(400).send({ error: "invalid_file" });
+            try {
+              if (method === "POST") {
+                const length = Number(req.headers["content-length"]);
+                if (length > fixtureBatchLimit)
+                  return reply.code(413).send({ error: "file_too_large" });
+                if (
+                  req.headers["content-type"] !== "application/octet-stream" ||
+                  !Number.isSafeInteger(length) ||
+                  length < 1
+                )
+                  return reply.code(400).send({ error: "invalid_upload" });
+                return reply
+                  .code(201)
+                  .send(
+                    await provisioner.uploadBinaryStream(
+                      req.params.id,
+                      principal,
+                      name,
+                      req.body,
+                      length,
+                    ),
+                  );
+              }
+              const spool = await provisioner.downloadBinaryStream(
+                req.params.id,
+                principal,
+                directory,
+                name,
+              );
+              const stream = createReadStream(spool.path);
+              stream.once("close", () => {
+                void spool.dispose().catch(() => {});
+              });
+              reply.raw.once("close", () => stream.destroy());
+              return reply
+                .header("content-disposition", `attachment; filename="${name}"`)
+                .header("content-length", spool.size)
+                .header("x-content-type-options", "nosniff")
+                .type("application/octet-stream")
+                .send(stream);
+            } catch (error) {
+              if (error instanceof ProvisionError)
+                return reply.code(error.status).send({ error: error.code });
+              throw error;
+            }
+          },
+        });
+    });
   if (provisioner)
     app.post<{
       Params: { id: string };

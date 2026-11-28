@@ -1,3 +1,5 @@
+import type { Readable } from "node:stream";
+import { FixtureStreamLimit, spoolFixture } from "./fixture-stream";
 import {
   executeFixtureBatch,
   type FixtureBatchItem,
@@ -11,6 +13,7 @@ import { lockFreeAllocation } from "../catalog/transfer";
 import {
   type FixtureSubfolder,
   fixtureBatchLimit,
+  transferScratchPrefix,
   fixtureFolderName,
   fixtureFolderPath,
   fixtureMoveFolder,
@@ -1111,7 +1114,9 @@ export function createProvisioner(
         throw new ProvisionError(400, "invalid_directory");
       try {
         if (preview === undefined) {
-          const items = await client.fixtureDirectory(id, segments);
+          const items = (await client.fixtureDirectory(id, segments)).filter(
+            (item) => !item.name.startsWith(transferScratchPrefix),
+          );
           if (segments[0] !== "fixture-docs" || segments.length > 2)
             return items;
           const folders = await rows<{ name: string }>(
@@ -1335,6 +1340,140 @@ export function createProvisioner(
     },
     chmodFixture,
     renameFixture,
+    async uploadBinaryStream(
+      id: string,
+      actor: Actor,
+      name: string,
+      body: Readable,
+      length: number,
+    ) {
+      return exclusive(id, async () => {
+        await authorizeBatch(id, actor);
+        if (!atomicBinary)
+          throw new ProvisionError(422, "atomic_rename_required");
+        if (
+          !fixturePathSegment(name) ||
+          !name.endsWith(".bin") ||
+          name.startsWith(transferScratchPrefix)
+        )
+          throw new ProvisionError(400, "invalid_upload");
+        const check = async () => {
+          await authorizeBatch(id, actor);
+          if ((await client.state(id)) !== "offline")
+            throw new ProvisionError(409, "server_not_offline");
+          if (await client.fixtureUploadTargetExists(id, name))
+            throw new ProvisionError(409, "file_exists");
+        };
+        try {
+          await check();
+          const spool = await spoolFixture(body, fixtureBatchLimit);
+          const scratch = `${transferScratchPrefix}${randomBytes(16).toString("hex")}.bin`;
+          let acknowledged = false;
+          try {
+            if (spool.size !== length)
+              throw new ProvisionError(400, "invalid_upload");
+            await client.uploadBinaryScratch(
+              id,
+              scratch,
+              spool.path,
+              spool.size,
+            );
+            acknowledged = true;
+            const segments = ["fixture-docs"];
+            if (
+              (
+                await client.fixtureDigest(
+                  id,
+                  segments,
+                  scratch,
+                  fixtureBatchLimit,
+                )
+              ).digest !== spool.digest
+            )
+              throw new ProvisionError(502, "file_upload_unverified");
+            await check();
+            await client.renameUploadedFixture(id, scratch, name);
+            if (
+              (
+                await client.fixtureDigest(
+                  id,
+                  segments,
+                  name,
+                  fixtureBatchLimit,
+                )
+              ).digest !== spool.digest
+            )
+              throw new ProvisionError(502, "file_upload_unverified");
+            await pool.execute(
+              "INSERT INTO client_uploaded_files (server_id,name,digest) VALUES (?,?,?) ON DUPLICATE KEY UPDATE digest=VALUES(digest)",
+              [id, name, spool.digest],
+            );
+            return { name, size: spool.size };
+          } finally {
+            if (acknowledged)
+              await client.deleteBinaryScratch(id, scratch).catch(() => {});
+            await spool.dispose();
+          }
+        } catch (error) {
+          if (error instanceof FixtureStreamLimit)
+            throw new ProvisionError(413, "file_too_large");
+          if (error instanceof WingsUnavailable)
+            throw new ProvisionError(502, "file_upload_unverified");
+          throw error;
+        }
+      });
+    },
+    async downloadBinaryStream(
+      id: string,
+      actor: Actor,
+      directory: string,
+      name: string,
+    ) {
+      await authorizeBatch(id, actor);
+      if (!atomicBinary)
+        throw new ProvisionError(422, "atomic_rename_required");
+      const segments = directory.slice(1).split("/");
+      if (
+        !directory.startsWith("/") ||
+        segments[0] !== "fixture-docs" ||
+        segments.length > 4 ||
+        !segments.every(fixturePathSegment) ||
+        !fixturePathSegment(name) ||
+        !name.endsWith(".bin") ||
+        name.startsWith(transferScratchPrefix)
+      )
+        throw new ProvisionError(400, "invalid_download");
+      const [receipt] = await rows<{ digest: string }>(
+        pool,
+        "SELECT digest FROM client_uploaded_files WHERE server_id=? AND name=?",
+        [id, [...segments.slice(1), name].join("/")],
+      );
+      if (!receipt) throw new ProvisionError(404, "upload_not_found");
+      try {
+        const { size, stream } = await client.fixtureBinaryStream(
+          id,
+          segments,
+          name,
+        );
+        const spool = await spoolFixture(stream, fixtureBatchLimit);
+        try {
+          if (spool.size !== size || spool.digest !== receipt.digest)
+            throw new ProvisionError(409, "uploaded_file_changed");
+          await authorizeBatch(id, actor);
+          return spool;
+        } catch (error) {
+          await spool.dispose();
+          throw error;
+        }
+      } catch (error) {
+        if (
+          error instanceof WingsUnavailable ||
+          error instanceof FixtureStreamLimit
+        )
+          throw new ProvisionError(422, "file_download_unverified");
+        throw error;
+      }
+    },
     async batchFiles(
       id: string,
       actor: Actor,

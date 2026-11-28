@@ -1,3 +1,5 @@
+import { createReadStream } from "node:fs";
+import { Readable } from "node:stream";
 export const fixtureFolderName = (name: string) =>
   /^[a-z][a-z0-9_-]{0,47}(?![\s\S])/.test(name) &&
   !name.startsWith("zip-pending-") &&
@@ -18,6 +20,7 @@ export const fixturePathSegment = (value: string) =>
 import { createHash } from "node:crypto";
 export const UUID_V4 =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+export const transferScratchPrefix = "relay-transfer-";
 export const fixtureBatchLimit = 1024 * 1024;
 export const supportedWings = "1.13.5";
 export type WingsNode = { origin: string; tokenId: string; token: string };
@@ -704,6 +707,70 @@ export class WingsClient {
       items = await list(path);
     }
     return items;
+  }
+  async fixtureBinaryStream(id: string, segments: string[], name: string) {
+    const entry = (await this.fixtureDirectory(id, segments)).find(
+      (item) => !item.directory && item.name === name,
+    );
+    if (!entry) throw new WingsUnavailable("not_found");
+    if (entry.size > fixtureBatchLimit) throw new WingsUnavailable("too_large");
+    const path = `/${[...segments, name].join("/")}`;
+    const response = await this.#send(
+      `${this.#server(id)}/files/contents?file=${encodeURIComponent(path)}&download=1`,
+      200,
+    );
+    if (!response.body) throw new WingsUnavailable("payload");
+    return {
+      size: entry.size,
+      stream: Readable.fromWeb(
+        response.body as import("node:stream/web").ReadableStream,
+      ),
+    };
+  }
+  async uploadBinaryScratch(
+    id: string,
+    name: string,
+    path: string,
+    size: number,
+  ) {
+    if (!/^relay-transfer-[a-f0-9]{32}\.bin$/.test(name))
+      throw new WingsUnavailable("payload");
+    const file = createReadStream(path);
+    try {
+      const init: RequestInit & { duplex: "half" } = {
+        method: "POST",
+        duplex: "half",
+        redirect: "error",
+        signal: AbortSignal.timeout(5000),
+        headers: {
+          authorization: `Bearer ${this.#node.token}`,
+          "content-type": "application/octet-stream",
+          "content-length": String(size),
+        },
+        body: Readable.toWeb(file) as ReadableStream,
+      };
+      const response = await this.request(
+        `${this.#node.origin}${this.#server(id)}/files/write?file=${encodeURIComponent(`/fixture-docs/${name}`)}`,
+        init,
+      );
+      await response.body?.cancel();
+      if (response.status !== 204) throw new WingsUnavailable("http");
+    } catch {
+      throw new WingsUnavailable("transport");
+    } finally {
+      file.destroy();
+    }
+  }
+  async deleteBinaryScratch(id: string, name: string) {
+    if (!/^relay-transfer-[a-f0-9]{32}\.bin$/.test(name))
+      throw new WingsUnavailable("payload");
+    const response = await this.#send(
+      `${this.#server(id)}/files/delete`,
+      204,
+      "POST",
+      { root: "/fixture-docs", files: [name] },
+    );
+    await response.body?.cancel();
   }
   async fixtureDigest(
     id: string,

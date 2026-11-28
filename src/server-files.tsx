@@ -282,38 +282,45 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
   async function upload() {
     if (!uploadFile || busy) return;
     setUploadStatus(null);
+    const large = uploadFile.name.endsWith(".bin") && uploadFile.size > 16384;
     if (
       !/^[A-Za-z0-9_][A-Za-z0-9_. -]{0,79}$/.test(uploadFile.name) ||
       !/\.(txt|bin)$/.test(uploadFile.name) ||
-      uploadFile.size > 16384
+      uploadFile.size > (large ? 1048576 : 16384)
     ) {
       setUploadStatus("invalid");
       return;
     }
     setBusy(true);
     try {
-      const bytes = new Uint8Array(await uploadFile.arrayBuffer());
+      const bytes = large
+        ? null
+        : new Uint8Array(await uploadFile.arrayBuffer());
       const response = await fetch(
-        `/api/v1/servers/${encodeURIComponent(id)}/files/upload-fixture`,
+        `/api/v1/servers/${encodeURIComponent(id)}/files/${large ? `binary-stream-fixture?${new URLSearchParams({ name: uploadFile.name })}` : "upload-fixture"}`,
         {
           method: "POST",
           credentials: "same-origin",
           headers: {
-            "content-type": "application/json",
+            "content-type": large
+              ? "application/octet-stream"
+              : "application/json",
             "x-relay-request": "1",
           },
           signal: AbortSignal.timeout(30000),
-          body: JSON.stringify({
-            name: uploadFile.name,
-            content: btoa(String.fromCharCode(...bytes)),
-          }),
+          body: bytes
+            ? JSON.stringify({
+                name: uploadFile.name,
+                content: btoa(String.fromCharCode(...bytes)),
+              })
+            : uploadFile,
         },
       );
       if (response.status === 409) {
         setUploadStatus("conflict");
         return;
       }
-      if (response.status === 400) {
+      if (response.status === 400 || response.status === 413) {
         setUploadStatus("invalid");
         return;
       }
@@ -325,7 +332,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
           current &&
           [
             ...current,
-            { name: uploadFile.name, directory: false, size: bytes.length },
+            { name: uploadFile.name, directory: false, size: uploadFile.size },
           ].sort((a, b) => a.name.localeCompare(b.name)),
       );
       setUploadFile(null);
@@ -422,7 +429,14 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
   const [downloadError, setDownloadError] = useState(false);
   const pendingDownload = useRef<AbortController | null>(null);
   useEffect(() => () => pendingDownload.current?.abort(), []);
-  async function downloadFile(name: string, gzip = false) {
+  async function downloadFile(name: string, gzip = false, large = false) {
+    if (large) {
+      const link = document.createElement("a");
+      link.href = `/api/v1/servers/${encodeURIComponent(id)}/files/binary-stream-fixture?${new URLSearchParams({ name, directory: `/${path.join("/")}` })}`;
+      link.download = name;
+      link.click();
+      return;
+    }
     const controller = new AbortController();
     pendingDownload.current = controller;
     setBusy(true);
@@ -851,11 +865,13 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
               )}
               {!item.directory &&
                 /\.(txt|bin)$/.test(item.name) &&
-                item.size <= 16384 && (
+                item.size <= (item.name.endsWith(".bin") ? 1048576 : 16384) && (
                   <Button
                     disabled={busy}
                     aria-label={`${en ? "Download" : "Unduh"} ${item.name}`}
-                    onClick={() => void downloadFile(item.name)}
+                    onClick={() =>
+                      void downloadFile(item.name, false, item.size > 16384)
+                    }
                   >
                     {en ? "Download" : "Unduh"}
                   </Button>
