@@ -972,12 +972,54 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     const frozen = await batch("move", moveItems, moveFolder);
     expect(frozen.status()).toBe(409);
     expect((await frozen.json()).error).toBe("batch_reconciliation_required");
-    const recoveredBatchResponse = page.waitForResponse(
-      (response) =>
-        response.url() === statusUrl && response.request().method() === "POST",
-    );
-    await page.getByRole("button", { name: "Periksa hasil batch" }).click();
-    const recoveredBatch = await recoveredBatchResponse;
+    async function checkBatch() {
+      const response = page.waitForResponse(
+        (response) =>
+          response.url() === statusUrl &&
+          response.request().method() === "POST",
+      );
+      await page.getByRole("button", { name: "Periksa hasil batch" }).click();
+      return response;
+    }
+    const targetPath = `${binVolume}/${moveFolder}/${batchBinary}`;
+    const holdPath = `${targetPath}.held`;
+    const fileCommand = (...args: string[]) =>
+      docker("docker", ["exec", fixtureDaemon, ...args], { timeout: 5000 });
+    const ageBatch = () =>
+      binaryDb.execute(
+        "UPDATE fixture_file_batches SET updated_at=CURRENT_TIMESTAMP(6)-INTERVAL 61 SECOND WHERE server_id=?",
+        [id],
+      );
+    await fileCommand("mv", targetPath, holdPath);
+    try {
+      for (const mismatch of [false, true]) {
+        if (mismatch)
+          await fileCommand("cp", `${binVolume}/${batchText}`, targetPath);
+        await ageBatch();
+        const check = await checkBatch();
+        expect(check.status()).toBe(200);
+        expect(await check.json()).toEqual({
+          batch: {
+            ...interruptedMove,
+            operation: "move",
+            destination: moveFolder,
+          },
+        });
+        await expect(runBatch).toBeDisabled();
+        if (mismatch) {
+          const wrong = await docker(
+            "docker",
+            ["exec", fixtureDaemon, "cat", targetPath],
+            { encoding: "buffer", timeout: 5000 },
+          );
+          expect(wrong.stdout).toEqual(uploadedBytes);
+        } else await fileCommand("test", "!", "-e", targetPath);
+      }
+    } finally {
+      await fileCommand("mv", holdPath, targetPath);
+    }
+    await ageBatch();
+    const recoveredBatch = await checkBatch();
     expect(recoveredBatch.status()).toBe(200);
     expect(await recoveredBatch.json()).toEqual({
       batch: {
