@@ -1,3 +1,4 @@
+import { FileBatch } from "./file-batch";
 import { useEffect, useRef, useState } from "react";
 import type { Locale } from "./i18n";
 import { Button } from "./ui";
@@ -655,6 +656,43 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
             ))}
           </span>
         </div>
+      )}
+      {path.join("/") === "fixture-docs" && items && (
+        <FileBatch
+          id={id}
+          en={en}
+          busy={busy}
+          onBusy={setBusy}
+          destinations={destinations}
+          files={items
+            .filter(
+              (item) =>
+                !item.directory &&
+                /\.(txt|bin)$/.test(item.name) &&
+                item.size <= 16384,
+            )
+            .map((item) => item.name)}
+          onComplete={(operation, results) => {
+            setItems((current) => {
+              if (!current) return current;
+              const done = results.filter((item) => item.status === "verified");
+              if (operation === "move")
+                return current.filter(
+                  (item) => !done.some((result) => result.source === item.name),
+                );
+              return [
+                ...current,
+                ...done.map((result) => ({
+                  name: result.target,
+                  directory: false,
+                  size:
+                    current.find((item) => item.name === result.source)?.size ??
+                    0,
+                })),
+              ].sort((a, b) => a.name.localeCompare(b.name));
+            });
+          }}
+        />
       )}
       {path.join("/") === "fixture-docs" && items && (
         <div>
