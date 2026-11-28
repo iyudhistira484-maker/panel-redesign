@@ -1219,6 +1219,40 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     await verifyBinary(binaryName, largeBytes);
     await verifyBinary(copyRecoveryTarget, largeBytes);
   } finally {
+    // Keep the independent volume-recovery fixture within its original file budget.
+    await docker(
+      "docker",
+      [
+        "exec",
+        fixtureDaemon,
+        "truncate",
+        "-s",
+        String(binaryBytes.length),
+        `${binVolume}/${binaryName}`,
+      ],
+      { timeout: 5000 },
+    );
+    await docker(
+      "docker",
+      [
+        "exec",
+        fixtureDaemon,
+        "rm",
+        "-f",
+        ...[copyRecoveryTarget, `${moveFolder}/${batchBinary}`, oversized].map(
+          (name) => `${binVolume}/${name}`,
+        ),
+      ],
+      { timeout: 5000 },
+    );
+    await copyDb.execute(
+      "UPDATE client_uploaded_files SET digest=? WHERE server_id=? AND name=?",
+      [createHash("sha256").update(binaryBytes).digest("hex"), id, binaryName],
+    );
+    await copyDb.execute(
+      "DELETE FROM client_uploaded_files WHERE server_id=? AND name IN (?,?,?)",
+      [id, copyRecoveryTarget, `${moveFolder}/${batchBinary}`, oversized],
+    );
     await copyDb.end();
   }
   const rejectedUploads = [
