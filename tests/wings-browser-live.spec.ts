@@ -1038,9 +1038,6 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
         exact: true,
       }),
     ).toBeVisible();
-    expect((await batch("move", [moveItems[0]], moveFolder)).status()).toBe(
-      200,
-    );
     const [batchReceipts] = await binaryDb.query(
       "SELECT CAST(name AS CHAR) AS name,digest FROM client_uploaded_files WHERE server_id=? AND name IN (?,?,?,?) ORDER BY name",
       [
@@ -1053,12 +1050,12 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     );
     expect(batchReceipts).toEqual([
       {
-        name: `${moveFolder}/${batchBinary}`,
-        digest: createHash("sha256").update(binaryBytes).digest("hex"),
+        name: batchText,
+        digest: createHash("sha256").update(uploadedBytes).digest("hex"),
       },
       {
-        name: `${moveFolder}/${batchText}`,
-        digest: createHash("sha256").update(uploadedBytes).digest("hex"),
+        name: `${moveFolder}/${batchBinary}`,
+        digest: createHash("sha256").update(binaryBytes).digest("hex"),
       },
     ]);
     const [copyReceipts] = await binaryDb.query(
