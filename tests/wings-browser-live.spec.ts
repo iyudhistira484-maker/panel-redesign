@@ -1012,7 +1012,9 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     );
     expect(receipts).toEqual([{ digest: largeDigest }]);
     const statusUrl = `${fileApi}/batch-status-fixture`;
-    const stored = await page.context().request.get(statusUrl);
+    const stored = await page
+      .context()
+      .request.get(statusUrl, { maxRetries: 1 });
     expect(await stored.json()).toEqual({
       batch: { ...interruptedMove, operation: "move", destination: moveFolder },
     });
