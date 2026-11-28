@@ -899,9 +899,9 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     batchId: expect.stringMatching(/^[a-f0-9]{32}$/),
     halted: false,
     results: [
+      { ...batchItems[2], status: "verified" },
       { ...batchItems[0], status: "verified" },
       { ...batchItems[1], status: "rejected", error: "file_exists" },
-      { ...batchItems[2], status: "verified" },
     ],
   });
   await expect(
@@ -928,7 +928,9 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   expect(completedMove).toEqual({
     batchId: expect.stringMatching(/^[a-f0-9]{32}$/),
     halted: false,
-    results: moveItems.map((item) => ({ ...item, status: "verified" })),
+    results: [...moveItems]
+      .reverse()
+      .map((item) => ({ ...item, status: "verified" })),
   });
   await verifyBinary(`${moveFolder}/${batchBinary}`);
   const batchTextBytes = await docker(
@@ -959,7 +961,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     });
     // Simulate a crash after Wings committed the move but before Relay saved the receipt.
     await binaryDb.execute(
-      "UPDATE fixture_file_batches SET items=JSON_SET(items,'$[1].status','unconfirmed'),blocked=TRUE,updated_at=CURRENT_TIMESTAMP(6)-INTERVAL 61 SECOND WHERE server_id=?",
+      "UPDATE fixture_file_batches SET items=JSON_SET(items,'$[0].status','unconfirmed'),blocked=TRUE,updated_at=CURRENT_TIMESTAMP(6)-INTERVAL 61 SECOND WHERE server_id=?",
       [id],
     );
     await binaryDb.execute(
