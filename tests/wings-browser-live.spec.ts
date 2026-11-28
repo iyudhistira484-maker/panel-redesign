@@ -818,16 +818,16 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     files.getByRole("button", { name: `Unduh ${binaryCopy}` }),
   ).toHaveCount(0);
   const binVolume = `${uploadVolume}/${id}/fixture-docs`;
-  const verifyBinary = async (relative: string) =>
+  const verifyBinary = async (relative: string, expected = binaryBytes) =>
     expect(
       (
         await docker(
           "docker",
           ["exec", fixtureDaemon, "cat", `${binVolume}/${relative}`],
-          { encoding: "buffer", timeout: 5000 },
+          { encoding: "buffer", timeout: 5000, maxBuffer: 2 * 1024 * 1024 },
         )
       ).stdout,
-    ).toEqual(binaryBytes);
+    ).toEqual(expected);
   await verifyBinary(`review/${binaryCopy}`);
   await verifyBinary(binaryName);
   await files.getByRole("button", { name: "review", exact: true }).click();
@@ -858,6 +858,47 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     ],
     { timeout: 5000 },
   );
+  // Upload retains its original cap. Seed tracked 1 MiB data in this disposable
+  // volume to exercise only the expanded batch transfer path.
+  const largeBytes = Buffer.alloc(1024 * 1024);
+  binaryBytes.copy(largeBytes);
+  const largeDigest = createHash("sha256").update(largeBytes).digest("hex");
+  const oversized = "batch-oversized.bin";
+  const seed = stagingPool();
+  try {
+    for (const [name, length] of [
+      [binaryName, largeBytes.length],
+      [oversized, largeBytes.length + 1],
+    ] as const)
+      await docker(
+        "docker",
+        [
+          "exec",
+          fixtureDaemon,
+          "truncate",
+          "-s",
+          String(length),
+          `${binVolume}/${name}`,
+        ],
+        { timeout: 5000 },
+      );
+    await seed.execute(
+      "UPDATE client_uploaded_files SET digest=? WHERE server_id=? AND name=?",
+      [largeDigest, id, binaryName],
+    );
+    await seed.execute(
+      "INSERT INTO client_uploaded_files (server_id,name,digest) VALUES (?,?,?)",
+      [
+        id,
+        oversized,
+        createHash("sha256")
+          .update(Buffer.alloc(largeBytes.length + 1))
+          .digest("hex"),
+      ],
+    );
+  } finally {
+    await seed.end();
+  }
   const batchApi = `${fileApi}/batch-fixture`;
   const batch = (
     operation: "copy" | "move",
@@ -875,8 +916,29 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     { source: moveTarget, target: "example.txt" },
     { source: binaryName, target: batchBinary },
   ];
-  expect((await batch("copy", [batchItems[0], batchItems[0]])).status()).toBe(
-    400,
+  const oversizedItem = {
+    source: oversized,
+    target: "batch-oversized-copy.bin",
+  };
+  const rejectedSize = await batch("copy", [oversizedItem]);
+  expect(rejectedSize.status()).toBe(200);
+  expect(await rejectedSize.json()).toMatchObject({
+    halted: false,
+    results: [
+      { ...oversizedItem, status: "rejected", error: "batch_file_too_large" },
+    ],
+  });
+  await docker(
+    "docker",
+    [
+      "exec",
+      fixtureDaemon,
+      "test",
+      "!",
+      "-e",
+      `${binVolume}/${oversizedItem.target}`,
+    ],
+    { timeout: 5000 },
   );
   await page.getByText("Batch file", { exact: true }).click();
   const runBatch = page.getByRole("button", { name: "Jalankan batch" });
@@ -906,7 +968,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       exact: true,
     }),
   ).toBeVisible();
-  await verifyBinary(batchBinary);
+  await verifyBinary(batchBinary, largeBytes);
   expect(await readUploaded()).toEqual(uploadedBytes);
   const moveItems = [
     { source: batchText, target: batchText },
@@ -930,7 +992,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       { ...moveItems[0], status: "not_attempted" },
     ],
   });
-  await verifyBinary(`${moveFolder}/${batchBinary}`);
+  await verifyBinary(`${moveFolder}/${batchBinary}`, largeBytes);
   await docker(
     "docker",
     ["exec", fixtureDaemon, "test", "!", "-e", `${binVolume}/${batchBinary}`],
@@ -948,9 +1010,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       "SELECT digest FROM client_uploaded_files WHERE server_id=? AND name=?",
       [id, binaryName],
     );
-    expect(receipts).toEqual([
-      { digest: createHash("sha256").update(binaryBytes).digest("hex") },
-    ]);
+    expect(receipts).toEqual([{ digest: largeDigest }]);
     const statusUrl = `${fileApi}/batch-status-fixture`;
     const stored = await page.context().request.get(statusUrl);
     expect(await stored.json()).toEqual({
@@ -1052,7 +1112,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       },
       {
         name: `${moveFolder}/${batchBinary}`,
-        digest: createHash("sha256").update(binaryBytes).digest("hex"),
+        digest: largeDigest,
       },
     ]);
     const [copyReceipts] = await binaryDb.query(
@@ -1094,8 +1154,8 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       { ...pendingCopyItems[1], status: "not_attempted" },
     ],
   });
-  await verifyBinary(binaryName);
-  await verifyBinary(copyRecoveryTarget);
+  await verifyBinary(binaryName, largeBytes);
+  await verifyBinary(copyRecoveryTarget, largeBytes);
   await docker(
     "docker",
     [
@@ -1151,13 +1211,13 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
       "SELECT CAST(name AS CHAR) AS name,digest FROM client_uploaded_files WHERE server_id=? AND name IN (?,?,?) ORDER BY name",
       [id, binaryName, copyRecoveryTarget, "batch-untouched.txt"],
     );
-    const digest = createHash("sha256").update(binaryBytes).digest("hex");
+    const digest = largeDigest;
     expect(receipts).toEqual([
       { name: copyRecoveryTarget, digest },
       { name: binaryName, digest },
     ]);
-    await verifyBinary(binaryName);
-    await verifyBinary(copyRecoveryTarget);
+    await verifyBinary(binaryName, largeBytes);
+    await verifyBinary(copyRecoveryTarget, largeBytes);
   } finally {
     await copyDb.end();
   }

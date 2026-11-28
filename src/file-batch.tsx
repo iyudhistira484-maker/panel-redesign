@@ -101,8 +101,8 @@ export function FileBatch({
       <fieldset disabled={busy}>
         <legend>
           {en
-            ? "Up to four files · offline only"
-            : "Maksimal empat file · khusus offline"}
+            ? "Up to four files · 1 MiB each · offline only"
+            : "Maksimal empat file · 1 MiB per file · khusus offline"}
         </legend>
         <label>
           {en ? "Batch operation" : "Operasi batch"}{" "}

@@ -669,7 +669,7 @@ export function ServerFiles({ id, locale }: { id: string; locale: Locale }) {
               (item) =>
                 !item.directory &&
                 /\.(txt|bin)$/.test(item.name) &&
-                item.size <= 16384,
+                item.size <= 1048576,
             )
             .map((item) => item.name)}
           onComplete={(operation, results) => {

@@ -10,6 +10,7 @@ import { extractFixtureText } from "./fixture-gzip";
 import { lockFreeAllocation } from "../catalog/transfer";
 import {
   type FixtureSubfolder,
+  fixtureBatchLimit,
   fixtureFolderName,
   fixtureFolderPath,
   fixtureMoveFolder,
@@ -632,27 +633,40 @@ export function createProvisioner(
         );
         if (!receipt) throw new ProvisionError(404, "upload_not_found");
         const segments = ["fixture-docs"];
-        const bytes = await client.fixtureDownload(id, segments, source);
-        if (createHash("sha256").update(bytes).digest("hex") !== receipt.digest)
+        const limit = locked ? fixtureBatchLimit : 16384;
+        const original = await client.fixtureDigest(
+          id,
+          segments,
+          source,
+          limit,
+        );
+        if (original.digest !== receipt.digest)
           throw new ProvisionError(409, "uploaded_file_changed");
         await authorize();
         await pool.execute(
           "INSERT INTO audit_log (actor_id,event,subject_id) VALUES (?,'wings.fixture_verified_copy_requested',?)",
           [actor.id, id],
         );
-        const copy = await client.copyFixtureWithSuffix(id, source, bytes);
+        const copy = await client.copyFixtureWithSuffix(
+          id,
+          source,
+          original.digest,
+          limit,
+        );
         if (copy !== target)
           await client.renameUploadedFixture(id, copy, target);
         if (
-          !(await client.fixtureDownload(id, segments, target)).equals(bytes) ||
-          !(await client.fixtureDownload(id, segments, source)).equals(bytes)
+          (await client.fixtureDigest(id, segments, target, limit)).digest !==
+            original.digest ||
+          (await client.fixtureDigest(id, segments, source, limit)).digest !==
+            original.digest
         )
           throw new ProvisionError(502, "file_copy_unverified");
         await pool.execute(
           "INSERT INTO client_uploaded_files (server_id,name,digest) VALUES (?,?,?) ON DUPLICATE KEY UPDATE digest=VALUES(digest)",
           [id, target, receipt.digest],
         );
-        return { name: target, size: bytes.length };
+        return { name: target, size: original.size };
       } catch (error) {
         if (error instanceof WingsUnavailable)
           throw new ProvisionError(502, "file_copy_unverified");
@@ -722,16 +736,16 @@ export function createProvisioner(
           [id, sourceName],
         );
         if (!receipt) throw new ProvisionError(404, "upload_not_found");
-        const original = await client.fixtureDownload(
+        const limit = locked ? fixtureBatchLimit : 16384;
+        const original = await client.fixtureDigest(
           id,
           fromMoved
             ? ["fixture-docs", ...fromMoved.split("/")]
             : ["fixture-docs"],
           source,
+          limit,
         );
-        if (
-          createHash("sha256").update(original).digest("hex") !== receipt.digest
-        )
+        if (original.digest !== receipt.digest)
           throw new ProvisionError(409, "uploaded_file_changed");
         await transaction(pool, async (db) => {
           await authorize(db, true);
@@ -760,9 +774,8 @@ export function createProvisioner(
         );
         if (
           (await client.fixtureUploadTargetExists(id, source, fromMoved)) ||
-          !(await client.fixtureDownload(id, destination, target)).equals(
-            original,
-          )
+          (await client.fixtureDigest(id, destination, target, limit))
+            .digest !== original.digest
         )
           throw new ProvisionError(502, "file_rename_unverified");
         await pool.execute(
@@ -771,7 +784,7 @@ export function createProvisioner(
         );
         return {
           name: target,
-          size: original.length,
+          size: original.size,
           directory: `/${destination.join("/")}`,
         };
       } catch (error) {
@@ -1407,15 +1420,17 @@ export function createProvisioner(
               [id, source],
             );
             if (!receipt) throw new ProvisionError(404, "upload_not_found");
-            const bytes = await client.fixtureDownload(
-              id,
-              ["fixture-docs"],
-              source,
-            );
-            if (
-              createHash("sha256").update(bytes).digest("hex") !==
-              receipt.digest
-            )
+            const original = await client
+              .fixtureDigest(id, ["fixture-docs"], source, fixtureBatchLimit)
+              .catch((error) => {
+                if (
+                  error instanceof WingsUnavailable &&
+                  error.reason === "too_large"
+                )
+                  throw new ProvisionError(422, "batch_file_too_large");
+                throw error;
+              });
+            if (original.digest !== receipt.digest)
               throw new ProvisionError(409, "uploaded_file_changed");
             const record = records.find((item) => item.source === source);
             if (!record) throw new Error("Missing batch record");
@@ -1483,9 +1498,14 @@ export function createProvisioner(
             );
             if (sourceExists !== (batch.operation === "copy")) continue;
             const digestOf = async (segments: string[], name: string) =>
-              createHash("sha256")
-                .update(await client.fixtureDownload(id, segments, name))
-                .digest("hex");
+              (
+                await client.fixtureDigest(
+                  id,
+                  segments,
+                  name,
+                  fixtureBatchLimit,
+                )
+              ).digest;
             if (
               (await digestOf(destination, item.target)) !== item.digest ||
               (sourceExists &&
@@ -1565,7 +1585,7 @@ export function createProvisioner(
             const name = await client.copyFixtureWithSuffix(
               id,
               source,
-              original,
+              receipt.digest,
             );
             await pool.execute(
               "INSERT INTO client_uploaded_files (server_id,name,digest) VALUES (?,?,?) ON DUPLICATE KEY UPDATE digest=VALUES(digest)",

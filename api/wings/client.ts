@@ -18,6 +18,7 @@ export const fixturePathSegment = (value: string) =>
 import { createHash } from "node:crypto";
 export const UUID_V4 =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+export const fixtureBatchLimit = 1024 * 1024;
 export const supportedWings = "1.13.5";
 export type WingsNode = { origin: string; tokenId: string; token: string };
 export type WingsHealth = {
@@ -28,7 +29,13 @@ export type WingsHealth = {
 };
 export class WingsUnavailable extends Error {
   constructor(
-    readonly reason: "transport" | "http" | "payload" | "version" | "not_found",
+    readonly reason:
+      | "transport"
+      | "http"
+      | "payload"
+      | "version"
+      | "not_found"
+      | "too_large",
   ) {
     super(`Wings request: ${reason}`);
   }
@@ -454,7 +461,12 @@ export class WingsClient {
     if ((await this.#fixtureEntries(id, `/fixture-docs/${name}`)).length !== 0)
       throw new WingsUnavailable("payload");
   }
-  async copyFixtureWithSuffix(id: string, source: string, original: Buffer) {
+  async copyFixtureWithSuffix(
+    id: string,
+    source: string,
+    digest: string,
+    limit = 16384,
+  ) {
     if (
       !fixturePathSegment(source) ||
       !/\.(txt|bin)$/.test(source) ||
@@ -486,8 +498,8 @@ export class WingsClient {
     if (newCopies.length !== 1) throw new WingsUnavailable("payload");
     const name = newCopies[0].name as string;
     if (
-      !(await this.fixtureDownload(id, segments, name)).equals(original) ||
-      !(await this.fixtureDownload(id, segments, source)).equals(original)
+      (await this.fixtureDigest(id, segments, name, limit)).digest !== digest ||
+      (await this.fixtureDigest(id, segments, source, limit)).digest !== digest
     )
       throw new WingsUnavailable("payload");
     return name;
@@ -692,6 +704,45 @@ export class WingsClient {
       items = await list(path);
     }
     return items;
+  }
+  async fixtureDigest(
+    id: string,
+    segments: string[],
+    name: string,
+    limit: number,
+  ) {
+    const entry = (await this.fixtureDirectory(id, segments)).find(
+      (item) => !item.directory && item.name === name,
+    );
+    if (!entry) throw new WingsUnavailable("not_found");
+    if (entry.size > limit) throw new WingsUnavailable("too_large");
+    const path = `/${[...segments, name].join("/")}`;
+    const response = await this.#send(
+      `${this.#server(id)}/files/contents?file=${encodeURIComponent(path)}&download=1`,
+      200,
+    );
+    const reader = response.body?.getReader();
+    if (!reader) throw new WingsUnavailable("payload");
+    const hash = createHash("sha256");
+    let size = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > limit || size > entry.size)
+          throw new WingsUnavailable("payload");
+        hash.update(value);
+      }
+      if (size !== entry.size) throw new WingsUnavailable("payload");
+      return { size, digest: hash.digest("hex") };
+    } catch (error) {
+      if (error instanceof WingsUnavailable) throw error;
+      throw new WingsUnavailable("transport");
+    } finally {
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
+    }
   }
   async fixtureDownload(
     id: string,
