@@ -12,5 +12,7 @@ createServer({cert:readFileSync(certPath),key:readFileSync(keyPath)}, (req,res)=
     reply.pipe(res);
   });
   upstream.on('error',()=>{if(!res.headersSent)res.writeHead(502);res.end();});
+  req.on('aborted',()=>upstream.destroy());
+  res.on('close',()=>{if(!res.writableEnded)upstream.destroy();});
   req.pipe(upstream);
 }).listen(4443,'127.0.0.1');

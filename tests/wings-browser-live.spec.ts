@@ -1,3 +1,4 @@
+import { request as httpsRequest } from "node:https";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";
@@ -912,6 +913,65 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     (await uploadLarge(largeName, Buffer.alloc(largeBytes.length))).status(),
   ).toBe(409);
   await verifyBinary(largeName, largeBytes);
+  const interruptedName = "browser-stream-interrupted.bin";
+  const cookies = await page.context().cookies(origin);
+  await new Promise<void>((resolve, reject) => {
+    const request = httpsRequest(
+      `${streamUrl}?${new URLSearchParams({ name: interruptedName })}`,
+      {
+        method: "POST",
+        rejectUnauthorized: false,
+        headers: {
+          ...editHeaders,
+          "content-type": "application/octet-stream",
+          "content-length": String(largeBytes.length),
+          cookie: cookies
+            .map((cookie) => `${cookie.name}=${cookie.value}`)
+            .join("; "),
+        },
+      },
+      (response) => {
+        response.resume();
+        reject(
+          new Error(
+            `Interrupted request unexpectedly received ${response.statusCode}`,
+          ),
+        );
+      },
+    );
+    request.setTimeout(3000, () =>
+      request.destroy(new Error("Interrupted upload did not connect")),
+    );
+    request.on("error", (error) => {
+      if ((error as NodeJS.ErrnoException).code === "ECONNRESET") resolve();
+      else reject(error);
+    });
+    request.write(largeBytes.subarray(0, 64 * 1024), () =>
+      setTimeout(() => request.destroy(), 200),
+    );
+  });
+  expect(
+    (
+      await page
+        .context()
+        .request.get(
+          `${streamUrl}?${new URLSearchParams({ name: interruptedName })}`,
+          { maxRetries: 1 },
+        )
+    ).status(),
+  ).toBe(404);
+  await docker(
+    "docker",
+    [
+      "exec",
+      fixtureDaemon,
+      "test",
+      "!",
+      "-e",
+      `${binVolume}/${interruptedName}`,
+    ],
+    { timeout: 5000 },
+  );
   const seed = stagingPool();
   try {
     await docker(
@@ -1255,8 +1315,8 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     );
     const digest = largeDigest;
     expect(receipts).toEqual([
-      { name: largeName, digest },
       { name: copyRecoveryTarget, digest },
+      { name: largeName, digest },
     ]);
     await verifyBinary(largeName, largeBytes);
     await verifyBinary(copyRecoveryTarget, largeBytes);
