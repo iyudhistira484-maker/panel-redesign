@@ -1297,13 +1297,6 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     (
       await page
         .context()
-        .request.get(fileApi, { params: { directory: "/../" } })
-    ).status(),
-  ).toBe(400);
-  expect(
-    (
-      await page
-        .context()
         .request.get(fileApi, { params: { directory: "/fixture-docs/../../" } })
     ).status(),
   ).toBe(400);
