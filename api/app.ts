@@ -1945,6 +1945,35 @@ export async function createApp({
       },
     );
   if (provisioner)
+    for (const method of ["GET", "POST"] as const)
+      app.route<{ Params: { id: string } }>({
+        method,
+        url: "/api/v1/servers/:id/files/batch-status-fixture",
+        config: { rateLimit: { max: 8, timeWindow: "1 minute" } },
+        handler: async (req, reply) => {
+          reply.header("cache-control", "no-store");
+          const principal = await actor(
+            req.cookies[sessionCookie],
+            req.headers.authorization,
+          );
+          if (!principal || principal.channel !== "session")
+            return reply.code(401).send({ error: "unauthenticated" });
+          if (!UUID_V4.test(req.params.id))
+            return reply.code(404).send({ error: "server_not_found" });
+          try {
+            return {
+              batch: await (method === "GET"
+                ? provisioner.batchStatus(req.params.id, principal)
+                : provisioner.reconcileBatch(req.params.id, principal)),
+            };
+          } catch (error) {
+            if (error instanceof ProvisionError)
+              return reply.code(error.status).send({ error: error.code });
+            throw error;
+          }
+        },
+      });
+  if (provisioner)
     app.post<{
       Params: { id: string };
       Body: {
@@ -1956,7 +1985,7 @@ export async function createApp({
       "/api/v1/servers/:id/files/batch-fixture",
       {
         bodyLimit: 2048,
-        config: { rateLimit: { max: 4, timeWindow: "1 minute" } },
+        config: { rateLimit: { max: 5, timeWindow: "1 minute" } },
         schema: {
           body: object(
             {

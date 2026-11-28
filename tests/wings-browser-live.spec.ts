@@ -864,12 +864,10 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     items: { source: string; target: string }[],
     destination?: string,
   ) =>
-    page
-      .context()
-      .request.post(batchApi, {
-        headers: editHeaders,
-        data: { operation, items, destination },
-      });
+    page.context().request.post(batchApi, {
+      headers: editHeaders,
+      data: { operation, items, destination },
+    });
   const batchText = "batch-text.txt",
     batchBinary = "batch-data.bin";
   const batchItems = [
@@ -886,6 +884,7 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   const copyBatch = await batch("copy", batchItems);
   expect(copyBatch.status()).toBe(200);
   expect(await copyBatch.json()).toEqual({
+    batchId: expect.stringMatching(/^[a-f0-9]{32}$/),
     halted: false,
     results: [
       { ...batchItems[0], status: "verified" },
@@ -901,7 +900,9 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
   ];
   const moveBatch = await batch("move", moveItems, moveFolder);
   expect(moveBatch.status()).toBe(200);
-  expect(await moveBatch.json()).toEqual({
+  const completedMove = await moveBatch.json();
+  expect(completedMove).toEqual({
+    batchId: expect.stringMatching(/^[a-f0-9]{32}$/),
     halted: false,
     results: moveItems.map((item) => ({ ...item, status: "verified" })),
   });
@@ -927,6 +928,30 @@ test("real HTTPS browser observes Wings start and stop and cannot power a read-o
     expect(receipts).toEqual([
       { digest: createHash("sha256").update(binaryBytes).digest("hex") },
     ]);
+    const statusUrl = `${fileApi}/batch-status-fixture`;
+    const stored = await page.context().request.get(statusUrl);
+    expect(await stored.json()).toEqual({
+      batch: { ...completedMove, operation: "move", destination: moveFolder },
+    });
+    // Simulate a crash after Wings committed the move but before Relay saved the receipt.
+    await binaryDb.execute(
+      "UPDATE fixture_file_batches SET items=JSON_SET(items,'$[1].status','unconfirmed'),blocked=TRUE,updated_at=CURRENT_TIMESTAMP(6)-INTERVAL 61 SECOND WHERE server_id=?",
+      [id],
+    );
+    await binaryDb.execute(
+      "DELETE FROM client_uploaded_files WHERE server_id=? AND name=?",
+      [id, `${moveFolder}/${batchBinary}`],
+    );
+    const frozen = await batch("move", moveItems, moveFolder);
+    expect(frozen.status()).toBe(409);
+    expect((await frozen.json()).error).toBe("batch_reconciliation_required");
+    const recoveredBatch = await page
+      .context()
+      .request.post(statusUrl, { headers: editHeaders });
+    expect(recoveredBatch.status()).toBe(200);
+    expect(await recoveredBatch.json()).toEqual({
+      batch: { ...completedMove, operation: "move", destination: moveFolder },
+    });
     const [batchReceipts] = await binaryDb.query(
       "SELECT CAST(name AS CHAR) AS name,digest FROM client_uploaded_files WHERE server_id=? AND name IN (?,?,?,?) ORDER BY name",
       [

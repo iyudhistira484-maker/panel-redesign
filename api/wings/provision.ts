@@ -1,4 +1,8 @@
-import { executeFixtureBatch, type FixtureBatchItem } from "./fixture-batch";
+import {
+  executeFixtureBatch,
+  type FixtureBatchItem,
+  type FixtureBatchResult,
+} from "./fixture-batch";
 import { readPullSource, validatePullSource } from "./fixture-pull";
 import { extractFixtureTar } from "./fixture-tar";
 import { extractFixtureZip, fixtureZipLimits } from "./fixture-zip";
@@ -778,6 +782,59 @@ export function createProvisioner(
     return locked ? run() : exclusive(id, run);
   }
 
+  type StoredBatchItem = FixtureBatchResult & { digest?: string };
+  type StoredBatch = {
+    batch_id: string;
+    operation: "copy" | "move";
+    destination: string | null;
+    items: StoredBatchItem[];
+    blocked: number;
+    ready: number;
+  };
+  async function authorizeBatch(id: string, actor: Actor) {
+    const server = await load(pool, id);
+    if (
+      !server ||
+      actor.channel !== "session" ||
+      server.ownerId !== actor.id ||
+      !eligible(server) ||
+      server.phase !== "installed"
+    )
+      throw new ProvisionError(404, "server_not_found");
+  }
+  async function latestBatch(id: string) {
+    const [batch] = await rows<StoredBatch>(
+      pool,
+      "SELECT batch_id,operation,destination,items,blocked,updated_at <= CURRENT_TIMESTAMP(6)-INTERVAL 60 SECOND AS ready FROM fixture_file_batches WHERE server_id=?",
+      [id],
+    );
+    return batch;
+  }
+  function batchView(batch: StoredBatch) {
+    return {
+      batchId: batch.batch_id,
+      operation: batch.operation,
+      destination: batch.destination,
+      halted: !!batch.blocked,
+      results: batch.items.map(({ source, target, status, error }) => ({
+        source,
+        target,
+        status,
+        ...(error ? { error } : {}),
+      })),
+    };
+  }
+  async function writeBatch(
+    id: string,
+    batchId: string,
+    items: StoredBatchItem[],
+    blocked = true,
+  ) {
+    await pool.execute(
+      "UPDATE fixture_file_batches SET items=?,blocked=?,updated_at=CURRENT_TIMESTAMP(6) WHERE server_id=? AND batch_id=?",
+      [JSON.stringify(items), blocked, id, batchId],
+    );
+  }
   async function completeArchive(
     id: string,
     suffix: string,
@@ -1272,15 +1329,7 @@ export function createProvisioner(
       destination?: string,
     ) {
       return exclusive(id, async () => {
-        const server = await load(pool, id);
-        if (
-          !server ||
-          actor.channel !== "session" ||
-          server.ownerId !== actor.id ||
-          !eligible(server) ||
-          server.phase !== "installed"
-        )
-          throw new ProvisionError(404, "server_not_found");
+        await authorizeBatch(id, actor);
         if (!atomicBinary)
           throw new ProvisionError(422, "atomic_rename_required");
         if (
@@ -1317,26 +1366,160 @@ export function createProvisioner(
             throw new ProvisionError(502, "batch_preflight_unavailable");
           throw error;
         }
-        return await executeFixtureBatch(
+        const batchId = randomBytes(16).toString("hex");
+        const records: StoredBatchItem[] = items.map((item) => ({
+          ...item,
+          status: "not_attempted",
+        }));
+        await pool.execute(
+          "INSERT IGNORE INTO fixture_file_batches (server_id,batch_id,operation,destination,items,blocked) VALUES (?,?,?,?,?,FALSE)",
+          [
+            id,
+            batchId,
+            operation,
+            destination ?? null,
+            JSON.stringify(records),
+          ],
+        );
+        const [claim] = await pool.execute<
+          import("mysql2/promise").ResultSetHeader
+        >(
+          "UPDATE fixture_file_batches SET batch_id=?,operation=?,destination=?,items=?,blocked=TRUE WHERE server_id=? AND blocked=FALSE",
+          [
+            batchId,
+            operation,
+            destination ?? null,
+            JSON.stringify(records),
+            id,
+          ],
+        );
+        if (claim.affectedRows !== 1)
+          throw new ProvisionError(409, "batch_reconciliation_required");
+        const result = await executeFixtureBatch(
           items,
-          ({ source, target }) =>
-            operation === "copy"
-              ? copyBinaryFixture(id, actor, source, target, true)
-              : renameFixture(
-                  id,
-                  actor,
-                  source,
-                  target,
-                  destination,
-                  undefined,
-                  false,
-                  true,
-                ),
+          async ({ source, target }) => {
+            if (await client.fixtureUploadTargetExists(id, target, destination))
+              throw new ProvisionError(409, "file_exists");
+            const [receipt] = await rows<{ digest: string }>(
+              pool,
+              "SELECT digest FROM client_uploaded_files WHERE server_id=? AND name=?",
+              [id, source],
+            );
+            if (!receipt) throw new ProvisionError(404, "upload_not_found");
+            const bytes = await client.fixtureDownload(
+              id,
+              ["fixture-docs"],
+              source,
+            );
+            if (
+              createHash("sha256").update(bytes).digest("hex") !==
+              receipt.digest
+            )
+              throw new ProvisionError(409, "uploaded_file_changed");
+            const record = records.find((item) => item.source === source);
+            if (!record) throw new Error("Missing batch record");
+            record.status = "unconfirmed";
+            record.digest = receipt.digest;
+            await writeBatch(id, batchId, records);
+            if (operation === "copy")
+              return copyBinaryFixture(id, actor, source, target, true);
+            return renameFixture(
+              id,
+              actor,
+              source,
+              target,
+              destination,
+              undefined,
+              false,
+              true,
+            );
+          },
           (error) =>
             error instanceof ProvisionError && error.status < 500
               ? error.code
               : undefined,
+          async (index, item) => {
+            records[index] = { ...records[index], ...item };
+            await writeBatch(id, batchId, records);
+          },
         );
+        await writeBatch(id, batchId, records, result.halted);
+        return { ...result, batchId };
+      });
+    },
+    async batchStatus(id: string, actor: Actor) {
+      await authorizeBatch(id, actor);
+      const batch = await latestBatch(id);
+      return batch ? batchView(batch) : null;
+    },
+    async reconcileBatch(id: string, actor: Actor) {
+      return exclusive(id, async () => {
+        await authorizeBatch(id, actor);
+        const batch = await latestBatch(id);
+        if (!batch) return null;
+        if (!batch.blocked || !batch.ready) return batchView(batch);
+        try {
+          if ((await client.state(id)) !== "offline") return batchView(batch);
+          const folder = batch.destination ?? undefined;
+          if (folder && !(await managedFolder(pool, id, folder)))
+            return batchView(batch);
+          const destination = folder
+            ? ["fixture-docs", ...folder.split("/")]
+            : ["fixture-docs"];
+          for (const item of batch.items) {
+            if (item.status !== "unconfirmed") continue;
+            if (!item.digest) {
+              item.status = "not_attempted";
+              continue;
+            }
+            if (
+              !(await client.fixtureUploadTargetExists(id, item.target, folder))
+            )
+              continue;
+            const sourceExists = await client.fixtureUploadTargetExists(
+              id,
+              item.source,
+            );
+            if (sourceExists !== (batch.operation === "copy")) continue;
+            const digestOf = async (segments: string[], name: string) =>
+              createHash("sha256")
+                .update(await client.fixtureDownload(id, segments, name))
+                .digest("hex");
+            if (
+              (await digestOf(destination, item.target)) !== item.digest ||
+              (sourceExists &&
+                (await digestOf(["fixture-docs"], item.source)) !== item.digest)
+            )
+              continue;
+            await authorizeBatch(id, actor);
+            const key = folder ? `${folder}/${item.target}` : item.target;
+            await transaction(pool, async (db) => {
+              if (batch.operation === "move")
+                await db.execute(
+                  "DELETE FROM client_uploaded_files WHERE server_id=? AND name=? AND digest=?",
+                  [id, item.source, item.digest ?? null],
+                );
+              await db.execute(
+                "INSERT INTO client_uploaded_files (server_id,name,digest) VALUES (?,?,?) ON DUPLICATE KEY UPDATE digest=VALUES(digest)",
+                [id, key, item.digest ?? null],
+              );
+              item.status = "verified";
+              await db.execute(
+                "UPDATE fixture_file_batches SET items=? WHERE server_id=? AND batch_id=?",
+                [JSON.stringify(batch.items), id, batch.batch_id],
+              );
+            });
+          }
+          const remains = batch.items.some(
+            (item) => item.status === "unconfirmed",
+          );
+          await writeBatch(id, batch.batch_id, batch.items, remains);
+          batch.blocked = Number(remains);
+          return batchView(batch);
+        } catch (error) {
+          if (error instanceof WingsUnavailable) return batchView(batch);
+          throw error;
+        }
       });
     },
     copyBinaryFixture,

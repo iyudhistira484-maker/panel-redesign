@@ -1,0 +1,10 @@
+CREATE TABLE fixture_file_batches (
+  server_id CHAR(36) NOT NULL PRIMARY KEY,
+  batch_id CHAR(32) NOT NULL,
+  operation ENUM('copy','move') NOT NULL,
+  destination VARCHAR(97) NULL,
+  items JSON NOT NULL,
+  blocked BOOLEAN NOT NULL DEFAULT TRUE,
+  updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+) ENGINE=InnoDB;

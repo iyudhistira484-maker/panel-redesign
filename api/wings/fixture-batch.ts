@@ -5,16 +5,19 @@ export type FixtureBatchStatus =
   | "unconfirmed"
   | "not_attempted";
 
+export type FixtureBatchResult = FixtureBatchItem & {
+  status: FixtureBatchStatus;
+  error?: string;
+};
+
 export async function executeFixtureBatch(
   items: FixtureBatchItem[],
   execute: (item: FixtureBatchItem) => Promise<unknown>,
   knownRejection: (error: unknown) => string | undefined,
+  persist?: (index: number, result: FixtureBatchResult) => Promise<void>,
 ) {
   let halted = false;
-  const results: (FixtureBatchItem & {
-    status: FixtureBatchStatus;
-    error?: string;
-  })[] = [];
+  const results: FixtureBatchResult[] = [];
   for (const item of items) {
     if (halted) {
       results.push({ ...item, status: "not_attempted" });
@@ -31,6 +34,7 @@ export async function executeFixtureBatch(
         results.push({ ...item, status: "unconfirmed" });
       }
     }
+    await persist?.(results.length - 1, results[results.length - 1]);
   }
   return { results, halted };
 }
